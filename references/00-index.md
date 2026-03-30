@@ -16,6 +16,7 @@ Cross-reference of research findings against playbook golden rules. Last updated
 - [10-academic-vendor-2026.md](./10-academic-vendor-2026.md) — arXiv/ICLR 2026, AgentSpec, ACE, FeatureBench, OpenAI SDK, Google ADK
 - [11-key-figures-2026.md](./11-key-figures-2026.md) — Karpathy, Chase, Willison, Osmani, Husain, Mollick, Lambert + 7 others
 - [12-pyreez-2026-extract.md](./12-pyreez-2026-extract.md) — pyreez 재감사: 17 NEW 2026 sources, multi-agent debate cluster, caching, instruction compliance
+- [13-technique-inventory.md](./13-technique-inventory.md) — 전수조사 기법 목록: 638파일 직접 읽기, 1400+ 기법 추출 (GSD/gstack/spec-kit)
 
 ## Applied Revisions (2026-03-04)
 
