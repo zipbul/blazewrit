@@ -1,6 +1,6 @@
 # Research Index
 
-Cross-reference of research findings against playbook golden rules. Last updated: 2026-03-04.
+Cross-reference of research findings against playbook golden rules. Last updated: 2026-03-30.
 
 ## Reference Files
 
@@ -8,6 +8,14 @@ Cross-reference of research findings against playbook golden rules. Last updated
 - [02-coding-agent-rules.md](./02-coding-agent-rules.md) — Claude Code, Cursor, Codex, Copilot, Amp, Cline, Windsurf, Roo Code, Oh My OpenCode
 - [03-prompt-engineering.md](./03-prompt-engineering.md) — Prompting best practices, identity/persona evidence, structured constraint techniques
 - [04-structural-gaps.md](./04-structural-gaps.md) — Cyclical loops, context management, scope bounding, rule rationale, prompt relationship
+- [05-repo-audit-gsd.md](./05-repo-audit-gsd.md) — GSD (Get Shit Done) full repo audit: meta-prompting, context engineering, auto-loop, TACHES
+- [06-repo-audit-gstack.md](./06-repo-audit-gstack.md) — gstack full repo audit: 28 skills, sprint workflow, dual-voice review, ETHOS
+- [07-repo-audit-speckit.md](./07-repo-audit-speckit.md) — spec-kit full repo audit: SDD workflow, constitution, extensions, 27+ agent support
+- [08-ralph-loop.md](./08-ralph-loop.md) — Ralph Loop: fresh-context iteration, filesystem memory, PRD-driven autonomous execution
+- [09-anthropic-official-2026.md](./09-anthropic-official-2026.md) — Anthropic 2026: hooks, skills, rules, memory, sub-agents, context/harness engineering, Claude 4.6 best practices
+- [10-academic-vendor-2026.md](./10-academic-vendor-2026.md) — arXiv/ICLR 2026, AgentSpec, ACE, FeatureBench, OpenAI SDK, Google ADK
+- [11-key-figures-2026.md](./11-key-figures-2026.md) — Karpathy, Chase, Willison, Osmani, Husain, Mollick, Lambert + 7 others
+- [12-pyreez-2026-extract.md](./12-pyreez-2026-extract.md) — pyreez 재감사: 17 NEW 2026 sources, multi-agent debate cluster, caching, instruction compliance
 
 ## Applied Revisions (2026-03-04)
 

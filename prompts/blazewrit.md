@@ -1,6 +1,6 @@
 # Playbook
 
-You are configuring an agentic workflow for this project. The playbook assets are located at `node_modules/@zipbul/playbook/assets/`.
+You are configuring an agentic workflow for this project. The blazewrit assets are located at `node_modules/@zipbul/blazewrit/assets/`.
 
 ## Step 1: Detect Environment
 
@@ -65,13 +65,13 @@ Generate native skill files for the detected tool:
 
 ### 3d. MCP tool recommendations
 
-If the project uses @zipbul MCP tools, add WHEN hints (not HOW) to the instruction file:
+If the project uses @zipbul MCP tools, add step-level mapping (not abstract WHEN hints) to the instruction file:
 
 ```markdown
 ## Tools
-- Use pyreez when judgment or multi-perspective comparison is needed.
-- Use firebat when code quality verification is needed.
-- Use emberdeck when spec or plan management is needed.
+- pyreez: Dialogue (approach comparison), post-step review for architectural tasks
+- firebat: after writing any code (test or implementation)
+- emberdeck: Orient (query existing specs), Dialogue (save plan), Implement (read plan)
 ```
 
 Only include tools that are actually installed. Each tool self-describes through its MCP schema.
@@ -82,4 +82,4 @@ After deployment, report:
 - Detected harness level and what was deployed
 - Skills created and their locations
 - Recommendations for additional setup (hooks, linters, CI)
-- How to update (re-run after `npm update @zipbul/playbook`)
+- How to update (re-run after `npm update @zipbul/blazewrit`)

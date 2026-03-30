@@ -1,6 +1,6 @@
 # Playground
 
-This is the development workspace for @zipbul/playbook — a prompt-driven agentic workflow package.
+This is the development workspace for @zipbul/blazewrit — a prompt-driven agentic workflow package.
 
 ## Workflow
 
