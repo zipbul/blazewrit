@@ -432,6 +432,22 @@ Within any step (gstack pattern — adopted because it prevents both over-automa
 
 Prompt-enforced. Classification itself is judgment — cannot be mechanically forced.
 
+### Fact Verification Protocol
+
+에이전트의 학습 데이터에서 나온 지식은 가설이다 (GSD: "Training data = hypothesis — 6-18 months stale"). 가설은 검증해야 사실이 된다. 검증 = 직접 읽거나 직접 실행. "그럴 것 같다"는 근거가 아니다.
+
+| 주장 유형 | 검증 방법 | 미검증 시 |
+|-----------|----------|----------|
+| 외부 API/라이브러리 스펙 | Read로 docs/README 직접 확인 또는 Bash로 실행 확인 | `[UNVERIFIED]` 태그 |
+| 구현 가능성 | 프로토타입 코드 작성 + 실행 | `[UNVERIFIED]` 태그 |
+| 성능 수치 | benchmark/profile 직접 측정 | `[UNMEASURED]` 태그 |
+| 기존 코드 동작 | Read로 코드 직접 확인 또는 test 실행 | `[UNVERIFIED]` 태그 |
+| 호환성/의존성 | 직접 설치 + import 확인 | `[UNVERIFIED]` 태그 |
+
+적용 대상: 모든 producer + 모든 reviewer. 예외 없음.
+`[UNVERIFIED]`/`[UNMEASURED]` 태그가 있는 항목은 의사결정 근거로 사용 불가.
+Verify가 `[UNVERIFIED]` 항목을 발견하면 FAIL + 해당 스텝으로 라우팅하여 검증 요구.
+
 ### What Cannot Be Mechanically Enforced
 
 Only items that are **pure judgment with no structural proxy**:
