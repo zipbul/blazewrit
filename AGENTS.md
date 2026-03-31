@@ -4,13 +4,16 @@ This is the development workspace for @zipbul/blazewrit — a prompt-driven agen
 
 ## Workflow
 
-Orient → Dialogue → Test ⇄ Implement
+Triage(classification) → Flow[Prepare(tailored) → Core Steps → Reflect]
+
+Step pool: Dialogue, Test, Implement, Verify, Report, Reflect
+Execution: subagent-per-step + allowed-tools + transition scripts + hooks (~70% mechanical)
 
 ## Tools
 
-- pyreez: Dialogue (approach comparison), post-step review for architectural tasks
-- firebat: after writing any code (test or implementation)
-- emberdeck: Orient (query existing specs), Dialogue (save plan), Implement (read plan)
+- pyreez: Dialogue (approach comparison), Verify (review mode, high-risk)
+- firebat: Implement (after every change), Verify (full scan), Migration Prepare (query-dependencies)
+- emberdeck: Feature Prepare (card query), Dialogue (save plan), Implement (validate links), Verify (regression_guard)
 
 ## Rules
 
