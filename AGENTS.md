@@ -4,16 +4,16 @@ This is the development workspace for @zipbul/blazewrit — a prompt-driven agen
 
 ## Workflow
 
-Triage(classification) → Flow[Prepare(tailored) → Core Steps → Reflect]
+None (논의) ↔ Triage → Flow[Analyze → 기획? → Spec? → Core Steps → Verify → Reflect]
 
-Step pool: Dialogue, Test, Implement, Verify, Report, Reflect
-Execution: subagent-per-step + allowed-tools + transition scripts + hooks (~70% mechanical)
+Step pool: Analyze, 기획, Spec, Test, Implement, Report, Verify, Reflect
+Execution: produce ⇄ review loop per step (14 agents: 8 producer + 6 reviewer) + hooks (~70% mechanical)
 
 ## Tools
 
-- pyreez: Dialogue (approach comparison), Verify (review mode, high-risk)
-- firebat: Implement (after every change), Verify (full scan), Migration Prepare (query-dependencies)
-- emberdeck: Feature Prepare (card query), Dialogue (save plan), Implement (validate links), Verify (regression_guard)
+- pyreez: 기획 (ideation, architecture deliberation), Verify (review mode, high-risk)
+- firebat: Implement (after every change), Verify (full scan), Analyze (query-dependencies for Migration)
+- emberdeck: Analyze (card query), 기획 (intent card), Spec (spec card + codeLinks), Implement (validate links), Verify (regression_guard)
 
 ## Rules
 
