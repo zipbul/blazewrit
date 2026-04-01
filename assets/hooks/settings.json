@@ -10,6 +10,10 @@
         "command": "bun .blazewrit/orchestrator.ts hook firebat-scan"
       },
       {
+        "matcher": "Edit|Write",
+        "command": "bun .blazewrit/orchestrator.ts hook reset-stuck"
+      },
+      {
         "matcher": "Read|Grep|Glob",
         "command": "bun .blazewrit/orchestrator.ts hook stuck-detection"
       },
