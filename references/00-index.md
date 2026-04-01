@@ -17,6 +17,9 @@ Cross-reference of research findings against playbook golden rules. Last updated
 - [11-key-figures-2026.md](./11-key-figures-2026.md) — Karpathy, Chase, Willison, Osmani, Husain, Mollick, Lambert + 7 others
 - [12-pyreez-2026-extract.md](./12-pyreez-2026-extract.md) — pyreez 재감사: 17 NEW 2026 sources, multi-agent debate cluster, caching, instruction compliance
 - [13-technique-inventory.md](./13-technique-inventory.md) — 전수조사 기법 목록: 638파일 직접 읽기, 1400+ 기법 추출 (GSD/gstack/spec-kit)
+- [14-a2a-protocol.md](./14-a2a-protocol.md) — Google A2A v1.0: spec, task lifecycle, agent cards, streaming, auth, SDKs, MCP relationship
+- [15-agentic-coding-2026.md](./15-agentic-coding-2026.md) — Claude Code 2026 (hooks, agent teams, /batch, skills, worktrees), 8 industry trends, MIT patterns
+- [16-claude-code-custom-agents.md](./16-claude-code-custom-agents.md) — Custom agent frontmatter spec, rules loading mechanism, Agent tool parameters, skills vs subagents vs rules comparison
 
 ## Applied Revisions (2026-03-04)
 
