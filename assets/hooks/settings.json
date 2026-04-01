@@ -1,0 +1,43 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Agent",
+        "command": "bun .blazewrit/orchestrator.ts next"
+      },
+      {
+        "matcher": "Edit|Write",
+        "command": "bun .blazewrit/orchestrator.ts hook firebat-scan"
+      },
+      {
+        "matcher": "Read|Grep|Glob",
+        "command": "bun .blazewrit/orchestrator.ts hook stuck-detection"
+      },
+      {
+        "matcher": "Write",
+        "command": "bun .blazewrit/orchestrator.ts hook reflect-structure"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash(git commit*)",
+        "command": "bun .blazewrit/orchestrator.ts hook regression-guard"
+      },
+      {
+        "matcher": "Edit|Write",
+        "command": "bun .blazewrit/orchestrator.ts hook coverage-gate"
+      }
+    ],
+    "Stop": [
+      {
+        "command": "bun .blazewrit/orchestrator.ts check-incomplete"
+      },
+      {
+        "command": "bun .blazewrit/orchestrator.ts hook blocker-check"
+      },
+      {
+        "command": "bun .blazewrit/orchestrator.ts hook reflect-gate"
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 # Workflow Plan
 
-Status: Architecture finalized. Final design: 8 steps, 6 reviewers, 16 flows, produce ⇄ review loop pattern, Analyze + 기획 + Spec separation.
+Status: Architecture finalized. Final design: 8 steps, 6 reviewers, 16 flows, produce ⇄ review loop pattern, Analyze + 기획 + Spec separation. Execution model: script orchestrator (orchestrator.ts) — see EXECUTION_PLAN.md.
 
 ## Architecture
 
@@ -250,51 +250,60 @@ flows:
 
 ## Execution Protocol
 
+Full execution architecture in EXECUTION_PLAN.md. This section covers the design rationale and mechanisms that integrate with the workflow.
+
 ### Design Rationale
 
-blazewrit is a **workflow rule set** installed into a project. The **host agent** (Claude Code main context, A2A server session, or user session) reads these rules and becomes the orchestrator. Each step is a **custom agent** (subagent) spawned by the host. blazewrit is not an agent itself — it is the operating system that governs how agents work in the project.
+blazewrit의 오케스트레이터는 TypeScript 스크립트(orchestrator.ts)다. LLM이 아니다. 루프가 기계적으로 보장된다.
 
-Not a CLI binary (GSD-2), not a tool collection (gstack), not a fixed pipeline (spec-kit), not an agent (it IS the rules).
+Not a CLI binary (GSD-2), not a tool collection (gstack), not a fixed pipeline (spec-kit), not prompt-enforced rules (host LLM이 루프를 빼먹을 수 있음). **스크립트가 루프를 돌고, AI는 각 스텝에서 작업만 한다** (Ralph Loop 패턴).
 
-Constraints:
-- No subprocess exit codes (not a binary)
-- Dynamic flow routing (16 flow types, not a fixed pipeline)
-- Fully autonomous operation via A2A (no human-in-the-loop required)
-- Human can intervene at any time (but is not required)
+채택 근거: Ralph Loop (114줄 bash)이 증명. GSD/gstack/spec-kit은 호스트 LLM에 루프를 맡겨 prompt-enforced 한계를 가짐.
 
-Enforcement is designed from blazewrit's constraints, not copied from reference systems. Where reference patterns are adopted, the reason is noted.
+입력 채널별 구동:
+- **A2A/CI**: orchestrator.ts가 전체 루프를 직접 구동 (`claude --agent X --print`). 풀자동.
+- **유저 세션**: PostToolUse(Agent) 훅이 orchestrator.ts next를 자동 호출. 호스트 LLM은 훅의 지시를 따라 Agent tool 실행.
 
 ### Execution Model
 
 ```
-Host Agent (main context — reads blazewrit rules, becomes orchestrator)
+orchestrator.ts (TypeScript 스크립트 — 상태 머신, 루프 보장)
   │
-  ├─ Triage (host internal — pure classification, no analysis)
+  ├─ Triage: 호출자가 분류 후 flow type 전달
+  │   A2A: server.ts 기계 분류 → 실패 시 claude 호출
+  │   유저: 호스트 LLM이 signal table로 분류
+  │   CI: 트리거 설정에 명시
   │
-  ├─ Step execution → Produce ⇄ Review loop (Ralph Loop pattern)
-  │   ├─ Step Agent (producer) = custom agent (.claude/agents/<step>.md)
-  │   ├─ Step Reviewer Agent = custom agent (.claude/agents/<step>-reviewer.md)
-  │   ├─ Loop: produce → mechanical gates → reviewer → PASS or retry
-  │   ├─ tools/disallowedTools: per agent (mechanical)
+  ├─ Step execution → Produce ⇄ Review loop
+  │   ├─ [새 세션] claude --agent {step} --print (producer)
+  │   ├─ Mechanical gates (typecheck, test — exit code)
+  │   ├─ [새 세션] claude --agent {step}-reviewer --print (reviewer, 산출물만 수신)
+  │   ├─ PASS → next step / FAIL → retry with feedback / attempt >= 3 → DONE_WITH_CONCERNS
+  │   ├─ Step Agent = custom agent (.claude/agents/<step>.md)
+  │   ├─ tools/disallowedTools: per agent frontmatter (mechanical)
   │   ├─ mcpServers: scoped per agent (firebat, emberdeck, pyreez)
-  │   ├─ hooks: scoped safety hooks per agent
   │   ├─ maxTurns: runaway prevention per agent
   │   ├─ isolation: worktree (for high-risk Implement)
-  │   ├─ files_to_read: previous step artifacts (file dependency)
-  │   └─ return: completion status + output artifact
+  │   └─ return: completion status + output artifact (sentinel pattern)
   │
   ├─ Verify → Flow-level goal verification (internal multi-pass, no reviewer)
-  │   ├─ On FAIL: diagnoses failure_origin (dialogue|test|implement|report)
-  │   └─ Host routes back to responsible step's produce ⇄ review loop
+  │   ├─ On FAIL: diagnoses failure_origin → orchestrator routes back to responsible step
+  │   └─ Verify 3회 실패 → BLOCKED
   │
-  ├─ Step transition → Host reads return, updates state, spawns next agent/loop
+  ├─ Step transition → orchestrator.ts updates flow-state.yaml, determines next step
   │
-  └─ Global Hooks (safety + enforcement, in .claude/settings.json)
-      ├─ PostToolUse(Edit|Write): firebat scan
-      ├─ PostToolUse(Read|Grep|Glob): stuck detection counter
-      ├─ PreToolUse(Bash(git commit*)): regression_guard
-      ├─ Stop: blocker check + Reflect completion check
-      └─ Conditional: coverage gate, Reflect structure check
+  ├─ Crash recovery → flow-state.yaml은 스텝 사이에만 업데이트
+  │   → 재개 시 현재 스텝 산출물 확인 → 미완성이면 revert + 재실행
+  │
+  └─ Hooks (유저 세션 전용)
+      ├─ PostToolUse(Agent): orchestrator.ts next 자동 호출
+      └─ Stop: 미완료 flow 존재 시 세션 종료 차단
+
+에이전트 내부 훅 (모든 채널):
+  ├─ PostToolUse(Edit|Write): firebat scan
+  ├─ PostToolUse(Read|Grep|Glob): stuck detection counter
+  ├─ PreToolUse(Bash(git commit*)): regression_guard
+  └─ Conditional: coverage gate, Reflect structure check
 ```
 
 ### Why Custom Agents, Not Skills
@@ -348,18 +357,24 @@ Each step agent defines `tools` (allow list) or `disallowedTools` (deny list) in
 
 ### Orchestrator Protocol
 
-The host agent reads blazewrit rules (`.claude/rules/blazewrit/`) and becomes the orchestrator. Triage executes in the host context (needs conversation/request context). All steps including Analyze are delegated to custom agents.
+orchestrator.ts가 오케스트레이터. Triage만 호출자(호스트 LLM 또는 server.ts)가 수행.
 
-Host agent responsibilities (governed by blazewrit rules):
-- Run Triage classification (signal table matching + state file check, no analysis)
-- Spawn step agents in flow-defined order with files_to_read
-- Manage produce ⇄ review loops (spawn producer, check gates, spawn reviewer, handle PASS/FAIL)
-- Read agent return (completion status + artifact)
-- Update state file after each step transition
-- Handle Verify failure routing (read failure_origin, route back to responsible step)
-- Handle lifecycle events (suspend, resume, abandon)
-- NEVER do step work directly — always delegate to step agents
-- Context inheritance: when transitioning None → Flow, pass conversation context to Analyze agent via files_to_read or prompt injection
+orchestrator.ts 인터페이스:
+- `run(flow, request)` — A2A/CI: 전체 루프 실행
+- `next()` — 유저 세션: 훅이 호출, 다음 스텝 반환
+- `start(flow, request)` — flow 생성, 첫 스텝 반환
+- `resume(flow_id, context)` — NEEDS_CONTEXT/crash 후 재개
+- `abandon(flow_id)` — 중단 + Reflect 실행
+- `reclassify(flow_id, new_flow)` — 플로우 재분류
+- `status(flow_id?)` — 상태 조회
+- `check-incomplete()` — 미완료 flow 존재 여부 (Stop 훅용)
+
+유저 세션에서 호스트 LLM의 역할 (orchestration.md):
+- Triage 분류 (signal table)
+- `orchestrator.ts start` 호출
+- PostToolUse 훅이 반환한 지시에 따라 Agent tool 실행
+- NEEDS_CONTEXT 시 유저와 대화 후 `orchestrator.ts resume`
+- 유저 개입 시 `reclassify` / `abandon` 호출
 
 ### Completion Status Protocol
 
@@ -374,11 +389,13 @@ Every step agent returns one of (gstack pattern — adopted because it covers al
 
 ### Artifact Chain
 
-Each step produces a defined artifact. Next step's files_to_read points to it. Missing artifact = natural failure (spec-kit pattern — adopted because it enforces order without extra machinery).
+Each step produces a defined artifact. Artifacts are **maps, not summaries** — findings + constraints + files_to_read. 다음 에이전트는 산출물(지도)을 읽고, files_to_read의 소스 코드를 직접 읽는다. 요약을 맹신하지 않고 코드를 직접 확인. (GSD `<files_to_read>` 패턴)
+
+Missing artifact = natural failure (spec-kit pattern — adopted because it enforces order without extra machinery).
 
 | Step | Produces | Consumed by |
 |------|----------|-------------|
-| Analyze | Analysis summary (`.blazewrit/analysis/<flow-id>.md`) | 기획, Spec, or first core step |
+| Analyze | Analysis map (`.blazewrit/analysis/<flow-id>.md`) — findings, constraints, files_to_read | 기획, Spec, or first core step |
 | 기획 | 기획서 (`.blazewrit/plans/<flow-id>-기획.md`) + emberdeck intent card | Spec |
 | Spec | AC list + 코드 architecture + task decomposition (`.blazewrit/plans/<flow-id>-spec.md`) + emberdeck spec card + codeLinks | Test, Implement |
 | Test | Test file paths + RED/GREEN status | Implement |
@@ -473,9 +490,9 @@ These work regardless of LLM behavior. The agent cannot bypass them.
 | **Spec-Test traceability** | Script checks that each acceptance criterion in plan has ≥1 corresponding test case. Missing coverage = Test step incomplete | PRODUCTION-TESTED: GSD plan-checker "Requirement Coverage" dimension; spec-kit analyze Pass E "Coverage Gaps" | GSD, spec-kit |
 | **Completion signal** | Step agent outputs sentinel string for mechanical completion detection. Harness greps — not LLM self-assessment | PRODUCTION-TESTED: Ralph Loop `<promise>COMPLETE</promise>` grep | Ralph Loop |
 | **Hallucination guard** | If step agent produces zero tool calls, reject output. Agent that only talks without acting = hallucinated response | PRODUCTION-TESTED: GSD-2 auto engine "zero tool calls = rejected" | GSD-2 |
-| **Crash recovery** | On unexpected termination, detect incomplete state (lockfiles, partial state), restart from last committed checkpoint. Rate limit → auto-retry | PRODUCTION-TESTED: GSD-2 lockfile-based recovery, provider error handling | GSD-2 |
-| **Self-consistency bias prevention** | Verify agent receives plan + code only. Never receives Implement agent's reasoning/explanation. Prevents Verify from confirming Implement's logic instead of independently evaluating | MEASURED: Anthropic "models consistently show positive bias when grading their own work" | Anthropic harness |
-| **Host context reset** | For compound flows (3+ sub-flows), host orchestrator resets context between sub-flows. Reads fresh state from flow-state.yaml instead of accumulating | MEASURED: Anthropic "fresh context > compaction"; "context anxiety eliminated" with resets | Anthropic 4.6 |
+| **Crash recovery** | flow-state.yaml은 스텝 사이에만 업데이트 → 재개 시 현재 스텝 산출물 확인 → 미완성이면 revert + 재실행. 별도 메커니즘 불필요 — 새 세션 + 파일 상태가 자동 해결 | PRODUCTION-TESTED: Ralph Loop fresh restart pattern | Ralph, GSD-2 |
+| **Self-consistency bias prevention** | Reviewer agent receives artifact only. Never receives producer's reasoning. 매 스텝 새 세션이므로 이전 추론 오염 없음 | MEASURED: Anthropic "models consistently show positive bias when grading their own work" | Anthropic harness |
+| **Fresh context per step** | 모든 스텝이 새 세션. orchestrator.ts가 `claude --agent X --print`로 매번 새 프로세스 spawn. Context rot 구조적 불가 | PRODUCTION-TESTED: Ralph Loop "malloc/free — kill the process"; Anthropic "fresh context > compaction" | Ralph, Anthropic 4.6 |
 
 Already in WORKFLOW_PLAN.md (not repeated): hooks (firebat scan, regression_guard, stuck detection, blocker check, Reflect gate, coverage gate), hook failure policy, maxTurns, worktree isolation, fix attempt limit (3), artifact chain validation.
 
@@ -486,7 +503,7 @@ What each agent sees, when, and how degradation is prevented.
 | Mechanism | What | Evidence | Source |
 |-----------|------|----------|--------|
 | **Context budget model** | Quality degrades with usage: 0-30% PEAK, 30-50% GOOD, 50-70% DEGRADING, 70%+ POOR. Tasks sized to complete within GOOD zone | PRODUCTION-TESTED: GSD plans target ~50% usage, 2-3 tasks max per plan | GSD |
-| **Context pressure monitor** | PostToolUse hook injects warnings: 35% remaining = WARNING, 25% = CRITICAL ("save state, stop new work"). Host orchestrator only — step agents have fresh context | PRODUCTION-TESTED: GSD `gsd-context-monitor.js` PostToolUse hook | GSD |
+| **Context pressure monitor** | 유저 세션 호스트 LLM 전용. PostToolUse hook injects warnings: 35% remaining = WARNING, 25% = CRITICAL. 스텝 에이전트는 fresh context이므로 불필요. A2A/CI에서는 orchestrator.ts가 프로세스 단위로 관리하므로 불필요 | PRODUCTION-TESTED: GSD `gsd-context-monitor.js` PostToolUse hook | GSD |
 | **Context packets** | Each step agent receives explicit `files_to_read` list. First instruction: "Read every listed file before any action." No more, no less | PRODUCTION-TESTED: GSD `<files_to_read>` XML blocks; spec-kit progressive loading | GSD, spec-kit |
 | **Session startup sequence** | Every agent session: (1) verify working directory, (2) read git log + state files, (3) identify task, (4) baseline verification, (5) begin work | PRODUCTION-TESTED: Anthropic official pattern; Ralph Loop reads prd.json + progress.txt first | Anthropic, Ralph |
 | **One-task-per-session** | Each step agent implements exactly one bounded task. Prevents scope creep and context exhaustion | PRODUCTION-TESTED: Ralph Loop "one story per iteration — critical constraint"; Anthropic "one-feature-per-session" | Ralph, Anthropic |
@@ -516,7 +533,7 @@ Already in WORKFLOW_PLAN.md (not repeated): self-validation loop (max 3), decisi
 
 ### How Quality Mechanisms Integrate with Workflow
 
-Quality mechanisms are not a separate chain — they are embedded in the workflow's step transitions and repetition cycles. The workflow's [Test ⇄ Implement]* loop, [Implement → Verify]* loop, and compound [Flow → Gate]* loop ARE the quality loops. Each iteration spawns fresh agents (Ralph Loop pattern), and each transition enforces gates.
+Quality mechanisms are not a separate chain — they are embedded in the workflow's step transitions and repetition cycles. The workflow's [Test ⇄ Implement]* loop, [Implement → Verify]* loop, and compound [Flow → Gate]* loop ARE the quality loops. orchestrator.ts가 각 전환에서 gate를 기계적으로 실행하고, 매 스텝은 새 세션으로 spawn된다 (Ralph Loop pattern).
 
 Quality mechanisms apply at three points:
 
@@ -532,9 +549,10 @@ Three gaps that cannot be closed with current technology:
 |-----|---------------------|-----------|
 | **Test quality** | Script can count AC → test mapping. Cannot verify the test actually validates the criterion. LLM judgment | Test-Reviewer + pyreez multi-model review. Two-pass review in Verify (CRITICAL first) |
 | **기획 quality** | 나쁜 기획서 → 완벽한 쓰레기. 기획의 서비스 architecture, 정책, 유저 플로우가 잘못되면 downstream 전부 잘못됨 | 기획-Reviewer + pyreez multi-model deliberation. Forced uncertainty marking. Anti-pattern examples |
-| **Host orchestrator fidelity** | Host is an LLM reading rules. Could misclassify in Triage, skip steps, or spawn wrong agents. Prompt-enforced | Artifact dependency causes natural failure on skipped steps. Hooks catch dangerous actions. flow-state.yaml tracks completion. But ordering is ultimately prompt-enforced |
+| **Triage classification** | 유저 세션에서 호스트 LLM이 Triage 수행. 잘못 분류할 수 있음. A2A에서는 기계 분류 + LLM fallback | Signal table with concrete examples. Ambiguity → Analyze에 위임. 유저가 재분류 가능 (`orchestrator.ts reclassify`) |
+| **유저 세션 훅 지시 따르기** | PostToolUse 훅이 다음 Agent 지시를 반환하지만 호스트 LLM이 따르지 않을 수 있음. A2A/CI에서는 해당 없음 (스크립트가 루프 구동) | 지시가 단순함 ("Agent(X) 실행"). Stop 훅이 미완료 flow 감지. prompt-enforced 범위가 최소 |
 
-These are inherent to autonomous LLM systems. Every reference system (GSD, gstack, spec-kit, Anthropic harness) has the same gaps — they use humans to close them. blazewrit uses pyreez multi-model + structural separation + mechanical gates instead. This is the best achievable without a human, not perfection.
+Note: 스텝 순서 보장, reviewer 실행 보장, state 업데이트는 더 이상 Known Limitation이 아님 — orchestrator.ts(스크립트)가 기계적으로 보장. GSD/gstack/spec-kit과 달리 호스트 LLM에 루프를 맡기지 않음.
 
 ## Flows (16)
 
@@ -744,17 +762,17 @@ Hooks that need flow context (e.g., coverage gate checking if current flow is Re
 
 ### What blazewrit Is
 
-blazewrit is a **workflow rule set**, not an agent, not a CLI, not a framework. It is installed into a project and governs how agents work in that project. The host agent reads blazewrit's rules and becomes the orchestrator. Step executors are custom agents spawned by the host.
+blazewrit is a **workflow rule set + thin script orchestrator**. 규칙(에이전트 프롬프트, 플로우 정의, 훅)과 오케스트레이터 스크립트(orchestrator.ts)를 프로젝트에 설치한다. orchestrator.ts가 루프를 기계적으로 구동하고, 각 스텝은 custom agent로 실행된다.
 
 ### Why This Form
 
 | Alternative | Why rejected |
 |-------------|-------------|
-| **Standalone CLI** (GSD-2 model) | Rebuilds what Claude Code already provides (hooks, agents, mcpServers). Maintenance cost of TypeScript+Rust SDK vs markdown files |
-| **Claude Code plugin** | "Plugin subagents restricted (no hooks/mcpServers/permissionMode)" — blazewrit needs all three |
-| **MCP server** | MCP exposes individual tools, not orchestrated workflows. firebat/emberdeck/pyreez are MCP servers; blazewrit orchestrates them |
-| **Skill collection** (gstack model) | Skills share host context (context rot), no mcpServers scoping, no maxTurns, no worktree isolation. Step agents need all of these |
-| **Agent** | blazewrit is not an agent — it is the rules that make the host agent behave as orchestrator. Making blazewrit an agent would add an unnecessary indirection layer |
+| **Standalone CLI** (GSD-2 model) | Rebuilds what Claude Code already provides (hooks, agents, mcpServers). Maintenance cost |
+| **Rules only** (prompt-enforced) | 호스트 LLM이 루프를 관리 → 스텝 건너뛰기, reviewer 누락 가능. 모든 레퍼런스 시스템의 한계 |
+| **Claude Code plugin** | Plugin subagents restricted (no hooks/mcpServers/permissionMode) |
+| **MCP server** | MCP exposes individual tools, not orchestrated workflows |
+| **Skill collection** (gstack model) | Skills share host context (context rot), no mcpServers scoping, no maxTurns, no worktree isolation |
 
 ### Bun Package — Setup Tool (No Runtime Dependency)
 
@@ -787,18 +805,19 @@ Deploys into the project:
 │   ├── verify.md                 ← no reviewer: internal multi-pass + pyreez, mcpServers:[firebat,emberdeck,pyreez]
 │   └── reflect.md                ← no reviewer: structural guarantee (hook + 3-tier + append-only)
 │
-├── .claude/settings.json          ← global hooks (blocker check, stuck detection, Reflect gate)
+├── .claude/settings.json          ← hooks (PostToolUse(Agent): orchestrator next, Stop: check-incomplete, 에이전트 내부 safety hooks)
 │
 ├── .blazewrit/
+│   ├── orchestrator.ts            ← 스크립트 오케스트레이터 (상태 머신, 루프 구동, gate 실행)
 │   ├── config.yaml                ← gate_policy, flow settings
 │   ├── flows/                     ← flow definitions (on-demand read, NOT context-resident)
 │   │   ├── feature.md
 │   │   ├── bugfix.md
 │   │   ├── bugfix-p0.md
 │   │   └── ...                    ← 16 flow files
-│   ├── scripts/                   ← state utilities, validators, hook wrapper scripts
+│   ├── scripts/                   ← hook wrapper scripts, gate scripts
 │   └── a2a/
-│       └── server.ts              ← reference A2A server (thin entry point)
+│       └── server.ts              ← A2A server (프로토콜 처리 → orchestrator.ts run 호출)
 └──
 ```
 
@@ -806,25 +825,28 @@ Deploys into the project:
 
 ### A2A Integration
 
-blazewrit is input-channel agnostic. The project's A2A server receives external requests and spawns a host agent session in the project directory. The host agent loads blazewrit rules (via `.claude/rules/`) and executes the workflow.
+blazewrit is input-channel agnostic. A2A는 풀자동 — 유저 개입 없음. CancelTask로 중단 가능.
 
 ```
-External Agent ──A2A──→ Project's A2A Server (.blazewrit/a2a/server.ts)
+External Agent ──A2A──→ server.ts (프로토콜 처리)
+                              │
+                              ├─ Triage: 기계 분류 → 실패 시 claude 호출
                               │
                               ↓
-                        Host agent session (reads .claude/rules/blazewrit/)
+                        orchestrator.ts run (전체 루프, 기계적 보장)
                               │
-                              ├─ Triage (classify request → read .blazewrit/flows/<type>.md)
-                              ├─ Agent(analyze) ⇄ Agent(analyze-reviewer)
-                              ├─ Agent(기획) ⇄ Agent(기획-reviewer) → 기획서
-                              ├─ Agent(spec) ⇄ Agent(spec-reviewer) → AC + tasks
-                              ├─ Agent(test) ⇄ Agent(test-reviewer) → tests
-                              ├─ Agent(implement) ⇄ Agent(implement-reviewer) → code
-                              ├─ Agent(verify) → goal verification
-                              ├─ Agent(reflect) → learnings
+                              ├─ claude --agent analyze --print
+                              ├─ claude --agent analyze-reviewer --print
+                              ├─ claude --agent 기획 --print
+                              ├─ ...각 스텝 새 세션...
+                              ├─ claude --agent verify --print
+                              ├─ claude --agent reflect --print
                               │
                               ↓
                         Result ──A2A──→ External Agent
+
+CancelTask → server.ts → SIGTERM → orchestrator가 subprocess kill → revert → suspended
+NEEDS_CONTEXT → task status: input-required → 클라이언트 에이전트에 질문 반환
 ```
 
 blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server.ts`). Minimal thin layer: receive request → spawn `claude` session in project directory → return result. Projects can customize or replace with their own A2A infrastructure.
@@ -858,7 +880,7 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - Triage classification logic added (signal table, strength rules, None classification)
 - Flow lifecycle rules added (start, suspend, resume, complete, abandon)
 - Flow state persistence added (flow-state.yaml, list structure, archive)
-- Execution protocol: step=custom agent, host reads rules and orchestrates, Triage pure classification
+- Execution protocol: orchestrator.ts (스크립트)가 루프 구동. A2A/CI는 전체 루프, 유저 세션은 PostToolUse 훅 구동
 - Enforcement by consequence: dangerous→hook, role violation→allowed-tools, order→file dependency, conditional skip→hook gate, completion→Stop hook, quality→prompt+structure check, judgment→prompt only
 - Design rationale documented: why each reference pattern was adopted or rejected
 - Implementability verified against Claude Code capabilities: no nonexistent features assumed
@@ -866,10 +888,10 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - Hook failure policy added: safety=fail-closed, enforcement=fail-open
 - P0 retroactive test enforcement: scheduled trigger (mechanical) + SessionStart fallback (advisory)
 - Gate policy storage location defined: `.blazewrit/config.yaml`
-- Execution model changed: step = custom agent (not skill). Fresh context, scoped mcpServers/hooks/permissionMode/maxTurns/isolation
-- blazewrit identity clarified: workflow rule set, not an agent. Host agent reads rules and orchestrates
-- Delivery form factor defined: npm package deploys rules (.claude/rules/) + step agents (.claude/agents/) + hooks + scripts
-- A2A integration: reference server provided, host agent session governed by blazewrit rules
+- Execution model changed: step = custom agent (not skill). Fresh context per step (`claude --agent X --print`), scoped mcpServers/hooks/permissionMode/maxTurns/isolation
+- blazewrit identity: workflow rule set + thin script orchestrator. orchestrator.ts가 루프 구동, LLM은 각 스텝에서 작업만 수행
+- Delivery form factor: bunx setup tool deploys rules + agents + orchestrator.ts + hooks + scripts + A2A server
+- A2A integration: server.ts → orchestrator.ts run (풀자동). CancelTask → SIGTERM. NEEDS_CONTEXT → input-required
 - Delivery: bunx setup tool (no runtime dependency), not npm install
 - Context budget: rules (always loaded, concise) vs flows (on-demand read) split
 - Flow definitions moved from .claude/rules/ to .blazewrit/flows/ (phase-aware context loading)
@@ -883,7 +905,7 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - Spec: 기획서에서 AC 추출 + 코드 architecture(디렉토리/파일 설계) + task 분해
 - Analyze: Prepare 흡수. 전용 에이전트. Triage의 Implied/Ambiguous signal도 처리
 - None state: 자유 대화/논의. ideation이 아닌 탐색적 대화. Signal 나오면 Flow 전환
-- Known limitations: test quality, 기획 quality, host fidelity — with mitigations
+- Known limitations: test quality, 기획 quality, Triage 분류 정확도, 유저 세션 훅 지시 따르기 — 스텝 순서/reviewer 실행은 더 이상 limitation 아님 (스크립트 보장)
 
 ## Reflect Detail
 
@@ -955,29 +977,32 @@ Low-risk flows (Bug Fix, Chore, Test, Release):
 
 ## Remaining Work (Implementation Phase)
 
-### Step Agents + Reviewer Agents
-1. Producer agents (analyze.md, 기획.md, spec.md, test.md, implement.md, report.md, verify.md, reflect.md) — 8 agents, custom agent frontmatter (tools, mcpServers, hooks, maxTurns, isolation) + prompt body (output contract, self-validation criteria, files_to_read)
-2. Reviewer agents (analyze-reviewer.md, 기획-reviewer.md, spec-reviewer.md, test-reviewer.md, implement-reviewer.md, report-reviewer.md) — 6 agents, read-only tools, review criteria per output type, structured feedback format
+Full execution architecture in EXECUTION_PLAN.md. Below is the implementation checklist.
 
-### Orchestration Rules
-2. Orchestration rules (.claude/rules/blazewrit/orchestration.md) — Triage + agent invocation + produce⇄review loop management + state file management protocol
-3. Enforcement rules (.claude/rules/blazewrit/enforcement.md) — deviation rules, gate policy, decision classification
+### Orchestrator
+1. orchestrator.ts 구현 — 상태 머신, CLI (run/next/start/resume/abandon/reclassify/status/check-incomplete), claude 호출, gate 실행
+2. flow-state.yaml 스키마 확정
+
+### Step Agents + Reviewer Agents
+3. Producer agents (analyze.md, 기획.md, spec.md, test.md, implement.md, report.md, verify.md, reflect.md) — 8 agents, custom agent frontmatter (tools, mcpServers, hooks, maxTurns, isolation) + prompt body (output contract, self-validation criteria, artifact map format)
+4. Reviewer agents (analyze-reviewer.md, 기획-reviewer.md, spec-reviewer.md, test-reviewer.md, implement-reviewer.md, report-reviewer.md) — 6 agents, read-only tools, review criteria, structured feedback format
+
+### Orchestration Rules (유저 세션용)
+5. orchestration.md (.claude/rules/blazewrit/) — Triage signal table + 훅 지시 따르기 규칙 (60-80줄)
+6. enforcement.md (.claude/rules/blazewrit/) — deviation rules, gate policy, decision classification
 
 ### Flow Definitions
-4. Flow definition files (.blazewrit/flows/) — Analyze depth per flow, step order with reviewer pairs, loop conditions (repeat_when/stop_when/max), per-transition gates, Verify failure routing per flow
+7. 16 flow definition files (.blazewrit/flows/) — step order, conditional steps, loop conditions, Verify failure routing
 
-### Hooks
-5. Safety hooks: firebat scan, regression_guard, stuck detection, blocker check
-6. Enforcement hooks: Reflect gate (Stop), Reflect structure check, coverage gate
-7. Hook wrapper scripts (fail-closed for safety hooks)
+### Hooks + Scripts
+8. .claude/settings.json — PostToolUse(Agent): orchestrator next, Stop: check-incomplete
+9. 에이전트 내부 safety hooks: firebat scan, regression_guard, stuck detection
+10. Hook wrapper scripts (fail-closed for safety)
+11. A2A server.ts 구현
 
-### Scripts
-8. flow-state read/write utilities
-9. Reflect structure validator (check required sections)
-10. Coverage checker (for Refactor conditional Test gate)
-
-### Design Decisions (Resolved)
-9. ~~Reflect detail~~ → See "Reflect Detail" section (3-tier distillation, required sections, dedup rule)
-10. ~~Non-implementation flow completion criteria~~ → See "Non-Implementation Flow Completion Criteria" section
-11. ~~Rollback guidance~~ → See "Rollback and Failure Recovery" section (worktree isolation + escalation)
-12. ~~Hook context detection~~ → See "Hook Enforcement > Hook Context Detection" (read flow-state.yaml)
+### Resolved Design Decisions
+- ~~Execution model~~ → EXECUTION_PLAN.md (스크립트 오케스트레이터, 세션 모델, 아티팩트 모델, 채널별 구동, crash recovery)
+- ~~Reflect detail~~ → See "Reflect Detail" section
+- ~~Non-implementation flow completion criteria~~ → See "Non-Implementation Flow Completion Criteria" section
+- ~~Rollback guidance~~ → See "Rollback and Failure Recovery" section
+- ~~Hook context detection~~ → See "Hook Enforcement > Hook Context Detection"
