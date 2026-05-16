@@ -602,9 +602,103 @@ verification_proof: { ed_queries, web_fetches?, file_reads }
 ### Tools 허용
 
 - ED MCP query (graph traversal)
-- 외부 리서치 (WebFetch / WebSearch / Context7) — constraints/compatibility 필요 시 (Migration·Feature·Security 등)
+- 외부 리서치 (WebFetch / WebSearch / Context7) — 아래 정책 준수
 - 코드 read-only (Ground 못 캡처한 세부)
 - Bash 제한적
+
+### External Research Policy
+
+외부 리서치는 *수단*이지 *기본*이 아님. claim 단위로 trigger·source·tool·stop criteria 결정.
+
+#### Triggers (claim이 외부 진실 의존 시)
+
+- Lib API spec, version compatibility, deprecation status
+- 보안 advisory (CVE / GHSA / 벤더 보안 피드)
+- License / 컴플라이언스 의무
+- 외부 API contract / 벤더 행위 / pricing·quota
+- 표준 (RFC / W3C / ISO / IETF) 행위
+- Browser·runtime 지원 매트릭스
+- Package registry metadata (npm / pypi / crates.io)
+- 내부 docs가 외부 source를 인용 → 확인
+- 캐시된 내부 사실과 외부 실시간 상태 충돌 의심
+
+#### Source Eligibility (trust 등급)
+
+| Trust | Source 유형 |
+|---|---|
+| **high** | official_current (벤더 canonical URL, 현재 버전), standards_body (RFC/W3C/ISO/IETF), source_code (authoritative), security_advisory (CVE/GHSA) |
+| **medium** | official_stale (구버전 official), vendor_changelog, package_registry |
+| **low** | community (StackOverflow, 블로그), cached_archive (web.archive.org) |
+| **rejected** | generated_seo, expired without alternatives |
+
+generated_seo는 *어떤 경우에도 authoritative 인용 불가*.
+
+#### Tool Selection (context-dependent, 고정 우선순위 아님)
+
+| Claim 유형 | 권장 tool 순서 |
+|---|---|
+| Lib API spec | Context7 (indexed) → WebFetch official docs (verification) |
+| Version compat / breaking | WebFetch official changelog/migration guide → package registry |
+| CVE / security | WebFetch CVE/GHSA URL → 벤더 security feed |
+| Standards behavior | WebFetch 표준 doc (RFC/W3C) |
+| Community pattern (last resort) | WebSearch + low trust caveat |
+| Freshness 검증 | WebFetch *직접* (cached intermediaries skip) |
+
+#### Stop Criteria (고정 budget 아님)
+
+```
+sufficient_evidence: claim verified at trust ≥ medium AND no contradictions
+diminishing_returns: 3+ sources agree
+blocking_failure: source inaccessible OR user input needed
+safety_cap:
+  per Investigate invocation:
+    Migration / Feature / Spike: 60s wall, 30k tokens (liberal)
+    Bug Fix Unreproducible / Performance: 40s, 20k
+    Bug Fix (general) / Refactor / Test: 20s, 10k (claim-driven override 허용)
+    Chore / Release / Review / Retro / Exploration / 기획-standalone: 10s, 5k
+```
+
+caps는 *default*. 특정 claim이 더 필요 시 (예: simple Bug Fix에 OAuth 표준 확인) Investigate가 명시 rationale로 cap 초과 가능, reviewer 검증.
+
+#### Provenance (claim 중요도별, 균일 아님)
+
+| Claim 분류 | Provenance 요구 |
+|---|---|
+| decision_critical (compatibility issue·risk 결정 근거) | 전체: url + accessed_at + content_hash + source_type + version_snapshot |
+| version_sensitive | 전체 |
+| conflict_with_internal | 전체 |
+| background_context | aggregated: `sources_consulted: [url 목록]`, `primary: url` |
+
+소소한 background claim에 전체 provenance 강제 = mechanical noise. **claim 중요도가 provenance 깊이 결정**.
+
+#### Conflict 처리 (외부 vs 내부 사실)
+
+| 충돌 유형 | 규칙 |
+|---|---|
+| External API fact (lib 변경) vs 내부 캐시 | **external 채택**, conflicts에 기록 |
+| 내부 contract/policy/규칙 vs external | **내부 채택** (silent override 금지), conflicts에 owner review용 기록 |
+| 소스 권위 모호 | conflicts에 기록, user/Decide 결정 위임 |
+
+**원칙**: 내부 source-of-truth는 owner 결정 없이 silent override 안 됨.
+
+#### No-Results 처리 (claim 중요도별)
+
+| Claim 분류 | 처리 |
+|---|---|
+| decision_critical | compatibility issue 등록 (blocks_flow 또는 requires_user) |
+| version_sensitive | risk_surface 항목 + follow-up flag |
+| background | 진행, unknown disposition=defer |
+| feasibility-critical (Spike) | *negative signal*로 명시 — "no evidence found" 자체가 사실 |
+
+#### Failure Recovery
+
+| Failure | 처리 |
+|---|---|
+| Rate limit | 우선순위 fallback (Context7 한도 → WebFetch → WebSearch caveat) |
+| Network error | 1 재시도 → unknown[external_inaccessible] |
+| Auth required (private docs) | unknown[external_inaccessible: auth] → escalate or skip |
+| Paywall | unknown[external_inaccessible: paywall] |
+| 모든 source 실패 | claim 중요도별 No-Results 처리 |
 
 ### Boundary — Investigate가 안 하는 것
 
@@ -1453,6 +1547,7 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - **Analyze → Investigate 개명.** "Analyze"는 너무 generic — 다른 step도 분석함. *Task-specific interpretation*이 본질. Investigate가 명명-기능 정합. 활동 (Impact/Constraints/Risk/Compatibility) 동일하되 *옵션 생성·결정·설계는 배제* (Decide로 이관). codex 검증.
 - **Unknown Disposition Matrix 명시화 (결함 #3·#4 해결).** Ground unknown 처분이 이전엔 implicit (LLM 판단). 이제 6 disposition (resolved/risk/constraint/clarification/defer/escalate) + unknown 유형별 권장 matrix 정립. 매 unknown은 `{disposition, rationale, follow_up_ref, matrix_default?}` 명시 — silent 미처리 0. Reviewer가 매 항목 disposition + rationale 검증, matrix 벗어난 경우 rationale 강화 확인. **codex 권장 반영**: "environment/tooling capture failures → risk; missing dependency/API/policy → constraint; ambiguous intent/scope → clarification; irrelevant unknown → defer with rationale" — 모두 matrix에 포함 + 추가 (resolved/escalate).
 - **Compatibility Verdict 구조화 (결함 #6 해결).** 단순 `{result, reason, blockers?}`였던 verdict를 *3-state result + scoped issues list + freshness*로 확장. 4 round 적대적 검증, 25 angle 공격. codex 자기 prior 권장 (`high_risk_proceed`) **over-recommendation 인정** — risk_surface와 중복. 최종 안: (1) `result: proceed|blocked|needs_clarification` 3-state 유지, (2) `issues: [{type(15 base + other), severity, scope(component/tenant/dependency/platform/sub_flow/target_set), evidence, requires_user?, blocks_flow?, suggested_followup}]` — cap 50, dedup (root_cause+scope hash, most-severe-wins), (3) `source_version` (ed_snapshot/rules_version/contracts_version) freshness, (4) `sub_flow_verdicts` Compound 전용, (5) Validation Rules V1-V10 (mechanical hook), (6) Stale 검출 책임 Decide/Verify 명시. **scope per issue가 핵심**: 없으면 Compound·partial-compat에서 over-block (codex 시뮬레이션이 입증). type taxonomy *extensible* (closed enum 금지). 시나리오 d (Performance no-op) 는 호환성 영역 밖 — task validity 결함 #11로 별도 노트.
+- **External Research Policy (결함 #8 해결).** Investigate의 외부 도구 사용이 미정의였음 — 초안 (고정 budget + 고정 tool 우선순위 + 전체 provenance)을 codex가 *5개 항목 WRONG*으로 검증: 고정 budget=arbitrary (위험·claim 수와 무관), 고정 tool 우선순위=context-dependent (freshness 검증은 WebFetch 직접 필요), "external preferred" rule=unsafe (내부 contract silent override 위험), 균일 provenance=mechanical noise, per-flow override=too crude. 최종 정책: (1) **Triggers**: claim 단위 — lib API/version compat/CVE/license/contract/standards/runtime support/registry metadata, (2) **Source eligibility** 4-tier (high: official_current·standards·source·security_advisory / medium: official_stale·changelog·registry / low: community·archive / rejected: generated_seo), (3) **Tool selection** *context-dependent* (claim 유형별 권장 매핑), (4) **Stop criteria** — sufficient_evidence·diminishing_returns·blocking_failure·safety_cap (flow별 default cap, claim-driven override 허용 with rationale), (5) **Provenance claim 중요도별** (decision_critical: 전체, background: aggregated), (6) **Conflict 처리**: external API fact는 external 채택, *내부 contract/policy는 silent override 금지* (owner review용 기록), (7) **No-results 처리** claim 중요도별 (decision_critical→compatibility issue, version_sensitive→risk, background→defer, feasibility-critical→negative signal), (8) **Failure recovery** (rate limit fallback, auth/paywall→external_inaccessible). codex 10 항목 모두 반영.
 - **Decide step 신설 — Decision Ownership (universal).** Step Pool 9 → 9 (기획 → Decide로 일반화). 결함 #1 (결정 소유권 공백) 해결. 기존 기획은 *기획서 산출* 함의로 conditional 처리되어 Bug Fix / Chore / P0 / Release / Bug Fix Unreproducible flow에서 결정 owner 부재 → silent decision. **Decide는 모든 flow 필수**, 산출물 깊이는 mode로 차등: Record (1줄 결정+근거) / Plan (옵션 N개 비교+선택+우선순위) / Design (기획서: architecture+policy+userflow+req + emberdeck intent card). Mode = flow definition declared + situational upgrade (옵션 N≥2 발견 시 Record→Plan). Design mode만 intent card 자동 생성. **명명 근거 (codex)**: "기획"이 한국어로 *큰 산출물* 함의 → minimal flow에서 형식적 통과·skip 압력 유발. step 이름이 *책임 (ownership)*을 가리켜야 함. Naming은 control surface (agent 역할·산출물·review 기준 매개) — semantic noise 아님. **Triage Mismatch 처리**: Investigate가 surface하면 Decide가 reclassify trigger (orchestrator 신호) — Verify까지 안 가도 됨. Compound의 sub-flow 분해/순서는 top-level Decide(Design)에서, sub-flow별 자체 Decide는 자기 mode로 실행.
 - Flow lifecycle rules added (start, suspend, resume, complete, abandon)
 - Flow state persistence added (flow-state.yaml, list structure, archive)
