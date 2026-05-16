@@ -514,9 +514,75 @@ risk_surface: [{ area, severity: low|med|high|critical, probability: likely|poss
 
 compatibility_verdict:
   result: proceed | blocked | needs_clarification
-  reason
-  blockers?: [...]
+  schema_version: 1
+  checked_at: ISO8601
+  source_version:                                            # freshness
+    ed_snapshot: <hash>
+    rules_version: <hash>
+    contracts_version: <hash>
 
+  issues:                                                    # cap 50, dedup, most-severe-wins
+    - id                                                     # invocation-scoped unique
+      type: missing_referent | policy_violation | stack_incompatibility
+          | breaking_change | deprecated_usage | resource_constraint
+          | security_violation | compliance_violation | license_conflict
+          | contract_violation | environment_mismatch | timing_constraint
+          | circular_dependency | platform_unsupported | other
+      custom_type?: <string>                                 # type=other일 때 필수
+      severity: fatal | high | medium | low
+      scope:                                                 # 모두 optional, 모두 빈 = project-wide
+        component?: <node/module>
+        tenant?: <id>
+        dependency?: <package@version>
+        platform?: <env>
+        sub_flow?: <flow_id>
+        target_set?: [<consumer_id>]                         # bounded (top N + summary)
+      description
+      evidence: <ground/investigate ref>                     # required
+      requires_user?: bool                                   # true → needs_clarification 유발
+      blocks_flow?: bool                                     # true → blocked 유발
+      suggested_followup
+
+  reason                                                     # result 결정 근거
+  blockers?: [issue_id]                                      # result=blocked일 때 필수
+  open_questions?: [issue_id]                                # result=needs_clarification일 때 필수
+
+  sub_flow_verdicts?:                                        # Compound only
+    - sub_flow_id
+      result
+      issue_refs: [issue_id]
+
+  issues_overflow?:                                          # 50개 초과 시
+    total_found: N
+    captured: 50
+    summary: <string>
+```
+
+### Compatibility Verdict — Validation Rules (mechanical)
+
+```
+V1. issues 빈 list → result=proceed 강제
+V2. 어느 issue.blocks_flow=true → result=blocked
+V3. V2 없고 어느 issue.requires_user=true → result=needs_clarification
+V4. V2/V3 모두 미충족 → result=proceed
+V5. issue dedup: (root_cause hash + scope hash) 같으면 1 issue, max(severity) 채택
+V6. issues.length ≤ 50, 초과 시 issues_overflow 필수
+V7. type=other → custom_type 필수
+V8. result=blocked → blockers 비어있지 않음
+V9. result=needs_clarification → open_questions 비어있지 않음
+V10. 모든 issue에 evidence 필수 (provenance)
+```
+
+### Compatibility Verdict — Stale 검출 책임
+
+| 누가 | 언제 | 어떻게 |
+|---|---|---|
+| Decide | Investigate 출력 수신 시 | `source_version` 현재 값과 비교 — mismatch면 Investigate 재invoke 요청 |
+| Verify | 최종 검증 | source_version 검사 + V1-V10 통과 여부 |
+
+### Investigate Output — 나머지 schema
+
+```yaml
 ground_unknowns_addressed: [{
   unknown_ref,                                                   # Ground unknown 항목 ID/index
   unknown_type,                                                  # matrix 매칭용 (capture_failed/inaccessible/...)
@@ -1386,6 +1452,7 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - **Ground step 신설 — Evidence Boundary.** Step Pool 8 → 9. Triage 다음에 위치 (`None ↔ Triage → Flow[Ground → Analyze → ...]`). Triage된 의도를 bounded·sourced·current 사실 + 명시 불확실성으로 변환. 3 활동: (1) ED graph query — request 영역 bounded subgraph, (2) Volatile capture — flow_type별 선언된 measurement profile 실행 (universal: typecheck/test/lint/git, conditional: Performance/Migration/Bug Fix Unreproducible/Release), (3) Surface — ED ambiguous/inferred + capture 실패 → unknowns/conflicts (silent gap 금지). **Provenance 강제**: 모든 fact/unknown/conflict에 source_tool 명시. **Freshness 강제**: ed_snapshot_version + git_HEAD start/end 기록, racing_changes 검출. **Reviewer 강화**: subgraph entry≥1 OR referent_unresolved, volatile 각 항목 explicit status (success/fail/timeout/skipped-with-reason), ambiguous/inferred·실패 unknowns 매핑. **Cache 허용** (logically stateless): cache key = hash(request + conversation_digest + ed_snapshot + git_HEAD + worktree + commands_def + flow_type + scope_hint). **Boundary**: 해석·판단·선택 없음 — 측정값 의미 판단/위험 평가/feasibility는 Analyze 책임. **Analyze 책임 재정의**: "이해/사실 캡처"는 Ground로 이관, Analyze는 *task-specific 해석/영향 분석*만. **codex 교차 검토 반영**: provenance granularity / flow-conditional profile은 선언만 (Ground가 판단 안 함) / volatile result status 강제 / 모노리포 scope_hint / active_flow_overlap 처리 / racing_changes 검출.
 - **Analyze → Investigate 개명.** "Analyze"는 너무 generic — 다른 step도 분석함. *Task-specific interpretation*이 본질. Investigate가 명명-기능 정합. 활동 (Impact/Constraints/Risk/Compatibility) 동일하되 *옵션 생성·결정·설계는 배제* (Decide로 이관). codex 검증.
 - **Unknown Disposition Matrix 명시화 (결함 #3·#4 해결).** Ground unknown 처분이 이전엔 implicit (LLM 판단). 이제 6 disposition (resolved/risk/constraint/clarification/defer/escalate) + unknown 유형별 권장 matrix 정립. 매 unknown은 `{disposition, rationale, follow_up_ref, matrix_default?}` 명시 — silent 미처리 0. Reviewer가 매 항목 disposition + rationale 검증, matrix 벗어난 경우 rationale 강화 확인. **codex 권장 반영**: "environment/tooling capture failures → risk; missing dependency/API/policy → constraint; ambiguous intent/scope → clarification; irrelevant unknown → defer with rationale" — 모두 matrix에 포함 + 추가 (resolved/escalate).
+- **Compatibility Verdict 구조화 (결함 #6 해결).** 단순 `{result, reason, blockers?}`였던 verdict를 *3-state result + scoped issues list + freshness*로 확장. 4 round 적대적 검증, 25 angle 공격. codex 자기 prior 권장 (`high_risk_proceed`) **over-recommendation 인정** — risk_surface와 중복. 최종 안: (1) `result: proceed|blocked|needs_clarification` 3-state 유지, (2) `issues: [{type(15 base + other), severity, scope(component/tenant/dependency/platform/sub_flow/target_set), evidence, requires_user?, blocks_flow?, suggested_followup}]` — cap 50, dedup (root_cause+scope hash, most-severe-wins), (3) `source_version` (ed_snapshot/rules_version/contracts_version) freshness, (4) `sub_flow_verdicts` Compound 전용, (5) Validation Rules V1-V10 (mechanical hook), (6) Stale 검출 책임 Decide/Verify 명시. **scope per issue가 핵심**: 없으면 Compound·partial-compat에서 over-block (codex 시뮬레이션이 입증). type taxonomy *extensible* (closed enum 금지). 시나리오 d (Performance no-op) 는 호환성 영역 밖 — task validity 결함 #11로 별도 노트.
 - **Decide step 신설 — Decision Ownership (universal).** Step Pool 9 → 9 (기획 → Decide로 일반화). 결함 #1 (결정 소유권 공백) 해결. 기존 기획은 *기획서 산출* 함의로 conditional 처리되어 Bug Fix / Chore / P0 / Release / Bug Fix Unreproducible flow에서 결정 owner 부재 → silent decision. **Decide는 모든 flow 필수**, 산출물 깊이는 mode로 차등: Record (1줄 결정+근거) / Plan (옵션 N개 비교+선택+우선순위) / Design (기획서: architecture+policy+userflow+req + emberdeck intent card). Mode = flow definition declared + situational upgrade (옵션 N≥2 발견 시 Record→Plan). Design mode만 intent card 자동 생성. **명명 근거 (codex)**: "기획"이 한국어로 *큰 산출물* 함의 → minimal flow에서 형식적 통과·skip 압력 유발. step 이름이 *책임 (ownership)*을 가리켜야 함. Naming은 control surface (agent 역할·산출물·review 기준 매개) — semantic noise 아님. **Triage Mismatch 처리**: Investigate가 surface하면 Decide가 reclassify trigger (orchestrator 신호) — Verify까지 안 가도 됨. Compound의 sub-flow 분해/순서는 top-level Decide(Design)에서, sub-flow별 자체 Decide는 자기 mode로 실행.
 - Flow lifecycle rules added (start, suspend, resume, complete, abandon)
 - Flow state persistence added (flow-state.yaml, list structure, archive)
