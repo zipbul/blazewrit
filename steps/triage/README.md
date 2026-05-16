@@ -17,7 +17,7 @@
 | `conversation_context` | optional | None-state turns (user 세션) |
 | `clarifications` | optional | 이전 invocation의 Q&A 누적 `[{q, a}]` |
 | `prior_evidence` | optional | reclassify용 `{prior_flow_type, evidence}` |
-| `reclassify_count` | optional (default 0) | orchestrator 추적. Triage가 cap 도달 자체 검사 — 값 ≥ 3이면 분류 시도 없이 `ambiguous(question="reclassify cap reached, manual intervention required")` 출력 강제 (escalate signal) |
+| `reclassify_count` | optional (default 0) | orchestrator 추적 (현재까지 reclassify 시도 횟수, 0=최초 분류). Triage가 cap 도달 자체 검사 — 값 ≥ 3이면 분류 시도 없이 `ambiguous(question="reclassify cap reached, manual intervention required")` 출력 강제. orchestrator가 ambiguous(escalate) 받으면 flow halt — 재invoke 안 함 (loop 방지) |
 
 **입력에 `active_flow_state` 없음.** Triage는 flow 상태 모름 — orchestrator의 일.
 
@@ -179,4 +179,4 @@ User can override Triage classification at any point:
 
 ## Reclassify Cap
 
-Triage 재invoke (reclassify 트리거)는 **flow 당 최대 3회**. `reclassify_count` 추적. flow_id는 reclassify 시 *유지* (변경 X) — counter 의미 보존. 3회 초과 시 flow halt + user/caller escalate ("intent 결정 불가"). A2A/CI도 동일 cap.
+Triage reclassify는 **flow 당 최대 3회 시도** (즉 `reclassify_count`가 0→1→2로 증가, 3번째 시도까지 invoke됨). `reclassify_count ≥ 3` 도달 시 Triage가 자동 `ambiguous(escalate)` 출력 (input field rule, 위 참조). orchestrator는 ambiguous(escalate) 받으면 flow halt + user/caller escalate ("intent 결정 불가"), 재invoke 안 함. flow_id는 reclassify 시 *유지* (변경 X) — counter 의미 보존. A2A/CI도 동일 cap.

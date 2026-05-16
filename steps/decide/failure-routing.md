@@ -39,7 +39,7 @@ Host (orchestrator)가 failure_origin 읽고 해당 step의 produce ⇄ review l
 
 - producer⇄reviewer 3-fail cap은 *단일 cycle*. reclassify로 재진입 시 fail counter reset
 - (flow_id, step_name) **total fail count 5회 누적** → flow-level halt (reclassify 무한 loop 방지)
-- Triage 재invoke (reclassify 트리거)는 **flow 당 최대 3회**. `reclassify_count` 추적. flow_id는 reclassify 시 *유지*. 3회 초과 시 flow halt + user/caller escalate
+- Triage reclassify는 **flow 당 최대 3회 시도** (`reclassify_count` 0→1→2; 3번째 invoke까지). `reclassify_count ≥ 3` 시 Triage 자체 ambiguous(escalate) 출력 → flow halt. flow_id는 reclassify 시 *유지*. 자세히: [steps/triage/README.md § Reclassify Cap](../triage/README.md)
 - Upstream deepen (Decide → Ground/Investigate): 1회만
 - Compound pivot: 2회/Compound. Compound retry: 1회/sub_flow
 

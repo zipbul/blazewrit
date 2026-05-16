@@ -197,7 +197,7 @@ Triage reclassify cap: flow 당 3회. 초과 시 flow halt + escalate.
 | Condition | Path |
 |-----------|------|
 | Normal (reproducible) | Ground → Investigate → Decide(Record→Plan?) → Test(reproduce RED) → Implement(fix GREEN) → Verify → Reflect |
-| P0/production down | Ground → Investigate(minimal) → Decide(Record) → Implement(emergency fix) → Verify → Test(retroactive, mandatory within 24h) → Reflect. Enforcement: scheduled trigger checks `retroactive_test_due` in flow-state.yaml every 6h, auto-creates Test flow if overdue. Fallback: SessionStart hook warns on next session. |
+| P0/production down | Ground → Investigate(minimal) → Decide(Record) → Implement(emergency fix) → Verify → Test(retroactive, mandatory within 24h) → Reflect. Enforcement: scheduled trigger checks `retroactive_test_due` in flow-state.json every 6h, auto-creates Test flow if overdue. Fallback: SessionStart hook warns on next session. |
 | Unreproducible (intermittent) | Ground → Investigate(hypothesis 식별) → Decide(Plan: hypothesis 우선순위) → Implement(hypothesis fix, documented) → Verify(extended observation) → Reflect |
 
 ## Refactor Guards

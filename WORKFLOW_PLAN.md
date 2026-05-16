@@ -26,7 +26,7 @@ None (자유 대화/논의) ↔ Triage → Flow[Ground → Investigate → Decid
 - **Verify**: 모든 flow 필수 — flow-level goal check + failure routing. → [steps/verify/](./steps/verify/)
 - **Reflect**: completion + abandonment에서 실행, suspension 미실행. → [steps/reflect/](./steps/reflect/)
 - **Step Execution**: Verify/Reflect 제외 모두 produce ⇄ review (Ralph Loop).
-- **Flow State**: `.blazewrit/flow-state.yaml` — step transition마다 update, session start에 read.
+- **Flow State**: `.blazewrit/flow-state.json` — step transition마다 update, session start에 read.
 
 ## Step Pool (9)
 
@@ -153,7 +153,7 @@ Flow state is file-based, not context-dependent. Survives session boundaries, co
 
 ### State File
 
-Location: `.blazewrit/flow-state.yaml` (list of active/suspended flows)
+Location: `.blazewrit/flow-state.json` (list of active/suspended flows)
 
 ```yaml
 # List structure — supports multiple suspended flows + one active
@@ -258,9 +258,9 @@ orchestrator.ts (TypeScript 스크립트 — 상태 머신, 루프 보장)
   │   ├─ On FAIL: diagnoses failure_origin → orchestrator routes back to responsible step
   │   └─ Verify 3회 실패 → BLOCKED
   │
-  ├─ Step transition → orchestrator.ts updates flow-state.yaml, determines next step
+  ├─ Step transition → orchestrator.ts updates flow-state.json, determines next step
   │
-  ├─ Crash recovery → flow-state.yaml은 스텝 사이에만 업데이트
+  ├─ Crash recovery → flow-state.json은 스텝 사이에만 업데이트
   │   → 재개 시 현재 스텝 산출물 확인 → 미완성이면 revert + 재실행
   │
   └─ Hooks (유저 세션 전용)
@@ -310,7 +310,7 @@ Each step agent defines `tools` (allow list) or `disallowedTools` (deny list) in
 |-------|-------|------------|-----------|
 | ground | Read, Grep, Glob, Bash | emberdeck | Read-only + bash for typecheck/test/lint/git 실행. 사실 캡처 |
 | ground-reviewer | Read, Grep, Glob | — | Read-only. 사실 완전성·provenance·freshness 검증 |
-| investigate | **WebFetch, WebSearch (외부)** + Read 한정 (rules + 이전 step artifact) | emberdeck (query only), Context7 | 프로젝트 *소스 코드* read 금지 (Ground 책임). 외부 리서치 + 이전 artifact는 허용. Read 도구의 path restriction = `allowed_paths: [CLAUDE.md, AGENTS.md, .claude/rules/**, .blazewrit/grounds/**, .blazewrit/investigations/**, .blazewrit/plans/**, .blazewrit/reports/**, .blazewrit/flow-state.yaml, .blazewrit/flow-history/**]` — hook으로 강제. 소스 코드 (src/**, lib/**, app/** 등) 위반 시 mechanical block. |
+| investigate | **WebFetch, WebSearch (외부)** + Read 한정 (rules + 이전 step artifact) | emberdeck (query only), Context7 | 프로젝트 *소스 코드* read 금지 (Ground 책임). 외부 리서치 + 이전 artifact는 허용. Read 도구의 path restriction = `allowed_paths: [CLAUDE.md, AGENTS.md, .claude/rules/**, .blazewrit/grounds/**, .blazewrit/investigations/**, .blazewrit/plans/**, .blazewrit/reports/**, .blazewrit/flow-state.json, .blazewrit/flow-history/**]` — hook으로 강제. 소스 코드 (src/**, lib/**, app/** 등) 위반 시 mechanical block. |
 | investigate-reviewer | Read, Grep, Glob | — | Read-only. 영향·제약·위험·호환성 검증, 옵션·설계 prose 금지 |
 | decide | Read, Grep, Glob, Write | emberdeck, pyreez | Write 한정 — decision record / plan / design document(Design mode). emberdeck intent card (Design만). pyreez deliberation (Plan/Design) |
 | decide-reviewer | Read, Grep, Glob | — | Read-only. mode 일치, decision+rationale, 옵션 비교 (Plan), design document 완전성 (Design) |
@@ -406,7 +406,7 @@ Do work → Check against step criteria → Pass? → DONE
                                        → iteration >= 3? → return RETRY_EXHAUSTED (halt, no proceed)
 ```
 
-Iteration count tracked within step agent execution. Not in flow-state.yaml.
+Iteration count tracked within step agent execution. Not in flow-state.json.
 
 ### Decision Classification
 
@@ -612,7 +612,7 @@ These work regardless of LLM behavior. The agent cannot bypass them.
 | **Spec-Test traceability** | Script checks that each acceptance criterion in plan has ≥1 corresponding test case. Missing coverage = Test step incomplete | PRODUCTION-TESTED: GSD plan-checker "Requirement Coverage" dimension; spec-kit analyze Pass E "Coverage Gaps" | GSD, spec-kit |
 | **Completion signal** | Step agent outputs sentinel string for mechanical completion detection. Harness greps — not LLM self-assessment | PRODUCTION-TESTED: Ralph Loop `<promise>COMPLETE</promise>` grep | Ralph Loop |
 | **Hallucination guard** | If step agent produces zero tool calls, reject output. Agent that only talks without acting = hallucinated response | PRODUCTION-TESTED: GSD-2 auto engine "zero tool calls = rejected" | GSD-2 |
-| **Crash recovery** | flow-state.yaml은 스텝 사이에만 업데이트 → 재개 시 현재 스텝 산출물 확인 → 미완성이면 revert + 재실행. 별도 메커니즘 불필요 — 새 세션 + 파일 상태가 자동 해결 | PRODUCTION-TESTED: Ralph Loop fresh restart pattern | Ralph, GSD-2 |
+| **Crash recovery** | flow-state.json은 스텝 사이에만 업데이트 → 재개 시 현재 스텝 산출물 확인 → 미완성이면 revert + 재실행. 별도 메커니즘 불필요 — 새 세션 + 파일 상태가 자동 해결 | PRODUCTION-TESTED: Ralph Loop fresh restart pattern | Ralph, GSD-2 |
 | **Self-consistency bias prevention** | Reviewer agent receives artifact only. Never receives producer's reasoning. 매 스텝 새 세션이므로 이전 추론 오염 없음 | MEASURED: Anthropic "models consistently show positive bias when grading their own work" | Anthropic harness |
 | **Fresh context per step** | 모든 스텝이 새 세션. orchestrator.ts가 `claude --agent X --print`로 매번 새 프로세스 spawn. Context rot 구조적 불가 | PRODUCTION-TESTED: Ralph Loop "malloc/free — kill the process"; Anthropic "fresh context > compaction" | Ralph, Anthropic 4.6 |
 
@@ -748,11 +748,18 @@ All must PASS:
 
 ```yaml
 gate_policy:
-  confirm: [migration, release]
-  auto: [*]
+  confirm: [migration, release]                  # confirm gate 필요 flow type
+  auto: [*]                                       # auto-proceed flow type
+  allow_pre_approval: true                        # CI/A2A pre_approved 우회 허용 (false면 항상 halt)
+  allow_pre_approval_flows: [release, migration]  # pre_approved 우회 허용 flow type list (D5 AND rule 기준)
 ```
 
 Configurable per project in `.blazewrit/config.yaml`. `auto: []` = fully manual. `confirm: [migration, release]` = mostly automated.
+
+**pre_approved 우회 정책** (D5 AND rule):
+- `allow_pre_approval: false` → CI/A2A에서 `confirm` flow 항상 halt (보안 모드)
+- `allow_pre_approval: true` AND flow_type ∈ `allow_pre_approval_flows` → 우회 가능
+- Compound sub-flow의 경우 parent AND sub-flow 둘 다 list 안에 있어야 우회 ([steps/decide/compound-recursion.md](./steps/decide/compound-recursion.md))
 
 ## Hook Enforcement
 
@@ -771,7 +778,7 @@ See Execution Protocol > Hooks for complete hook specification. Summary:
 
 ### Hook Context Detection
 
-Hooks that need flow context (e.g., coverage gate checking if current flow is Refactor) read `.blazewrit/flow-state.yaml` directly. The active flow's `flow` and `step` fields provide the needed context. No environment variables or separate mechanisms required.
+Hooks that need flow context (e.g., coverage gate checking if current flow is Refactor) read `.blazewrit/flow-state.json` directly. The active flow's `flow` and `step` fields provide the needed context. No environment variables or separate mechanisms required.
 
 ## Delivery Form Factor
 
@@ -918,7 +925,7 @@ Full execution architecture in EXECUTION_PLAN.md. Below is the implementation ch
 
 ### Orchestrator
 1. orchestrator.ts 구현 — 상태 머신, CLI (run/next/start/resume/abandon/reclassify/status/check-incomplete), claude 호출, gate 실행
-2. flow-state.yaml 스키마 확정
+2. flow-state.json 스키마 확정
 
 ### Step Agents + Reviewer Agents
 3. **Producer agents (9)** — ground.md, investigate.md, decide.md, spec.md, test.md, implement.md, report.md, verify.md, reflect.md. Custom agent frontmatter (tools, mcpServers, hooks, maxTurns, isolation) + prompt body (output contract, self-validation criteria, artifact format).
