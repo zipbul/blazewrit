@@ -36,4 +36,11 @@ Write to `.blazewrit/grounds/<flow-id>.md`:
 
 ## Completion
 
-`.blazewrit/.step-status`에 JSON 상태 기록: `{ status: "DONE", artifact: ".blazewrit/grounds/<id>.md" }`
+stdout에 다음 token 출력 (orchestrator parseOut 처리):
+
+```
+STATUS: DONE
+ARTIFACT: .blazewrit/grounds/{flow-id}.md
+```
+
+(user_session 모드에선 `.blazewrit/.step-status` JSON 파일도 함께 가능 — `{ "status": "DONE", "artifact": "..." }`. orchestrator는 둘 다 지원.)

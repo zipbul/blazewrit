@@ -308,7 +308,7 @@ Each step agent defines `tools` (allow list) or `disallowedTools` (deny list) in
 
 | Agent | tools | mcpServers | Rationale |
 |-------|-------|------------|-----------|
-| ground | Read, Grep, Glob, Bash | emberdeck | Read-only + bash for typecheck/test/lint/git 실행. 사실 캡처 |
+| ground | Read, Grep, Glob, Bash, Write | emberdeck | Read + Bash (typecheck/test/lint/git) for 사실 캡처. Write 한정 — artifact `.blazewrit/grounds/**` + `.blazewrit/.step-status` 만 (소스 코드 write 금지, hook으로 강제) |
 | ground-reviewer | Read, Grep, Glob | — | Read-only. 사실 완전성·provenance·freshness 검증 |
 | investigate | **WebFetch, WebSearch (외부)** + Read 한정 (rules + 이전 step artifact) + Write 한정 (자기 artifact만) | emberdeck (query only), Context7 | 프로젝트 *소스 코드* read 금지 (Ground 책임). 외부 리서치 + 이전 artifact read 허용. Read path restriction = `allowed_paths: [CLAUDE.md, AGENTS.md, .claude/rules/**, .blazewrit/grounds/**, .blazewrit/investigations/**, .blazewrit/plans/**, .blazewrit/reports/**, .blazewrit/flow-state.json, .blazewrit/flow-history/**]`. Write path restriction = `[.blazewrit/investigations/**, .blazewrit/.step-status]` (artifact + status만). 소스 코드 (src/**, lib/**, app/** 등) Read/Write 위반 시 mechanical block. |
 | investigate-reviewer | Read, Grep, Glob | — | Read-only. 영향·제약·위험·호환성 검증, 옵션·설계 prose 금지 |
@@ -526,7 +526,7 @@ Triage 분류 정확도 측정 메커니즘:
 
 - 매 flow에서 `triage_classification: { flow_type, confidence, reclassify_count }` 기록
 - Reflect가 reclassify_count ≥ 1 = "misclassification signal"로 집계
-- 주간 aggregate: `.blazewrit/flow-history/triage-accuracy.yaml` (flow_type × reclassify_rate)
+- 주간 aggregate: `.blazewrit/flow-history/triage-accuracy.json` (flow_type × reclassify_rate)
 - 임계값 (reclassify_rate > 30%) → 자동 Retro flow 큐잉 (signal table 개선 제안)
 - A/B for signal table 변경: 새 rule 추가 시 prior baseline 대비 회귀 검출
 
@@ -570,7 +570,7 @@ external_research:
   cost_per_day_usd: 10
 ```
 
-- Orchestrator가 daily 누적 추적 (`.blazewrit/usage.yaml`)
+- Orchestrator가 daily 누적 추적 (`.blazewrit/usage.json`)
 - 초과 시 Investigate의 external research = `unknown[external_inaccessible: budget_exceeded]` 처리
 - daily reset (UTC midnight)
 - A2A/CI/user 채널 공유

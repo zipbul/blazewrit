@@ -34,7 +34,7 @@ Adopted from Ralph Loop. ACE (arXiv 2510.04618) warns against "brevity bias" and
 
 | Tier | Location | Content | Lifecycle |
 |------|----------|---------|-----------|
-| **Raw** | `.blazewrit/flow-history/<id>.yaml` | Full Reflect output | Auto-archived on flow completion/abandonment |
+| **Raw** | `.blazewrit/flow-history/<id>.json` | Full Reflect output | Auto-archived on flow completion/abandonment |
 | **Curated** | `.claude/rules/<topic>.md` | Patterns observed 3+ times across flows. Append-only — never rewrite | Promoted from Tier 1 when pattern repeats. Pruned when contradicted |
 | **Permanent** | CLAUDE.md (manual) | Battle-tested rules user chooses to enshrine | User decision only. Reflect never writes here |
 

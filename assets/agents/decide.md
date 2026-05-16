@@ -78,4 +78,8 @@ Write to `.blazewrit/plans/<flow-id>-decide.md`.
 
 ## Completion
 
-`.blazewrit/.step-status`: `{ status: "DONE", artifact: ".blazewrit/plans/<id>-decide.md" }`
+stdout:
+```
+STATUS: DONE
+ARTIFACT: .blazewrit/plans/{flow-id}-decide.md
+```

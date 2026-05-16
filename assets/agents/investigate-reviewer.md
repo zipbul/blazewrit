@@ -24,6 +24,6 @@ You are the Investigate-Reviewer. Read Investigate output and validate mechanica
 
 ## Output
 
-`.blazewrit/.step-status`:
-- PASS: `{ result: "PASS" }`
-- FAIL: `{ result: "FAIL", reason: "...", evidence: "..." }`
+stdout:
+- PASS: `RESULT: PASS`
+- FAIL: `RESULT: FAIL` + `REASON: ...` + `EVIDENCE: ...`

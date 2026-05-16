@@ -53,4 +53,8 @@ Write to `.blazewrit/investigations/<flow-id>.md`. Schema: [steps/investigate/RE
 
 ## Completion
 
-`.blazewrit/.step-status`: `{ status: "DONE", artifact: ".blazewrit/investigations/<id>.md" }`
+stdout:
+```
+STATUS: DONE
+ARTIFACT: .blazewrit/investigations/{flow-id}.md
+```

@@ -171,45 +171,53 @@ function parseFrontmatter(content: string): { meta: Record<string, string>; body
   return { meta, body: match[2] };
 }
 
-function loadStepFiles(): StepFile[] {
-  const stepsDir = join(packageRoot(), "assets", "steps");
-  if (!existsSync(stepsDir)) {
-    console.error(`Steps directory not found: ${stepsDir}`);
+function loadAgentFiles(): StepFile[] {
+  const agentsDir = join(packageRoot(), "assets", "agents");
+  if (!existsSync(agentsDir)) {
+    console.error(`Agents directory not found: ${agentsDir}`);
     process.exit(1);
   }
 
-  const files = readdirSync(stepsDir).filter((f) => f.endsWith(".md")).sort();
+  const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md")).sort();
   return files.map((f) => {
-    const raw = readFileSync(join(stepsDir, f), "utf-8");
+    const raw = readFileSync(join(agentsDir, f), "utf-8");
     const { meta, body } = parseFrontmatter(raw);
     return {
       name: meta["name"] || f.replace(/\.md$/, ""),
       description: meta["description"] || "",
-      allowedTools: meta["allowed-tools"] || "",
+      allowedTools: meta["tools"] || meta["allowed-tools"] || "",
       body: body.trim(),
       raw,
     };
   });
 }
 
+function loadFlowFiles(): { name: string; raw: string }[] {
+  const flowsDir = join(packageRoot(), "assets", "flows");
+  if (!existsSync(flowsDir)) return [];
+  const files = readdirSync(flowsDir).filter((f) => f.endsWith(".md")).sort();
+  return files.map((f) => ({ name: f.replace(/\.md$/, ""), raw: readFileSync(join(flowsDir, f), "utf-8") }));
+}
+
 // ---------------------------------------------------------------------------
-// deploySkills
+// deployAgents
 // ---------------------------------------------------------------------------
 
 function ensureDir(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
-function deploySkills(cwd: string, tool: CodingTool, steps: StepFile[]): void {
-  heading(`Deploying skills (${tool})`);
+function deployAgents(cwd: string, tool: CodingTool, agents: StepFile[]): void {
+  heading(`Deploying agents (${tool})`);
 
-  for (const step of steps) {
+  for (const agent of agents) {
     switch (tool) {
       case "claude": {
-        const dir = join(cwd, ".claude", "skills", step.name);
+        // spec: .claude/agents/<name>.md (custom agent) — orchestrator invokes `claude --agent <name>`
+        const dir = join(cwd, ".claude", "agents");
         ensureDir(dir);
-        writeFileSync(join(dir, "SKILL.md"), step.raw);
-        log(`.claude/skills/${step.name}/SKILL.md`);
+        writeFileSync(join(dir, `${agent.name}.md`), agent.raw);
+        log(`.claude/agents/${agent.name}.md`);
         break;
       }
       case "cursor": {
@@ -218,37 +226,91 @@ function deploySkills(cwd: string, tool: CodingTool, steps: StepFile[]): void {
         // Convert to Cursor .mdc frontmatter format
         const mdcContent = [
           "---",
-          `description: ${step.description}`,
+          `description: ${agent.description}`,
           `globs: `,
           `alwaysApply: false`,
           "---",
           "",
-          step.body,
+          agent.body,
         ].join("\n");
-        writeFileSync(join(dir, `${step.name}.mdc`), mdcContent + "\n");
-        log(`.cursor/rules/${step.name}.mdc`);
+        writeFileSync(join(dir, `${agent.name}.mdc`), mdcContent + "\n");
+        log(`.cursor/rules/${agent.name}.mdc`);
         break;
       }
       case "copilot": {
         const dir = join(cwd, ".github", "instructions");
         ensureDir(dir);
-        writeFileSync(join(dir, `${step.name}.instructions.md`), step.body + "\n");
-        log(`.github/instructions/${step.name}.instructions.md`);
+        writeFileSync(join(dir, `${agent.name}.instructions.md`), agent.body + "\n");
+        log(`.github/instructions/${agent.name}.instructions.md`);
         break;
       }
       case "gemini": {
         const dir = join(cwd, ".gemini", "rules");
         ensureDir(dir);
-        writeFileSync(join(dir, `${step.name}.md`), step.body + "\n");
-        log(`.gemini/rules/${step.name}.md`);
+        writeFileSync(join(dir, `${agent.name}.md`), agent.body + "\n");
+        log(`.gemini/rules/${agent.name}.md`);
         break;
       }
       case "fallback": {
         // Will be handled in deployInstructionFile
-        log("Skills will be embedded in AGENTS.md");
+        log("Agents will be embedded in AGENTS.md");
         return; // no per-file deploy
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// deployRuntime — orchestrator.ts + flow definitions + config
+// ---------------------------------------------------------------------------
+
+function deployRuntime(cwd: string, flows: { name: string; raw: string }[]): void {
+  heading("Deploying runtime (.blazewrit/)");
+
+  const bw = join(cwd, ".blazewrit");
+  ensureDir(bw);
+
+  // orchestrator.ts
+  const orchSrc = join(packageRoot(), "src", "orchestrator.ts");
+  if (existsSync(orchSrc)) {
+    writeFileSync(join(bw, "orchestrator.ts"), readFileSync(orchSrc, "utf-8"));
+    log(".blazewrit/orchestrator.ts");
+  }
+
+  // flow definitions
+  if (flows.length) {
+    const flowsDir = join(bw, "flows");
+    ensureDir(flowsDir);
+    for (const f of flows) {
+      writeFileSync(join(flowsDir, `${f.name}.md`), f.raw);
+    }
+    log(`.blazewrit/flows/ (${flows.length} flows)`);
+  }
+
+  // default config
+  const configPath = join(bw, "config.yaml");
+  if (!existsSync(configPath)) {
+    const config = [
+      "gate_policy:",
+      "  confirm: [migration, release]",
+      "  auto: [\"*\"]",
+      "  allow_pre_approval: true",
+      "  allow_pre_approval_flows: [release, migration]",
+      "",
+      "flow_caps:",
+      "  max_wall_s: 7200",
+      "  max_tokens: 2000000",
+      "  max_llm_calls: 500",
+      "  max_compound_depth: 2",
+      "",
+      "external_research:",
+      "  tokens_per_day: 500000",
+      "  requests_per_hour: 100",
+      "  cost_per_day_usd: 10",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, config);
+    log(".blazewrit/config.yaml");
   }
 }
 
@@ -258,29 +320,31 @@ function deploySkills(cwd: string, tool: CodingTool, steps: StepFile[]): void {
 
 const WORKFLOW_SECTION = `## Workflow
 
-Orient → Dialogue → Test ⇄ Implement`;
+Triage → Ground → Investigate → Decide → Spec? → Test ⇄ Implement → Verify → Reflect
 
-function deployInstructionFile(cwd: string, tool: CodingTool, steps: StepFile[]): void {
+See WORKFLOW_PLAN.md and steps/ for details. Orchestrator: .blazewrit/orchestrator.ts.`;
+
+function deployInstructionFile(cwd: string, tool: CodingTool, agents: StepFile[]): void {
   heading("Updating instruction file");
 
   const agentsPath = join(cwd, "AGENTS.md");
   let content = existsSync(agentsPath) ? readFileSync(agentsPath, "utf-8") : "";
 
   // Add workflow section if not present
-  if (!content.includes("Orient → Dialogue → Test ⇄ Implement")) {
+  if (!content.includes("Triage → Ground → Investigate")) {
     content = content.trimEnd() + "\n\n" + WORKFLOW_SECTION + "\n";
     log("Added Workflow section to AGENTS.md");
   } else {
     log("Workflow section already present — skipped");
   }
 
-  // For fallback tool, embed step bodies as sections
+  // For fallback tool, embed agent bodies as sections
   if (tool === "fallback") {
-    for (const step of steps) {
-      const sectionHeader = `### ${step.name}`;
+    for (const agent of agents) {
+      const sectionHeader = `### ${agent.name}`;
       if (!content.includes(sectionHeader)) {
-        content += "\n" + sectionHeader + "\n\n" + step.body + "\n";
-        log(`Embedded ${step.name} section in AGENTS.md`);
+        content += "\n" + sectionHeader + "\n\n" + agent.body + "\n";
+        log(`Embedded ${agent.name} section in AGENTS.md`);
       }
     }
   }
@@ -292,13 +356,13 @@ function deployInstructionFile(cwd: string, tool: CodingTool, steps: StepFile[])
 // printSummary
 // ---------------------------------------------------------------------------
 
-function printSummary(pm: PackageManager, tool: CodingTool, steps: StepFile[]): void {
+function printSummary(pm: PackageManager, tool: CodingTool, agents: StepFile[]): void {
   console.log("\n────────────────────────────────────────");
   console.log("  ✓ @zipbul/blazewrit initialized");
   console.log("────────────────────────────────────────");
   console.log(`  Package manager : ${pm}`);
   console.log(`  Coding tool     : ${tool}`);
-  console.log(`  Skills deployed : ${steps.map((s) => s.name).join(", ")}`);
+  console.log(`  Agents deployed : ${agents.length} (${agents.map((s) => s.name).join(", ")})`);
   console.log(`  Dev deps        : ${DEV_DEPS.join(", ")}`);
   console.log("");
   console.log("  Next step:");
@@ -324,12 +388,16 @@ function init(cwd: string): void {
   const tool = detectCodingTool(cwd);
   log(`Detected coding tool: ${tool}`);
 
-  const steps = loadStepFiles();
-  log(`Loaded ${steps.length} step files`);
+  const agents = loadAgentFiles();
+  log(`Loaded ${agents.length} agent files`);
 
-  deploySkills(cwd, tool, steps);
-  deployInstructionFile(cwd, tool, steps);
-  printSummary(pm, tool, steps);
+  const flows = loadFlowFiles();
+  log(`Loaded ${flows.length} flow definitions`);
+
+  deployAgents(cwd, tool, agents);
+  deployRuntime(cwd, flows);
+  deployInstructionFile(cwd, tool, agents);
+  printSummary(pm, tool, agents);
 }
 
 // ---------------------------------------------------------------------------

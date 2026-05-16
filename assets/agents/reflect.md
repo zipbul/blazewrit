@@ -31,7 +31,7 @@ Every Reflect output contains (enforced by structure check hook):
 
 | Tier | Location | Action |
 |------|----------|--------|
-| Raw | `.blazewrit/flow-history/{flow-id}.yaml` | Write full output here. Always. |
+| Raw | `.blazewrit/flow-history/{flow-id}.json` | Write full output here. Always. |
 | Curated | `.claude/rules/{topic}.md` | If a pattern appeared 3+ times in flow-history, append to existing rule file or create new one. Search existing files before creating to avoid duplicates. |
 | Permanent | CLAUDE.md | This agent writes here only with explicit user permission. |
 
@@ -46,5 +46,5 @@ Every Reflect output contains (enforced by structure check hook):
 
 ```
 STATUS: DONE
-ARTIFACT: .blazewrit/flow-history/{flow-id}.yaml
+ARTIFACT: .blazewrit/flow-history/{flow-id}.json
 ```

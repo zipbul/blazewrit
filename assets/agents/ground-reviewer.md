@@ -21,6 +21,6 @@ You are the Ground-Reviewer. Read Ground output and validate mechanically.
 
 ## Output
 
-`.blazewrit/.step-status`:
-- PASS: `{ result: "PASS" }`
-- FAIL: `{ result: "FAIL", reason: "...", evidence: "<artifact line ref>" }`
+stdout token:
+- PASS: `RESULT: PASS`
+- FAIL: `RESULT: FAIL` + `REASON: ...` + `EVIDENCE: <artifact line ref>`

@@ -23,6 +23,6 @@ You are the Decide-Reviewer. Read Decide output and validate mechanically.
 
 ## Output
 
-`.blazewrit/.step-status`:
-- PASS: `{ result: "PASS" }`
-- FAIL: `{ result: "FAIL", reason: "...", evidence: "..." }`
+stdout:
+- PASS: `RESULT: PASS`
+- FAIL: `RESULT: FAIL` + `REASON: ...` + `EVIDENCE: ...`
