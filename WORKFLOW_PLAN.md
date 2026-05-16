@@ -1,6 +1,6 @@
 # Workflow Plan
 
-Status: Architecture finalized. Final design: 8 steps, 6 reviewers, 16 flows, produce ⇄ review loop pattern, Analyze + 기획 + Spec separation. Execution model: script orchestrator (orchestrator.ts) — see EXECUTION_PLAN.md.
+Status: Architecture finalized. Final design: **9 steps, 7 reviewers, 16 flows**, produce ⇄ review loop pattern, Ground + Investigate + Decide chain (Analyze/기획 deprecated). Execution model: script orchestrator (orchestrator.ts) — see EXECUTION_PLAN.md.
 
 ## Architecture
 
@@ -50,6 +50,10 @@ None (자유 대화/논의) ↔ Triage → Flow[Ground → Investigate → Decid
 | Ground | volatile_capture + lightweight ed_query (token_budget=1k, **god_node priority** by graph degree) | full ed_query, volatile + flow_profile, full surface |
 | Investigate | compatibility check + unknown_disposition | impact + constraints + risk + compatibility + unknown_disposition |
 | Decide | mode=Record | mode=Plan or Design (upgrade) |
+| Spec | AC list만 (각 line max, no architecture detail) | AC + 코드 architecture + task decomposition + codeLinks |
+| Test | targeted (단일 RED test) | full coverage (multi-test + edge cases + profile) |
+| Implement | minimal patch (single concern) | full implementation + setup + 다중 commits |
+| Report | summary (key findings 1-page) | full structured report (severity 분류 + action items + 검증 trail) |
 
 ### Mechanical Caps
 
@@ -58,6 +62,10 @@ None (자유 대화/논의) ↔ Triage → Flow[Ground → Investigate → Decid
 | Ground | wall_s=20, tokens=5k | wall_s=180, tokens=20k |
 | Investigate | wall_s=20, tokens=4k | wall_s=180, tokens=20k |
 | Decide | Record: wall_s=10, tokens=1k | Plan: wall_s=60, tokens=10k / Design: wall_s=300, tokens=30k |
+| Spec | wall_s=30, tokens=5k | wall_s=240, tokens=25k |
+| Test | wall_s=60, tokens=10k | wall_s=600, tokens=40k |
+| Implement | wall_s=120, tokens=15k | wall_s=900, tokens=60k |
+| Report | wall_s=30, tokens=5k | wall_s=180, tokens=15k |
 
 ### Deepen Triggers (mechanical, orchestrator가 prior 출력에서 평가)
 
@@ -169,6 +177,8 @@ Step Agent → output
 
 **NEW3 fix (cross-cycle fail cap)**: producer⇄reviewer 3-fail cap은 *단일 cycle*. reclassify로 재진입 시 fail counter reset. 그러나 *(flow_id, step_name) total fail count*도 추적 — 5회 누적 시 flow-level halt (reclassify 무한 loop 방지).
 
+**Additional cap (서브 에이전트 결함 fix — triage_mismatch loop)**: Triage 재invoke (reclassify 트리거)는 **flow 당 최대 3회**. `reclassify_count` 추적. flow_id는 reclassify 시 *유지* (변경 X) — counter 의미 보존. 3회 초과 시 flow halt + user/caller escalate ("intent 결정 불가"). A2A/CI도 동일 cap.
+
 **NEW5 fix (RETRY_EXHAUSTED Reflect 분류)**: RETRY_EXHAUSTED → Reflect 분류는 **abandoned** (의도 외 termination). Reflect 실행 (학습 누적).
 
 ### Step-Reviewer Pairs
@@ -217,14 +227,14 @@ Verify FAIL →
   evidence: file:line or artifact reference
 
 Host reads failure_origin → routes back to that step's produce ⇄ review loop
-  → triage: 재invoke with prior_evidence (reclassify)
+  → triage: 재invoke with prior_evidence (reclassify) — reclassify_count cap 3
   → ground: Ground ⇄ Ground-Reviewer re-enters
   → investigate: Investigate ⇄ Investigate-Reviewer re-enters
   → decide: Decide ⇄ Decide-Reviewer re-enters
   → spec: Spec ⇄ Spec-Reviewer re-enters
   → test: Test ⇄ Test-Reviewer re-enters
   → implement: Implement ⇄ Implement-Reviewer re-enters
-  → report: Report ⇄ Report-Reviewer re-enters
+  → report: Report ⇄ Report-Reviewer re-enters — *비코드 flow (Review/Retro/Exploration/Spike/기획-standalone)에서만 유효*. 코드 flow에서 failure_origin=report는 invalid (Verify가 거부)
   → multiple: earliest problematic step first
 ```
 
@@ -719,17 +729,18 @@ V9. result=needs_clarification → open_questions 비어있지 않음
 V10. 모든 issue에 evidence 필수 (provenance)
 V11. result=no_op → no_op_details 필수 (reason + evidence + current_state + target_state + suggested_action)
 V12. result ∈ {proceed, blocked, needs_clarification, no_op} — enum 무효값 reject (NEW2 fix)
+V13. **Partial-proceed 처리** (서브 에이전트 fix): Migration 등에서 일부 dependents accept + 일부 reject 시 — 개별 issue마다 `scope.target_set`으로 *영향 범위 분리*. `blocks_flow=true` issue는 *해당 target_set만* block. result=blocked이지만 Decide가 partial scope (proceed-capable subset)를 sub-task로 분해 가능 (`Decide.partial_scope_handling: {proceed_set, blocked_set, followup_required}`). all-or-nothing 강제 제거.
 ```
 
 ### Compatibility Verdict — Stale 검출 책임 (M3 fix 세부)
 
 | 누가 | 언제 | 어떻게 |
 |---|---|---|
-| Decide | Investigate 출력 수신 시 | `source_version.ed_snapshot` vs 현재 ED snapshot — mismatch면 Investigate 재invoke 요청 (cycle cap 1) |
-| Verify | 최종 검증 시 | source_version + V1-V12 + race detection (verdict checked_at vs current 시점) |
+| Decide | Investigate 출력 수신 시 | `source_version.ed_snapshot` vs 현재 ED snapshot — mismatch면 Investigate 재invoke 요청 (최대 1회 재invoke = 총 2 attempts) |
+| Verify | 최종 검증 시 | source_version + V1-V13 + race detection (verdict checked_at vs current 시점) |
 | Mid-flow ED 변경 | ED background incremental update가 flow 도중 발생 | source_version mismatch 자동 trigger → re-evaluation. Cycle cap이 무한 막음. |
 
-**NEW4 fix (2nd stale 처리)**: cycle cap=1 후 2nd 재invoke에서도 stale 발견 시 → `failure_origin=ground` 신호로 Verify 위임 또는 flow halt + escalate (config). 무한 진행 금지.
+**NEW4 fix (2nd attempt도 stale일 때)**: 2nd attempt (= 1회 재invoke 후)도 stale 발견 시 → `failure_origin=ground` 신호로 Verify에 위임 또는 flow halt + escalate (config 설정). 무한 진행 금지. cycle cap=1의 정확한 의미: *원본 + 재invoke 1회 = 총 2 attempts*.
 
 ### Compatibility Verdict — Result별 Flow 처리
 
@@ -1133,7 +1144,7 @@ Each step agent defines `tools` (allow list) or `disallowedTools` (deny list) in
 |-------|-------|------------|-----------|
 | ground | Read, Grep, Glob, Bash | emberdeck | Read-only + bash for typecheck/test/lint/git 실행. 사실 캡처 |
 | ground-reviewer | Read, Grep, Glob | — | Read-only. 사실 완전성·provenance·freshness 검증 |
-| investigate | Read, Grep, Glob, Bash, WebFetch, WebSearch | emberdeck, Context7? | Read-only + 외부 리서치 (Migration/Feature). 사실 해석 — 코드 변경 금지 |
+| investigate | **WebFetch, WebSearch only (외부)** + Read 한정 (CLAUDE.md/AGENTS.md/rules만) | emberdeck (query only), Context7 | NEW1 mechanical 강제: 프로젝트 코드 read 금지 (Ground 책임). 외부 리서치만. Read 도구의 path restriction = `allowed_paths: [CLAUDE.md, AGENTS.md, .claude/rules/**]` — hook으로 강제. 위반 시 mechanical block. |
 | investigate-reviewer | Read, Grep, Glob | — | Read-only. 영향·제약·위험·호환성 검증, 옵션·설계 prose 금지 |
 | decide | Read, Grep, Glob, Write | emberdeck, pyreez | Write 한정 — decision record / plan / 기획서(Design mode). emberdeck intent card (Design만). pyreez deliberation (Plan/Design) |
 | decide-reviewer | Read, Grep, Glob | — | Read-only. mode 일치, decision+rationale, 옵션 비교 (Plan), 기획서 완전성 (Design) |
@@ -1498,6 +1509,20 @@ Compound (top-level)
 
 Gate criteria는 *top-level Decide(Design) 산출물*에 명시 (Triage 시점 아님).
 
+### Gate Executor (서브 에이전트 검토 fix)
+
+Gate 평가 = **orchestrator 코드** (LLM 아님). top-level Decide(Design) 산출물의 `gate_rules: [{condition, action}]`를 mechanical 평가:
+- `condition`: sub_flow.status / output에 대한 predicate (예: "sub_flow.verify.result == PASS")
+- `action`: proceed | pivot | abort | retry
+
+LLM 호출 없음. 결정 deterministic. 단 *재invoke action* (pivot, retry)는 cap 적용.
+
+### Pivot / Retry Cap (서브 에이전트 결함 fix)
+
+- `pivot` (Compound Decide 재invoke): Compound 당 **최대 2회** (무한 재분해 방지)
+- `retry` (직전 sub_flow 재실행 with deep upgrade): sub_flow 당 **최대 1회** (cycle cap 적용)
+- 초과 시: Compound flow halt + escalate.
+
 ### Compound State 추적
 
 Compound flow의 state 필드:
@@ -1834,6 +1859,7 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - **External Research Policy (결함 #8 해결).** Investigate의 외부 도구 사용이 미정의였음 — 초안 (고정 budget + 고정 tool 우선순위 + 전체 provenance)을 codex가 *5개 항목 WRONG*으로 검증: 고정 budget=arbitrary (위험·claim 수와 무관), 고정 tool 우선순위=context-dependent (freshness 검증은 WebFetch 직접 필요), "external preferred" rule=unsafe (내부 contract silent override 위험), 균일 provenance=mechanical noise, per-flow override=too crude. 최종 정책: (1) **Triggers**: claim 단위 — lib API/version compat/CVE/license/contract/standards/runtime support/registry metadata, (2) **Source eligibility** 4-tier (high: official_current·standards·source·security_advisory / medium: official_stale·changelog·registry / low: community·archive / rejected: generated_seo), (3) **Tool selection** *context-dependent* (claim 유형별 권장 매핑), (4) **Stop criteria** — sufficient_evidence·diminishing_returns·blocking_failure·safety_cap (flow별 default cap, claim-driven override 허용 with rationale), (5) **Provenance claim 중요도별** (decision_critical: 전체, background: aggregated), (6) **Conflict 처리**: external API fact는 external 채택, *내부 contract/policy는 silent override 금지* (owner review용 기록), (7) **No-results 처리** claim 중요도별 (decision_critical→compatibility issue, version_sensitive→risk, background→defer, feasibility-critical→negative signal), (8) **Failure recovery** (rate limit fallback, auth/paywall→external_inaccessible). codex 10 항목 모두 반영.
 - **Step Depth Policy — Adaptive (결함 #10 해결).** 소형 flow over-engineering 해결. 초안 (per-flow mode declaration)을 codex가 *6개 항목 WRONG*으로 검증: LLM call 수 미감소, budget 숫자 arbitrary, compat 안전망 입력 빈약, reviewer 비용 재발, matrix sprawl, looks-trivial-but-isnt 미처리. 최종 정책: 모든 step이 *default=shallow*, 명시 mechanical trigger 발동 시 deepen. (1) **Shallow/Deep 활동 분리** 각 step 정의, (2) **Mechanical caps** (wall_s + tokens) shallow/deep별, (3) **Deepen triggers** OR 매칭 (flow_type / Triage.complexity_signal / god_node detection / volatile failures / Ground.unknowns count / entry_nodes size 등 mechanical 계산), (4) **Upstream deepen request** (Decide→orchestrator→Ground/Investigate 재invoke, cap 1회), (5) **Shallow→Deep transition** (in-place escalation + fact 재사용), (6) **Reviewer checklist mechanical** (Ground-Reviewer 3 check / Investigate-Reviewer 3 check / Decide-Reviewer 3 check — LLM 판단 최소화), (7) **god_node priority** in shallow ed_query (graph degree 기반, random 5 아닌 high-degree top), (8) **token budget** (1k for shallow ed_query, arbitrary node count 대체), (9) **Triage.complexity_signal** 부수 출력 (deepen trigger 입력). **Multi-Layer Safety 7-layer**: orchestrator triggers / step caps / reviewer checklist / Verify / Reflect / provenance / freshness. 단일 layer 실수도 다른 layer catch. codex 비판 6/6 처리.
 - **Task Validity 검출 (결함 #11 해결).** Performance baseline 이미 target 도달, Migration 이미 완료 등 *작업 자체가 의미 없는* 케이스 검출 부재였음. **Investigate 책임**으로 추가 — Ground 사실 vs Triage 의도 target 비교는 *해석* 활동이므로 적합. compatibility_verdict.result 확장 **3-state → 4-state** (proceed/blocked/needs_clarification/**no_op**). no_op는 compatibility의 "can-do" 차원과 *다른 의미* ("should-do") — codex의 high_risk_proceed 거부 사유 (risk_surface와 내용 중복)와 달리 no_op는 *어디에도 중복 없는 새 차원*이라 4-state 정당화. **검출 rule per flow** (Performance: baseline ≤ target, Migration: 이미 target version, Bug Fix: reproduce 불가, Refactor: 이미 target 패턴, Chore: 이미 원하는 상태, Feature: 이미 구현, Test: coverage 충족, Release: 신규 commit 없음). **출력**: `no_op_details {reason, evidence, current_state, target_state, suggested_action: abandon|wait_for_change|reframe_request}`. **Validation V11** 추가. **Orchestrator 처리**: result=no_op → flow halt + Reflect 실행 (학습 누적). **Activities** 6번째 추가 (Validity 검사).
+- **Trace-level 결함 처리 batch 4 (서브 에이전트 적대 검증 결과).** Codex 한도 도달 → general-purpose sub-agent로 교차 검증. 16 결함 발견·우선순위 8개 처리. **CRITICAL #1**: Investigate Tool Restrictions table이 Read/Grep/Glob/Bash 허용 — NEW1 (코드 read 금지) 위반. Fix: tools 제한 = WebFetch/WebSearch + Read(allowed_paths: rules만), Bash 제거, hook으로 mechanical 강제. **#3 Step Pool count drift**: "8" 잔재 → "9" 정정 (header). **#7 Compound Gate executor**: orchestrator code (LLM 아닌) 평가, gate_rules predicate. **Pivot/Retry cap**: pivot 2회, retry 1회/sub_flow. **Migration partial-proceed (Scenario 1)**: V13 추가 — issue.scope.target_set로 부분 영향 분리, Decide.partial_scope_handling으로 분해 가능. all-or-nothing 강제 제거. **triage_mismatch 무한 reclassify cap**: flow 당 3회 (`reclassify_count` 추적). 초과 시 user/caller escalate. **Spec/Test/Implement/Report Step Depth Policy 추가**: shallow/deep 활동 + caps 명시 (기존 누락). **M3 cycle cap=1 의미 정정**: 원본 + 재invoke 1회 = 총 2 attempts. **failure_origin=report 제약**: 비코드 flow만 유효, 코드 flow에선 invalid.
 - **Trace-level 결함 처리 batch 3 (self-attack 8 신규).** Batch 1-2 후 자체 적대 검증으로 8개 추가 결함 발견·처리. **NEW1**: Investigate의 "코드 read-only (Ground 못 캡처 detail)" boundary 위반 — 제거. 부족 시 `request_upstream_deepen`. **NEW2**: V12 추가 — compat result enum 무효값 reject. **NEW3**: producer⇄reviewer 3-fail cap (단일 cycle) + (flow_id, step_name) total fail 5회 누적 cap (reclassify 무한 loop 방지). **NEW4**: stale ED 2nd 재시도 fail 시 failure_origin=ground 또는 halt. **NEW5**: RETRY_EXHAUSTED는 Reflect 분류 abandoned. **NEW6**: Sub-flow Triage context inheritance 명시 — parent classification_metadata + caller_credentials + pre_approved 상속. **NEW7**: Review followup_flows dedup `(type, scope_hash)` 강제. **NEW8**: pre_approved scope 명시 flow type만 (default [release, migration]) — 보안 risk 최소화.
 - **Trace-level 결함 처리 batch 2 (operational gaps + boundary + safety 정직 재명명).** Batch 1 이후 잔여 처리. **M3** stale ED mid-flow: source_version 비교 책임 명시 (Decide/Verify/Mid-flow 트리거). **M4** tool degrade vs escalate 모순 해소: pre-flow degrade(설정 차원)와 mid-flow escalate(invocation 차원) 분리. **M5** P0 + active flow overlap: orchestrator가 *Ground 진입 전* 해결, Ground는 preempted/suspended 잔재만 인지 (active≠null이면 mechanical error). **M7** Review flow follow-up: Decide(Record).followup_flows 필드, 자동 큐잉 (자동 실행은 아님). **M8** Release/Migration confirm gate에서 user 부재: CI/A2A에 pre_approved 필드, config.allow_pre_approval 정책. **M9** External auth A2A: caller credential payload, 없으면 external_inaccessible. **B1** Investigate 외부 리서치 boundary clarification: 외부 read = *해석 보조* (외부 검증), *프로젝트 내부 사실 캡처*는 Ground 책임. **O1** safety layer 정직 재명명: 7-layer 과장 → "Active Safety 4 (orchestrator/caps/reviewer/Verify) + Data Discipline 2 (provenance/freshness) + Learning 1 (Reflect)". Provenance/Freshness=audit, Reflect=post-hoc로 정직 분류. Codex와 내가 7 시나리오 trace-level 시뮬레이션 — 이전 conceptual 시뮬레이션이 못 잡은 실제 contract break 다수 발견. **TR1**: needs_clarification 후 Decide의 mode upgrade trigger가 halt 명령 override. Fix: Decide upgrade는 *result=proceed에만* 평가. blocked/needs_clarification/no_op에서는 Decide 자체 미실행. **TR2**: no_op + flow_type=Performance → Decide(Design) upgrade 강제 → "do nothing" architecture 출력. Fix: TR1과 동일 — halt이 mode upgrade 위. **TR3**: schema `?` notation YAML 유효하지만 typed consumer 거부. Fix: 산문 명세로 변경 (optional 필드는 "optional" 명시), strict schema는 future spec. Reflect 분류 명시 추가 (completed/abandoned/suspended). **TR4**: `entry_nodes > 5` rule 비교 모호. Fix: `entry_nodes.length > 5` 명시. **TR5**: disposition enum에 `partially_resolved` 추가 (codex T5에서 실제 발견 — 5 callers 해결 + 다른 peers 미상). sub_dispositions 필드 추가. clarification disposition은 *자동으로* compat issue 생성 (follow_up_ref 매핑) — 이중 메커니즘 해소. **TR6**: volatile_state flow-conditional 필드 schema 명시 — perf_baseline/dependency_audit/observability/release_state 각 구조. opaque artifact만 흐르던 이전 폐기. **C1**: Verify failure_origin enum `analyze|기획|spec|test|implement|report` → `triage|ground|investigate|decide|spec|test|implement|report`로 동기화. **C2**: DONE_WITH_CONCERNS 폐지 → RETRY_EXHAUSTED (halt). max iterations 후 silent proceed 대신 flow halt + escalate. **M1**: P0 depth precedence — flow_type=bugfix-p0이면 *모든 deepen trigger 무시*, shallow 강제. Verify PASS 후 post-stabilization follow-up flow 자동 큐잉. **TR7·M10**: Compound recursion contract 명시 — sub-flow self-execution (Triage 재진입 + 자체 G→I→D→Verify), gate criteria 4종 (proceed/pivot/abort/retry), state 추적 schema, completion predicate, failure propagation rule. Sub-flow N은 Investigate가 식별, Decide(Design)이 분해 — Triage 시점 결정 안 함 (M6 fix).
 - **Decide step 신설 — Decision Ownership (universal).** Step Pool 9 → 9 (기획 → Decide로 일반화). 결함 #1 (결정 소유권 공백) 해결. 기존 기획은 *기획서 산출* 함의로 conditional 처리되어 Bug Fix / Chore / P0 / Release / Bug Fix Unreproducible flow에서 결정 owner 부재 → silent decision. **Decide는 모든 flow 필수**, 산출물 깊이는 mode로 차등: Record (1줄 결정+근거) / Plan (옵션 N개 비교+선택+우선순위) / Design (기획서: architecture+policy+userflow+req + emberdeck intent card). Mode = flow definition declared + situational upgrade (옵션 N≥2 발견 시 Record→Plan). Design mode만 intent card 자동 생성. **명명 근거 (codex)**: "기획"이 한국어로 *큰 산출물* 함의 → minimal flow에서 형식적 통과·skip 압력 유발. step 이름이 *책임 (ownership)*을 가리켜야 함. Naming은 control surface (agent 역할·산출물·review 기준 매개) — semantic noise 아님. **Triage Mismatch 처리**: Investigate가 surface하면 Decide가 reclassify trigger (orchestrator 신호) — Verify까지 안 가도 됨. Compound의 sub-flow 분해/순서는 top-level Decide(Design)에서, sub-flow별 자체 Decide는 자기 mode로 실행.
