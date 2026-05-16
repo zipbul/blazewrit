@@ -39,6 +39,91 @@ None (자유 대화/논의) ↔ Triage → Flow[Ground → Investigate → Decid
 | Verify | Flow-level goal verification. 플로우 전체 목적 달성 확인 (코드/비코드 모두). Internal multi-pass: mechanical/completeness → goal-backward → adversarial. pyreez for high-risk. On FAIL, diagnoses failure origin and routes back. |
 | Reflect | Post-flow learning. Internal multi-pass: fact collection → pattern extraction → prior comparison. Records: what worked, what failed, unexpected, patterns. Writes to instruction files. Runs on completion and abandonment (not suspension). |
 
+## Step Depth Policy (Adaptive)
+
+모든 step이 *default = shallow*. 명시 mechanical trigger 발동 시 *deepen*. 비용 ↓ + 안전 ↑ (다층).
+
+### Shallow vs Deep per step
+
+| Step | Shallow activities | Deep activities |
+|---|---|---|
+| Ground | volatile_capture + lightweight ed_query (token_budget=1k, **god_node priority** by graph degree) | full ed_query, volatile + flow_profile, full surface |
+| Investigate | compatibility check + unknown_disposition | impact + constraints + risk + compatibility + unknown_disposition |
+| Decide | mode=Record | mode=Plan or Design (upgrade) |
+
+### Mechanical Caps
+
+| Step | Shallow caps | Deep caps |
+|---|---|---|
+| Ground | wall_s=20, tokens=5k | wall_s=180, tokens=20k |
+| Investigate | wall_s=20, tokens=4k | wall_s=180, tokens=20k |
+| Decide | Record: wall_s=10, tokens=1k | Plan: wall_s=60, tokens=10k / Design: wall_s=300, tokens=30k |
+
+### Deepen Triggers (mechanical, orchestrator가 prior 출력에서 평가)
+
+```
+Ground.deepen if (OR):
+  - flow_type ∈ {Feature, Migration, Performance, Compound}
+  - Triage.classification_metadata.complexity_signal = high
+  - shallow ed_query 결과에 god_node 포함
+  - volatile_capture failures (lint/test/typecheck) ≥ 1
+
+Investigate.deepen if (OR):
+  - Ground.depth = deep (cascade)
+  - flow_type ∈ {Migration, Feature, Performance, Compound, Bug Fix Unreproducible}
+  - Ground.unknowns.length ≥ 3
+  - Ground.task_subgraph.entry_nodes > 5
+  - prior_evidence with depth_upgrade=true (reclassify path)
+
+Decide upgrade (OR):
+  → Plan if:
+    - flow_type ∈ {Refactor, Test, Spike, Retro, Exploration}
+    - Investigate.compatibility_verdict.issues.length ≥ 2
+    - Investigate.risk_surface contains severity = high
+  → Design if:
+    - flow_type ∈ {Feature, Performance, Migration, 기획-standalone, Compound}
+    - Investigate output에 architecture-level 영향 표시
+```
+
+### Upstream Deepen Request
+
+Decide가 shallow Ground/Investigate 출력으로 결정 불가 시 → `request_upstream_deepen` 신호 → orchestrator가 해당 step 재invoke with depth=deep.
+
+**Cycle cap**: upstream deepen 1회 (무한 cycle 방지). 그래도 부족 시 Verify가 final safety (`failure_origin=ground|investigate` → reclassify with depth=deep 강제).
+
+### Shallow → Deep Transition
+
+단일 invocation 내 escalation 허용:
+1. Shallow 활동 실행 (wall_s 한도 내)
+2. Trigger 발동 감지 → deep 활동 추가, wall_s 연장
+3. Shallow 캡처 fact는 deep input 재사용 (폐기 안 함)
+
+또는 분리 invocation: orchestrator가 shallow 완료 후 trigger 평가 → deep invocation 재호출 (shallow 출력 입력).
+
+### Reviewer Checklist (mechanical, LLM 판단 최소화)
+
+| Step | Shallow reviewer check |
+|---|---|
+| Ground-Reviewer (shallow) | (1) volatile_capture.status 4개 모두 명시, (2) task_subgraph.entry_nodes ≥1 OR `referent_unresolved` unknowns 명시, (3) freshness 기록 (ed_snapshot + git_HEAD) |
+| Investigate-Reviewer (shallow) | (1) compatibility_verdict.result 명시 + Validation Rules V1-V10 통과, (2) ground_unknowns_addressed 매 항목 disposition + rationale, (3) shallow면 impact_map 빈 허용 (단 일관성: volatile.failures=0 AND entry_nodes 적음 AND unknowns 없을 때만) |
+| Decide-Reviewer (Record) | (1) decision_record + rationale 존재, (2) based_on (Ground/Investigate ref) 명시, (3) mode 일치 |
+
+Deep reviewer는 위 + 활동별 충분성 추가 검사 (기존 정의).
+
+### Multi-Layer Safety (7 layer)
+
+| Layer | 잡는 것 |
+|---|---|
+| Orchestrator triggers | mechanical depth 결정 |
+| Step caps | 무한 실행 방지 |
+| Step reviewer checklist | 출력 일관성 |
+| Verify | 변경 후 누락 catch (`failure_origin` 라우팅) |
+| Reflect | 패턴 학습 → trigger·default depth 조정 |
+| Provenance | audit 추적 (모든 사실에 source_tool) |
+| Freshness | stale 검출 (ed_snapshot + git_HEAD + source_version) |
+
+단일 layer 실수도 다른 layer가 catch.
+
 ## Step Execution Pattern
 
 Every step (except Verify and Reflect) runs as a produce ⇄ review loop (Ralph Loop pattern). Each step agent is paired with a dedicated reviewer agent. The reviewer runs in fresh context and receives only the step's output — never the producer's reasoning.
@@ -148,7 +233,8 @@ proceed {
   flow_type,                              // feature | bugfix | ... | compound
   classification_metadata: {
     matched_rows: [signal_row_id],
-    confidence: high | medium | low
+    confidence: high | medium | low,
+    complexity_signal: high | medium | low | none   // input에서 추론된 작업 복잡도 — Step Depth Policy의 deepen trigger 입력
   }
 }
 
@@ -1548,6 +1634,7 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - **Unknown Disposition Matrix 명시화 (결함 #3·#4 해결).** Ground unknown 처분이 이전엔 implicit (LLM 판단). 이제 6 disposition (resolved/risk/constraint/clarification/defer/escalate) + unknown 유형별 권장 matrix 정립. 매 unknown은 `{disposition, rationale, follow_up_ref, matrix_default?}` 명시 — silent 미처리 0. Reviewer가 매 항목 disposition + rationale 검증, matrix 벗어난 경우 rationale 강화 확인. **codex 권장 반영**: "environment/tooling capture failures → risk; missing dependency/API/policy → constraint; ambiguous intent/scope → clarification; irrelevant unknown → defer with rationale" — 모두 matrix에 포함 + 추가 (resolved/escalate).
 - **Compatibility Verdict 구조화 (결함 #6 해결).** 단순 `{result, reason, blockers?}`였던 verdict를 *3-state result + scoped issues list + freshness*로 확장. 4 round 적대적 검증, 25 angle 공격. codex 자기 prior 권장 (`high_risk_proceed`) **over-recommendation 인정** — risk_surface와 중복. 최종 안: (1) `result: proceed|blocked|needs_clarification` 3-state 유지, (2) `issues: [{type(15 base + other), severity, scope(component/tenant/dependency/platform/sub_flow/target_set), evidence, requires_user?, blocks_flow?, suggested_followup}]` — cap 50, dedup (root_cause+scope hash, most-severe-wins), (3) `source_version` (ed_snapshot/rules_version/contracts_version) freshness, (4) `sub_flow_verdicts` Compound 전용, (5) Validation Rules V1-V10 (mechanical hook), (6) Stale 검출 책임 Decide/Verify 명시. **scope per issue가 핵심**: 없으면 Compound·partial-compat에서 over-block (codex 시뮬레이션이 입증). type taxonomy *extensible* (closed enum 금지). 시나리오 d (Performance no-op) 는 호환성 영역 밖 — task validity 결함 #11로 별도 노트.
 - **External Research Policy (결함 #8 해결).** Investigate의 외부 도구 사용이 미정의였음 — 초안 (고정 budget + 고정 tool 우선순위 + 전체 provenance)을 codex가 *5개 항목 WRONG*으로 검증: 고정 budget=arbitrary (위험·claim 수와 무관), 고정 tool 우선순위=context-dependent (freshness 검증은 WebFetch 직접 필요), "external preferred" rule=unsafe (내부 contract silent override 위험), 균일 provenance=mechanical noise, per-flow override=too crude. 최종 정책: (1) **Triggers**: claim 단위 — lib API/version compat/CVE/license/contract/standards/runtime support/registry metadata, (2) **Source eligibility** 4-tier (high: official_current·standards·source·security_advisory / medium: official_stale·changelog·registry / low: community·archive / rejected: generated_seo), (3) **Tool selection** *context-dependent* (claim 유형별 권장 매핑), (4) **Stop criteria** — sufficient_evidence·diminishing_returns·blocking_failure·safety_cap (flow별 default cap, claim-driven override 허용 with rationale), (5) **Provenance claim 중요도별** (decision_critical: 전체, background: aggregated), (6) **Conflict 처리**: external API fact는 external 채택, *내부 contract/policy는 silent override 금지* (owner review용 기록), (7) **No-results 처리** claim 중요도별 (decision_critical→compatibility issue, version_sensitive→risk, background→defer, feasibility-critical→negative signal), (8) **Failure recovery** (rate limit fallback, auth/paywall→external_inaccessible). codex 10 항목 모두 반영.
+- **Step Depth Policy — Adaptive (결함 #10 해결).** 소형 flow over-engineering 해결. 초안 (per-flow mode declaration)을 codex가 *6개 항목 WRONG*으로 검증: LLM call 수 미감소, budget 숫자 arbitrary, compat 안전망 입력 빈약, reviewer 비용 재발, matrix sprawl, looks-trivial-but-isnt 미처리. 최종 정책: 모든 step이 *default=shallow*, 명시 mechanical trigger 발동 시 deepen. (1) **Shallow/Deep 활동 분리** 각 step 정의, (2) **Mechanical caps** (wall_s + tokens) shallow/deep별, (3) **Deepen triggers** OR 매칭 (flow_type / Triage.complexity_signal / god_node detection / volatile failures / Ground.unknowns count / entry_nodes size 등 mechanical 계산), (4) **Upstream deepen request** (Decide→orchestrator→Ground/Investigate 재invoke, cap 1회), (5) **Shallow→Deep transition** (in-place escalation + fact 재사용), (6) **Reviewer checklist mechanical** (Ground-Reviewer 3 check / Investigate-Reviewer 3 check / Decide-Reviewer 3 check — LLM 판단 최소화), (7) **god_node priority** in shallow ed_query (graph degree 기반, random 5 아닌 high-degree top), (8) **token budget** (1k for shallow ed_query, arbitrary node count 대체), (9) **Triage.complexity_signal** 부수 출력 (deepen trigger 입력). **Multi-Layer Safety 7-layer**: orchestrator triggers / step caps / reviewer checklist / Verify / Reflect / provenance / freshness. 단일 layer 실수도 다른 layer catch. codex 비판 6/6 처리.
 - **Decide step 신설 — Decision Ownership (universal).** Step Pool 9 → 9 (기획 → Decide로 일반화). 결함 #1 (결정 소유권 공백) 해결. 기존 기획은 *기획서 산출* 함의로 conditional 처리되어 Bug Fix / Chore / P0 / Release / Bug Fix Unreproducible flow에서 결정 owner 부재 → silent decision. **Decide는 모든 flow 필수**, 산출물 깊이는 mode로 차등: Record (1줄 결정+근거) / Plan (옵션 N개 비교+선택+우선순위) / Design (기획서: architecture+policy+userflow+req + emberdeck intent card). Mode = flow definition declared + situational upgrade (옵션 N≥2 발견 시 Record→Plan). Design mode만 intent card 자동 생성. **명명 근거 (codex)**: "기획"이 한국어로 *큰 산출물* 함의 → minimal flow에서 형식적 통과·skip 압력 유발. step 이름이 *책임 (ownership)*을 가리켜야 함. Naming은 control surface (agent 역할·산출물·review 기준 매개) — semantic noise 아님. **Triage Mismatch 처리**: Investigate가 surface하면 Decide가 reclassify trigger (orchestrator 신호) — Verify까지 안 가도 됨. Compound의 sub-flow 분해/순서는 top-level Decide(Design)에서, sub-flow별 자체 Decide는 자기 mode로 실행.
 - Flow lifecycle rules added (start, suspend, resume, complete, abandon)
 - Flow state persistence added (flow-state.yaml, list structure, archive)
