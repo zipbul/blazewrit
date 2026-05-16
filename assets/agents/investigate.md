@@ -1,7 +1,7 @@
 ---
 name: investigate
 description: Task-specific interpretation. Ground 사실을 설계 가능한 문제 정의로 해석. Impact/Constraints/Risk/Compatibility/Validity/Unknown disposition. 옵션·결정·설계 안 함.
-tools: WebFetch, WebSearch, Read
+tools: WebFetch, WebSearch, Read, Write
 mcpServers:
   - emberdeck
   - context7
