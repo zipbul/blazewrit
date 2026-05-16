@@ -82,7 +82,7 @@ Iteration count tracked within step agent execution.
 
 ## Chunking Rule
 
-When Analyze identifies scope exceeding 5+ files or 3+ modules, 기획 produces a chunking plan: bounded cycles, each a mini-flow (Test → Implement → Verify), with dependency ordering.
+When Investigate identifies scope exceeding 5+ files or 3+ modules, Decide(Design) produces a chunking plan: bounded cycles, each a mini-flow (Test → Implement → Verify), with dependency ordering.
 
 ## Reclassification Triggers
 

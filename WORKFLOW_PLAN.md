@@ -1927,8 +1927,8 @@ Full execution architecture in EXECUTION_PLAN.md. Below is the implementation ch
 2. flow-state.yaml 스키마 확정
 
 ### Step Agents + Reviewer Agents
-3. Producer agents (ground.md, investigate.md, decide.md, spec.md, test.md, implement.md, report.md, verify.md, reflect.md) — 9 agents, custom agent frontmatter (tools, mcpServers, hooks, maxTurns, isolation) + prompt body (output contract, self-validation criteria, artifact format)
-4. Reviewer agents (ground-reviewer.md, investigate-reviewer.md, decide-reviewer.md, spec-reviewer.md, test-reviewer.md, implement-reviewer.md, report-reviewer.md) — 7 agents, read-only tools, review criteria, structured feedback format
+3. **Producer agents (9)** — 신규: ground.md, investigate.md, decide.md (옛 analyze.md, 기획.md 폐기). 기존: spec.md, test.md, implement.md, report.md, verify.md, reflect.md. Custom agent frontmatter (tools, mcpServers, hooks, maxTurns, isolation) + prompt body (output contract, self-validation criteria, artifact format).
+4. **Reviewer agents (7)** — 신규: ground-reviewer.md, investigate-reviewer.md, decide-reviewer.md (옛 analyze-reviewer.md, 기획-reviewer.md 폐기). 기존: spec-reviewer.md, test-reviewer.md, implement-reviewer.md, report-reviewer.md. Read-only tools, review criteria, structured feedback format.
 
 ### Orchestration Rules (유저 세션용)
 5. orchestration.md (.claude/rules/blazewrit/) — Triage 호출 정책 (signal 감지 시 invoke, ambiguous 출력 시 user에 질문 후 재invoke, none 출력 시 자유 대화 유지) + Active flow 충돌 처리 (orchestrator/host LLM) + 훅 지시 따르기 규칙

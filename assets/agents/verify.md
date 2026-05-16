@@ -63,7 +63,7 @@ On FAIL, diagnose WHERE the problem originates:
 ```
 STATUS: DONE
 RESULT: FAIL
-FAILURE_ORIGIN: {analyze | 기획 | spec | test | implement | report}
+FAILURE_ORIGIN: {triage | ground | investigate | decide | spec | test | implement | report}
 REASON: {specific issue}
 EVIDENCE: {file:line or artifact reference}
 ```

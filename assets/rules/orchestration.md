@@ -15,7 +15,7 @@ Classify every user request using this signal table.
 | Dependency upgrade, API migration, framework change | migration |
 | Coverage gap, missing tests, test strategy | test |
 | Config, CI, docs, dependencies | chore |
-| Planning, design, research, spec writing with concrete target | 기획 |
+| Planning, design, research, spec writing with concrete target | 기획-standalone |
 | PR review, code audit, diff analysis, security audit | review |
 | Version bump, changelog, deploy | release |
 | Retrospective, postmortem, analysis of past work | retro |
@@ -29,7 +29,7 @@ Classify every user request using this signal table.
 | Strength | Criteria | Action |
 |----------|----------|--------|
 | Clear | Explicit action verb + target ("fix the NPE in auth.py") | Classify immediately |
-| Implied | Problem/goal without explicit action ("auth is slow") | Route to Analyze for investigation — Analyze returns classification |
+| Implied | Problem/goal without explicit action ("auth is slow") | Triage가 직접 frame 시도, 결박 불가 시 ambiguous(question)로 user에 응답 요청 |
 | Ambiguous | No actionable target ("something feels off") | None. Free conversation until signal strengthens |
 
 ### Before Classifying
