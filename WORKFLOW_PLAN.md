@@ -58,7 +58,7 @@ Step Agent → output
 | Step | Reviewer | Reviewer checks |
 |------|----------|----------------|
 | Ground | Ground-Reviewer | subgraph entry≥1 OR `referent_unresolved` 명시, volatile 각 항목 explicit status (success/fail/timeout/skipped-with-reason), ED ambiguous/inferred·capture 실패 모두 unknowns/conflicts에 매핑, 모든 사실 항목에 `source_tool` 존재, freshness 기록 (ed_snapshot_version + git_HEAD), 해석·판단 prose 없음 |
-| Investigate | Investigate-Reviewer | impact_map이 Ground entry_nodes 모두 커버, risk_surface가 god_nodes_in_scope 각각에 대해, compatibility_verdict 명시, ground unknowns 모두 처분 (risk/constraint/escalated 중 하나), 옵션·설계 prose 없음 (Decide 영역 침범 금지) |
+| Investigate | Investigate-Reviewer | impact_map이 Ground entry_nodes 모두 커버, risk_surface가 god_nodes_in_scope 각각에 대해, compatibility_verdict 명시, **ground_unknowns_addressed 매 항목 disposition + rationale + follow_up_ref 명시** (silent 미처리 0), **matrix 권장 벗어난 경우 rationale 강화 확인**, 옵션·설계 prose 없음 (Decide 영역 침범 금지) |
 | Decide | Decide-Reviewer | mode 일치 (declared vs 산출물), Record: 결정+근거 1쌍 이상, Plan: 옵션 N≥2 비교 + 선택 이유 + 우선순위, Design: 기획서 (architecture+policy+userflow+req) + intent card 생성. 모든 mode: decision_record + reason 필수. ground·investigate 사실에 근거. |
 | Spec | Spec-Reviewer | 모든 정책이 AC로 변환됐는가, AC 측정 가능한가, 코드 architecture(디렉토리/파일) 명확한가, task 분해 빠짐없는가 |
 | Test | Test-Reviewer | 테스트가 행위를 검증하는가 (smoke test 아닌가), AC traceability, 엣지 케이스 커버리지 |
@@ -465,8 +465,37 @@ Ground는 conflict resolution 안 함. 단 `active_flow_state`가 새 `request_t
 3. Risk surface         실패 모드 (impact × Ground concerns) — severity + probability + evidence
 4. Compatibility 판정    명백 호환성만 (referent 부재, 빌드 불가 등) — proceed | blocked | needs_clarification
                         (도달 가능성·옵션 의존 판단은 Decide 영역)
-5. Unknown disposition   Ground unknowns 각각 → risk/constraint/clarification/defer 중 분류 (rule-based)
+5. Unknown disposition   Ground unknowns 각각 → 6 disposition 중 1 분류 (matrix 기반, 명시 rationale)
 ```
+
+### Unknown Disposition Matrix
+
+Ground unknown은 *반드시* 다음 6 disposition 중 하나로 처분. matrix는 *기본 권장*이며 벗어날 시 rationale 강제.
+
+| Disposition | 의미 | 후속 처리 |
+|---|---|---|
+| `resolved` | Investigate가 직접 해결 (외부 리서치·코드 read·도구 호출) | unknown 제거, 사실로 승격 (verification_proof 동반) |
+| `risk` | 불확실성을 risk로 변환 | risk_surface에 항목 추가 (severity + probability) |
+| `constraint` | 사실 부재가 제약으로 작용 | constraints에 항목 추가 (blocking? 표기) |
+| `clarification` | user/caller 응답 필요 | NEEDS_CONTEXT (Investigate halt + 질문) |
+| `defer` | 다음 step에서 해결 가능 | deferred_decisions 기록 (defer_to: decide \| spec \| test \| implement) |
+| `escalate` | flow halt — 도구/시스템 문제 | compatibility_verdict=blocked + blocker 기록 |
+
+**기본 matrix** (Ground unknown 유형 → 권장 disposition):
+
+| Ground unknown 유형 | 권장 disposition |
+|---|---|
+| `capture_failed: timeout` | risk |
+| `capture_failed: tool_error` | escalate |
+| `inaccessible: permission_denied` | constraint (기본) / clarification (권한 요청 가능 시) |
+| `tool_unavailable` (ED/firebat/pyreez 부재) | escalate |
+| `referent_unresolved` (request entity 그래프 부재) | clarification |
+| ED `AMBIGUOUS` edge | risk |
+| ED `INFERRED` edge (low confidence) | risk |
+| ED `drift` (card↔code 불일치) | constraint |
+| 외부 lib/API 미상 | resolved (WebFetch/Context7 시도) / 실패 시 risk |
+| 사실 간 `contradiction` | clarification |
+| `racing_changes` (Ground 재시도 후 잔존) | risk |
 
 ### Output
 
@@ -488,7 +517,14 @@ compatibility_verdict:
   reason
   blockers?: [...]
 
-ground_unknowns_addressed: [{ unknown_ref, disposition: risk|constraint|clarification|defer, rationale }]
+ground_unknowns_addressed: [{
+  unknown_ref,                                                   # Ground unknown 항목 ID/index
+  unknown_type,                                                  # matrix 매칭용 (capture_failed/inaccessible/...)
+  disposition: resolved|risk|constraint|clarification|defer|escalate,
+  rationale,                                                     # 왜 이 disposition
+  matrix_default?: <bool>,                                       # matrix 권장 따랐는지 (false면 rationale 필수 강화)
+  follow_up_ref?: <risk_id | constraint_id | question | deferred_decision_id | blocker_id>
+}]
 
 (Compound only) sub_flow_identification: [{ flow_type, scope, rationale }]   # 식별만, 분해/순서는 Decide
 
@@ -1349,6 +1385,7 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - **Triage 최종 정의: Stateless classification function.** `(input) → (output)`. Inputs: primary_input + channel + optional(conversation_context, clarifications, prior_evidence). Outputs 4종: `proceed(flow_type, confidence)` / `none(reasoning)` / `ambiguous(question)` / `error(reason)`. Single-pass, 루프 없음, persistence 없음, flow state 안 봄, 코드 분석 안 함. Ask cycle은 Triage 밖 — 호출자가 답변 받으면 clarifications에 추가하여 재invoke. Active flow 충돌/cycle cap/preempt/conflict resolution은 모두 orchestrator/caller 책임. **스코프 엄격화 이유**: 이전 elaborate 설계 (Frame Intent 15필드, Active Check, conflict resolution table, state machine, similar_suspended, sub_flow_types 등)는 모두 다른 step의 책임을 Triage에 잘못 흡수한 over-reach였음. 진짜 Triage는 *분류만* — 의도 결박/캡처는 워크플로우 전체가 점진적으로 정밀화하는 일이지 첫 step의 일이 아님.
 - **Ground step 신설 — Evidence Boundary.** Step Pool 8 → 9. Triage 다음에 위치 (`None ↔ Triage → Flow[Ground → Analyze → ...]`). Triage된 의도를 bounded·sourced·current 사실 + 명시 불확실성으로 변환. 3 활동: (1) ED graph query — request 영역 bounded subgraph, (2) Volatile capture — flow_type별 선언된 measurement profile 실행 (universal: typecheck/test/lint/git, conditional: Performance/Migration/Bug Fix Unreproducible/Release), (3) Surface — ED ambiguous/inferred + capture 실패 → unknowns/conflicts (silent gap 금지). **Provenance 강제**: 모든 fact/unknown/conflict에 source_tool 명시. **Freshness 강제**: ed_snapshot_version + git_HEAD start/end 기록, racing_changes 검출. **Reviewer 강화**: subgraph entry≥1 OR referent_unresolved, volatile 각 항목 explicit status (success/fail/timeout/skipped-with-reason), ambiguous/inferred·실패 unknowns 매핑. **Cache 허용** (logically stateless): cache key = hash(request + conversation_digest + ed_snapshot + git_HEAD + worktree + commands_def + flow_type + scope_hint). **Boundary**: 해석·판단·선택 없음 — 측정값 의미 판단/위험 평가/feasibility는 Analyze 책임. **Analyze 책임 재정의**: "이해/사실 캡처"는 Ground로 이관, Analyze는 *task-specific 해석/영향 분석*만. **codex 교차 검토 반영**: provenance granularity / flow-conditional profile은 선언만 (Ground가 판단 안 함) / volatile result status 강제 / 모노리포 scope_hint / active_flow_overlap 처리 / racing_changes 검출.
 - **Analyze → Investigate 개명.** "Analyze"는 너무 generic — 다른 step도 분석함. *Task-specific interpretation*이 본질. Investigate가 명명-기능 정합. 활동 (Impact/Constraints/Risk/Compatibility) 동일하되 *옵션 생성·결정·설계는 배제* (Decide로 이관). codex 검증.
+- **Unknown Disposition Matrix 명시화 (결함 #3·#4 해결).** Ground unknown 처분이 이전엔 implicit (LLM 판단). 이제 6 disposition (resolved/risk/constraint/clarification/defer/escalate) + unknown 유형별 권장 matrix 정립. 매 unknown은 `{disposition, rationale, follow_up_ref, matrix_default?}` 명시 — silent 미처리 0. Reviewer가 매 항목 disposition + rationale 검증, matrix 벗어난 경우 rationale 강화 확인. **codex 권장 반영**: "environment/tooling capture failures → risk; missing dependency/API/policy → constraint; ambiguous intent/scope → clarification; irrelevant unknown → defer with rationale" — 모두 matrix에 포함 + 추가 (resolved/escalate).
 - **Decide step 신설 — Decision Ownership (universal).** Step Pool 9 → 9 (기획 → Decide로 일반화). 결함 #1 (결정 소유권 공백) 해결. 기존 기획은 *기획서 산출* 함의로 conditional 처리되어 Bug Fix / Chore / P0 / Release / Bug Fix Unreproducible flow에서 결정 owner 부재 → silent decision. **Decide는 모든 flow 필수**, 산출물 깊이는 mode로 차등: Record (1줄 결정+근거) / Plan (옵션 N개 비교+선택+우선순위) / Design (기획서: architecture+policy+userflow+req + emberdeck intent card). Mode = flow definition declared + situational upgrade (옵션 N≥2 발견 시 Record→Plan). Design mode만 intent card 자동 생성. **명명 근거 (codex)**: "기획"이 한국어로 *큰 산출물* 함의 → minimal flow에서 형식적 통과·skip 압력 유발. step 이름이 *책임 (ownership)*을 가리켜야 함. Naming은 control surface (agent 역할·산출물·review 기준 매개) — semantic noise 아님. **Triage Mismatch 처리**: Investigate가 surface하면 Decide가 reclassify trigger (orchestrator 신호) — Verify까지 안 가도 됨. Compound의 sub-flow 분해/순서는 top-level Decide(Design)에서, sub-flow별 자체 Decide는 자기 mode로 실행.
 - Flow lifecycle rules added (start, suspend, resume, complete, abandon)
 - Flow state persistence added (flow-state.yaml, list structure, archive)
