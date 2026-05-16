@@ -518,6 +518,13 @@ Cross-verify 결과 disagreement → producer retry with both feedbacks (3-fail 
 - `Investigate.impact_map.affected_files_count ≥ 5` AND declared=record → **Plan** 강제
 - `Investigate.architecture_impact.has_architecture_level == true` → **Design** 강제 (declared 무관)
 
+**Priority 명시 (Mode hierarchy)**: `Design > Plan > Record`. 여러 trigger가 동시 발화 시:
+- 한 trigger가 Design 강제 + 다른 trigger가 Plan 강제 → **Design 우선** (Design은 Plan을 포함하는 superset — options 검토 + architecture + policies)
+- declared=design + Plan-force trigger 발화 → **Design 유지** (Plan-force trigger는 Record/Plan에만 적용; declared가 이미 Design 이상이면 no-op)
+- declared=record + Plan-force trigger AND Design-force trigger → **Design 강제** (높은 mode 우선)
+
+이 priority는 *orchestrator code*가 평가. Decide는 *결정된 mode*만 진입 — Decide 자체가 priority rule invent 금지 (R14 fail-loud, Decide-Reviewer R15 check).
+
 Investigate가 derive하는 필드 (`affected_files_count`, `architecture_impact.has_architecture_level`)는 [steps/investigate/README.md schema](./steps/investigate/README.md) 참조. Decide LLM은 force된 mode로 진입.
 
 ### R7. Triage Classification Eval
@@ -597,6 +604,74 @@ external_research:
 - `assets/tools/emberdeck.md` — query_graph / create_card / validate_code_links / regression_guard 각 signature, ED graph schema reference, freshness metadata 정의
 
 각 tool 부재 시 graceful degrade (이미 정의된 M4 분리) — 부재 시 정확히 어느 step·activity가 skip되는지 contract에 명시.
+
+### R13. UNVERIFIED Tag — Mechanical Enforcement
+
+이전 spec은 `[UNVERIFIED]` / `[UNMEASURED]` 태그를 *prompt-rule only*로 명시 → 실제 실행 시 agent가 invent value를 silent로 emit (실 사례: `intent_card_id="PENDING-emberdeck-unavailable"`, `rules_version="not_tracked"`, R6 `"Design ⊇ Plan"` rule invention). Mechanical enforcement 추가:
+
+**모든 step output artifact의 schema 강제**:
+
+```yaml
+<any field with potentially-unverified content>:
+  value: <data>
+  verified: true | false               # required
+  provenance:                          # required when verified=true
+    source_tool: <tool name>           # e.g., Read | Bash | sha256sum | WebFetch
+    citation: <file:line | command | url | sha256>
+  unverified_reason?: <string>         # required when verified=false
+```
+
+**Schema validator rule (R1과 연동)**:
+- `verified: true` + `provenance` 없음 → schema fail (`failure_origin: <step>` schema mismatch)
+- `verified: false` + `unverified_reason` 없음 → schema fail
+- `verified` 누락 → schema fail (모든 invent-prone 필드 강제 명시)
+
+**Invent-prone field whitelist** (이 필드들은 항상 `verified` 명시 필수):
+- `intent_card_id`, `spec_card_id`, `rules_version`, `contracts_version`, `ed_snapshot_version`
+- `compatibility_verdict.result` (derived, must cite issues source)
+- `architecture_impact.new_modules`, `architecture_impact.public_api_changes`
+- 임의의 placeholder/default value를 emit하는 모든 필드
+
+**Verify 책임 확장**: `verified: false` 항목이 decision_basis로 사용된 경우 자동 FAIL + `failure_origin: <emitting step>`.
+
+### R14. Fail-Loud over Invent-Silent
+
+Spec vapor (정의 누락) 발견 시 agent가 *invent*하는 대신 *halt + escalate*:
+
+**Agent rule**:
+- 출력 필드의 형식·enum·default가 spec에 정의 안 됨 → 즉시 `STATUS: BLOCKED` + `REASON: spec hole — <field name> undefined` + `FAILURE_ORIGIN: <step>` 출력
+- placeholder ("PENDING-...", "not_tracked", "TBD" 등) emit 금지 — 모두 fail-loud trigger
+- "임의 형식 가정" 자체가 boundary 위반
+
+**Orchestrator 책임**:
+- BLOCKED + spec hole 시 user/caller에 escalate (NEEDS_CONTEXT)
+- spec 갱신 후 재invoke (수동 워크플로우)
+
+**예외** (graceful degrade 명시 정책 따를 때):
+- emberdeck 부재 → R12 degrade policy (intent_card_id는 emit하지 않고 *필드 자체 omit*, downstream이 emberdeck 부재 인지)
+- firebat 부재 → R12 degrade policy
+- pyreez 부재 → R12 degrade policy
+
+즉 spec에 *명시된 degrade*면 OK, *명시 없는 vapor* 채우려는 invent는 BLOCKED.
+
+**효과**: spec hole이 *실제 실행 중* surface → 즉시 fix 가능. invent silent pass 패턴 차단.
+
+### R15. Boundary Mechanical Detection
+
+Boundary 위반 (Ground이 interpretation, Investigate가 design/future-state 침범 등)이 *prompt-rule only*로 catch 안 됨. Mechanical hook 추가:
+
+**Ground output mechanical check** (Ground-Reviewer hook):
+- `conflicts` 섹션 내 비교어 검출: `consistent`, `match`, `align`, `agree`, `equal`, `same`, `differ`, `conflict (as judgment)`. 발견 시 reviewer FAIL with `reason: "Ground boundary violation — interpretation in conflicts"`
+- Ground는 *fact surface*만: `source A says "X", source B says "Y"` (raw 인용). 비교/판정 없음.
+
+**Investigate output mechanical check** (Investigate-Reviewer hook):
+- `validity_check` / `risk_surface` / `constraints` 내에서 *미래 artifact path* 언급 검출: `.blazewrit/plans/.+-plan\.md`, `.blazewrit/reports/`, `.blazewrit/spec/` 같은 *downstream artifact* 경로 mention → reviewer FAIL `reason: "Investigate boundary violation — future-state speculation"`
+- `chosen|option|choice|select|pick|recommend|design|architecture` 같은 *option/design verb* 검출 → reviewer FAIL `reason: "Investigate boundary violation — option/design verb (Decide territory)"`
+
+**Decide output mechanical check** (Decide-Reviewer hook):
+- `new fact|capture|measure|observed|recorded` 같은 *fact-capture verb* in `options_deliberated` / `chosen_architecture` → reviewer FAIL `reason: "Decide boundary violation — fact capture verb (Ground territory)"`
+
+**구현**: regex hook in orchestrator (PostToolUse on reviewer invocation). 검출 시 reviewer 결과를 FAIL로 override + producer retry.
 
 ## Quality Assurance
 
