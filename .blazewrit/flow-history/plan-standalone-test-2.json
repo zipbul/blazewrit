@@ -1,0 +1,207 @@
+{
+  "flow_id": "plan-standalone-test-2",
+  "flow_type": "plan-standalone",
+  "classification": "completed",
+  "schema_version": 1,
+  "captured_at": "2026-05-17T02:25:43+09:00",
+  "reflected_at": "2026-05-17",
+  "validation_context": {
+    "purpose": "Validate R13/R14/R15 mechanical enforcement after spec hardening",
+    "baseline": "plan-standalone-test-1 (exposed DEEP-1..DEEP-7 defects via spec invent)",
+    "key_baseline_defect_example": "plan-standalone-test-1-decide.md:26 emitted `intent_card_id: \"PENDING-emberdeck-unavailable\"` — a placeholder that R13 now bans",
+    "rules_under_test": {
+      "R13": "UNVERIFIED Tag — mechanical enforcement (placeholder ban, field omission, invent-prone whitelist)",
+      "R14": "Fail-Loud over Invent-Silent (halt/escalate on spec hole; allowed degrade only for emberdeck/firebat/pyreez absence)",
+      "R15": "Boundary Mechanical Detection (Ground=raw facts only, Investigate=no future paths/design verbs, Decide=no fact-capture verbs)"
+    }
+  },
+  "input_refs": {
+    "ground": ".blazewrit/grounds/plan-standalone-test-2.md",
+    "investigate": ".blazewrit/investigations/plan-standalone-test-2.md",
+    "decide": ".blazewrit/plans/plan-standalone-test-2-decide.md",
+    "plan": ".blazewrit/plans/plan-standalone-test-2-plan.md"
+  },
+  "pass_1_fact_collection": {
+    "ground": {
+      "entry_nodes": 4,
+      "neighbors": 21,
+      "god_nodes": ["WORKFLOW_PLAN.md", "src/orchestrator.ts"],
+      "corpus_lines": 2826,
+      "ed_snapshot_version_field": "OMITTED (not placeholder)",
+      "intent_card_id_field": "n/a (Ground does not emit)",
+      "unknowns_count": 10,
+      "conflicts_count": 4,
+      "conflicts_style": "raw-quote-only (e.g. 'A says X. B says Y.' no comparative verbs)",
+      "volatile_state": {
+        "typecheck": "success (tsc --noEmit exit 0)",
+        "tests": "skipped-with-reason (no test script in package.json)",
+        "lint": "skipped-with-reason (no lint script, no config)",
+        "git": "success; head 778eca4...b571 stable across capture window"
+      },
+      "substitute_provenance": "17-row sha256+mtime block in verification_proof.read_files"
+    },
+    "investigate": {
+      "affected_files_count": 4,
+      "has_architecture_level": false,
+      "compatibility_verdict": "proceed",
+      "source_version_fields": "all OMITTED per R13 (ed_snapshot_version, rules_version, contracts_version)",
+      "risk_surface_items": 10,
+      "ground_unknowns_addressed_dispositions": {
+        "resolved": ["step_pool_directory_count"],
+        "accept_as_risk": ["ed_query", "ed_snapshot_version", "changelog_freshness", "orchestrator_installed_provenance"],
+        "out_of_scope": ["firebat_baseline", "pyreez_baseline", "test_suite_definition", "lint_definition"]
+      }
+    },
+    "decide": {
+      "mode": "design",
+      "mode_resolution_basis": "declared_default + R6 mechanical: affected_files_count=4 (<5) + has_architecture_level=false → no Plan/Design force; declared=design governs",
+      "options_deliberated": 3,
+      "chosen_option": "C — diagram-anchored portal doc with deep-links",
+      "policies_count": 10,
+      "requirements_count": 14,
+      "user_flows_count": 6,
+      "intent_card_id_field": "OMITTED with explicit reason line `emberdeck_status: absent (intent_card_id field omitted per R12 degrade policy + R13 placeholder ban)`",
+      "gate_rules_format": "JsonLogic, 4 conditions binding verify.linkcheck/grep outputs"
+    },
+    "plan": {
+      "synthesizes": ["Decide", "Investigate", "Ground"],
+      "risk_coverage_map": "10 rows; every RS-1..RS-10 mapped to ≥1 policy AND ≥1 requirement",
+      "source_pedigree": "Decide → Investigate → Ground chain explicit",
+      "next_step": "Spec",
+      "downstream_chain": "Spec → Report → Verify → Reflect (Implement/Test skipped per plan-standalone)",
+      "volatile_state_disclosure": "all 5 dimensions surfaced; .step-status flagged stale (points at plan-standalone-test-1)"
+    }
+  },
+  "pass_2_pattern_extraction": {
+    "themes": [
+      "Field omission over placeholder emission (R13 invariant)",
+      "Substitute provenance via filesystem sha256+mtime when ED graph unavailable",
+      "Closure traceability — every risk bound to policy AND requirement",
+      "R6 mechanical evaluation recorded as explicit based_on/r6_evaluation block",
+      "Ground conflicts surface, Investigate adjudicates (clean handoff)",
+      "Degrade-policy chain propagates emberdeck-absence through all 4 artifacts uniformly"
+    ],
+    "surprises": [
+      "R12 degrade absorbed three simultaneous MCP absences (emberdeck + firebat + pyreez) without forcing the flow to BLOCKED",
+      "The 9-vs-10 ambiguity (steps/ dir has 10 entries; docs say 9 + 1 classifier) was *resolved* by in-repo cross-citation rather than escalated as needs_clarification"
+    ]
+  },
+  "pass_3_prior_comparison": {
+    "flow_history_dir_state": ".blazewrit/flow-history/ was empty before this entry — this is the first canonical history record",
+    "test_1_vs_test_2": {
+      "test_1_intent_card_id": "PENDING-emberdeck-unavailable (placeholder string — R13 violation)",
+      "test_2_intent_card_id": "FIELD OMITTED with explicit emberdeck_status: absent reason line (R13 compliant)",
+      "test_1_ed_snapshot_version": "explicit value or placeholder pattern observed in baseline",
+      "test_2_ed_snapshot_version": "FIELD OMITTED, surfaced via ground.unknowns[ed_query] (R12/R13 compliant)",
+      "test_1_conflicts_style_risk": "(historical) interpretation/judgment leak risk",
+      "test_2_conflicts_style": "raw quote rows only — `WORKFLOW_PLAN.md:31 says ...`; `Bash ls says ...` — no comparative verbs (R15 boundary clean)",
+      "test_1_R6_basis": "based_on/mode_force_basis with affected_files_count=22 (Plan force ≥5) overridden by declared=design",
+      "test_2_R6_basis": "based_on/r6_evaluation with affected_files_count=4 (<5) and has_architecture_level=false — no force; declared=design governs cleanly",
+      "improvement_summary": "test-2 eliminates the placeholder-emission pattern that DEEP-1..DEEP-7 surfaced in test-1; substitute provenance is now structurally encoded rather than rule-only"
+    },
+    "prior_patterns_confirmed_or_contradicted": "n/a — no prior flow-history; first-record baseline established"
+  },
+  "what_worked": [
+    "R13 placeholder ban — every invent-prone field (intent_card_id, ed_snapshot_version, rules_version, contracts_version) was *omitted* with a one-line reason rather than emitting `PENDING-*` / `TBD` / `not_tracked` strings. Visible at: ground:freshness, investigate:compatibility_verdict.source_version, decide:frontmatter+based_on, plan:Source-Pedigree.",
+    "R14 fail-loud surfacing — emberdeck/firebat/pyreez absence each got its own row in `ground.unknowns` with `verified: true` (the unknown itself is verified, the missing data is not invented). Downstream consumers can branch on these rows explicitly.",
+    "R15 boundary cleanliness — Ground.conflicts uses pure raw quotes (`source A says \"X\". source B says \"Y\".`) with no comparative verbs; Investigate avoided option/design verbs in risk_surface (used descriptive 'Description treats X as Y' framing); Decide kept fact-capture verbs out of options_deliberated/chosen_architecture.",
+    "R6 explicit-evaluation block — Decide records `affected_files_count=4 (< 5) → no Plan force` and `has_architecture_level=false → no Design force` and `declared_default=design governs`. Mechanical reproducibility achieved.",
+    "Substitute provenance — per-file sha256+mtime block in `ground.verification_proof.read_files` (17 rows) serves as a deterministic fallback for the missing ED snapshot id. Downstream artifacts cite this block by name.",
+    "Risk-coverage map closure — Plan synthesizes Decide+Investigate by binding every RS-1..RS-10 to ≥1 policy AND ≥1 requirement in a single table. Full traceability surface.",
+    "Hard counts honored — 16 flow definitions, 16 agent files, 10 directories, 9 steps + 1 classifier all enumerated by `Bash ls` and carried verbatim through to Decide policies P3/P6 and REQ-2/REQ-4/REQ-5.",
+    "Triage 9-vs-10 reconciliation — resolved in-flow by Investigate citing AGENTS.md:9 + WORKFLOW_PLAN.md:21, without escalating to needs_clarification.",
+    "Volatile-state honesty — tests=skipped-with-reason and lint=skipped-with-reason were preserved as explicit non-green states all the way to Plan.Volatile-State-Disclosure; no implicit 'green CI' inference."
+  ],
+  "what_failed": [
+    "`.blazewrit/.step-status` is stale — still points at `plan-standalone-test-1` while this flow is `plan-standalone-test-2`. Surfaced as Ground.conflicts row 3 and Plan.Volatile-State-Disclosure, but the orchestrator marker itself was not updated. Not a flow failure but a harness gap.",
+    "`CHANGELOG.md` was not stat'd this session (ground.unknowns[changelog_freshness].verified=false). Propagated as RS-9 → P9 → REQ-11, but the underlying gap (incomplete freshness sweep) remains and shifts cost downstream.",
+    "Test/lint configuration absence is unresolved — Ground surfaces `test_suite_definition` and `lint_definition` as unknowns; Investigate marks them `out_of_scope` for this doc task. The structural question (is missing config intentional?) is deferred indefinitely.",
+    "`orchestrator_installed_provenance` unknown persists — sha256 byte-identity established but install mechanism (manual copy vs tsc/install) not determined. Carried as RS-3 → REQ-7 (disclosure-only)."
+  ],
+  "unexpected": [
+    "Triple-MCP absence absorbed cleanly — emberdeck + firebat + pyreez all absent simultaneously, yet R12 degrade allowed the flow to complete without BLOCKED. The graceful-degrade contract scales to multi-tool unavailability.",
+    "9-vs-10 step-pool ambiguity was resolved by in-repo cross-reference, not escalated. AGENTS.md:9 + WORKFLOW_PLAN.md:21 contain the adjudication; Investigate.ground_unknowns_addressed marked it `resolved`, avoiding unnecessary user round-trip.",
+    "Plan's Risk-Coverage-Map table emerged as a powerful closure-trace pattern — binding every Investigate RS to both a Decide policy AND a Decide requirement gives a single auditable table for verify completeness.",
+    "Doc-only task is unusually well-suited to ED-absent operation — the referents *are* filesystem documents, so sha256+mtime substitute provenance has minimal information loss compared to a true graph traversal. Different task profiles may not be so forgiving.",
+    "The R6 evaluation block in Decide is essentially mechanical — declared_default + affected_files_count + has_architecture_level fully determine mode. The 'option deliberation' is real but the mode itself is not deliberated."
+  ],
+  "patterns_discovered": [
+    {
+      "id": "P-R13-FIELD-OMISSION",
+      "name": "Invent-prone field omission with one-line reason",
+      "evidence": [
+        "ground.freshness: `ed_snapshot_version: *field omitted* (emberdeck absent — see unknowns[ed_query])`",
+        "investigate.compatibility_verdict.source_version: `(ed_snapshot_version: field omitted — emberdeck absent per ground.unknowns[ed_query]; per R13 no placeholder emitted.)`",
+        "decide.frontmatter: `emberdeck_status: absent (intent_card_id field omitted per R12 degrade policy + R13 placeholder ban)`",
+        "plan.Source-Pedigree: `ed_snapshot_version, intent_card_id, rules_version, contracts_version fields are omitted per R12 degrade policy + R13 placeholder ban`"
+      ],
+      "occurrences_this_flow": 4,
+      "promote_to_tier_2_when": "≥3 across distinct flows (currently 1 flow → stays Tier 1)"
+    },
+    {
+      "id": "P-SUBSTITUTE-PROVENANCE",
+      "name": "Filesystem sha256+mtime as deterministic substitute for ED snapshot",
+      "evidence": [
+        "ground.verification_proof.read_files (17 rows)",
+        "investigate.ground_sha256_basis frontmatter line",
+        "decide.provenance_basis frontmatter line",
+        "plan.provenance_basis frontmatter line + plan.Source-Pedigree"
+      ],
+      "occurrences_this_flow": 4
+    },
+    {
+      "id": "P-RISK-COVERAGE-CLOSURE",
+      "name": "Plan binds every Investigate risk to ≥1 Decide policy AND ≥1 Decide requirement",
+      "evidence": ["plan.Risk-Coverage-Map table: 10 rows, RS-1..RS-10 each mapped"],
+      "occurrences_this_flow": 1
+    },
+    {
+      "id": "P-R6-EXPLICIT-BLOCK",
+      "name": "Decide records R6 force-evaluation as a named based_on block",
+      "evidence": [
+        "decide.based_on: `has_architecture_level: false → no Design force from R6; declared_default design governs; affected_files_count: 4 (< 5) → no Plan force from R6`"
+      ],
+      "occurrences_this_flow": 1
+    },
+    {
+      "id": "P-GROUND-RAW-QUOTES-ONLY",
+      "name": "Ground.conflicts uses raw-quote rows; reconciliation deferred to Investigate.ground_unknowns_addressed",
+      "evidence": [
+        "ground.conflicts row 1 (3-source raw quotes on 9-vs-10)",
+        "ground.conflicts boundary note `Raw quotes only — no comparative judgment is rendered in this section (Ground boundary R15)`",
+        "investigate.ground_unknowns_addressed[step_pool_directory_count]=resolved"
+      ],
+      "occurrences_this_flow": 1
+    },
+    {
+      "id": "P-MULTI-MCP-DEGRADE",
+      "name": "R12 degrade absorbs simultaneous emberdeck + firebat + pyreez absence",
+      "evidence": [
+        "ground.unknowns rows: ed_query, ed_snapshot_version, firebat_baseline, pyreez_baseline",
+        "investigate.ground_unknowns_addressed: firebat_baseline=out_of_scope, pyreez_baseline=out_of_scope"
+      ],
+      "occurrences_this_flow": 1
+    },
+    {
+      "id": "P-STALE-STEP-STATUS",
+      "name": ".blazewrit/.step-status lags behind active flow_id; flagged but not auto-updated",
+      "evidence": [
+        "ground.conflicts row 3: marker points at plan-standalone-test-1 while flow_id is plan-standalone-test-2",
+        "decide.policies P10 + plan.Volatile-State-Disclosure"
+      ],
+      "occurrences_this_flow": 1,
+      "remediation_hint": "Orchestrator should write .step-status atomically at flow start (not only on DONE)"
+    }
+  ],
+  "validation_verdict": {
+    "R13_mechanical_enforcement": "PASS — every invent-prone field surveyed (intent_card_id, ed_snapshot_version, rules_version, contracts_version) is OMITTED with an explicit reason line across all 4 artifacts; zero placeholder strings of the banned form found",
+    "R14_fail_loud": "PASS — MCP absences (emberdeck, firebat, pyreez) surfaced via ground.unknowns rows with verified:true on the unknown row; no invent-silent substitution observed",
+    "R15_boundary": "PASS — Ground.conflicts uses raw quotes only (explicit boundary note line 109); Investigate avoids option/design/future-path verbs in constraint/risk surfaces; Decide.chosen_architecture restricts itself to artifact structure (explicit boundary note line 76: `does not re-derive facts`)",
+    "comparison_to_test_1": "Improvement confirmed — the specific defect class that test-1 exposed (e.g. `intent_card_id: \"PENDING-emberdeck-unavailable\"`) is mechanically prevented in test-2 by R13 field-omission + R14 fail-loud + R15 boundary checks"
+  },
+  "tier_2_promotion_candidates": [],
+  "tier_2_decision_notes": "No pattern has crossed the 3-occurrences-across-flows threshold yet (this is the first flow recorded). All 7 patterns remain in Tier 1 (raw) until additional flows confirm recurrence. Searched .claude/rules/ — directory does not exist, so no existing rule files to dedup against.",
+  "tier_3_clauseMd_changes": "None proposed. Tier 3 promotion requires explicit user permission per Reflect agent contract.",
+  "iteration_count": 1,
+  "iterations_capped_at": 3
+}
