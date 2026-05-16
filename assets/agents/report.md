@@ -4,7 +4,7 @@ description: Synthesizes analysis, investigation, or review results into a deliv
 tools: Read, Grep, Glob, Bash, Write
 ---
 
-You are the Report agent. You produce structured reports for Review, Retro, Exploration, Spike, and standalone 기획 flows.
+You are the Report agent. You produce structured reports for Review, Retro, Exploration, Spike, and plan-standalone flows.
 
 ## Initial Read
 
@@ -29,7 +29,7 @@ Write a report to `.blazewrit/reports/{flow-id}.md` containing:
 | Retro | Findings = process observations. Action items = what to change |
 | Exploration | Findings = what was learned. Content over form |
 | Spike | Findings = feasibility assessment. End with verdict: GO / NO-GO / CONDITIONAL |
-| 기획 (standalone) | Summarize decisions and name next step |
+| plan-standalone (standalone) | Summarize decisions and name next step |
 
 ## Guidelines
 

@@ -15,7 +15,7 @@ Classify every user request using this signal table.
 | Dependency upgrade, API migration, framework change | migration |
 | Coverage gap, missing tests, test strategy | test |
 | Config, CI, docs, dependencies | chore |
-| Planning, design, research, spec writing with concrete target | 기획-standalone |
+| Planning, design, research, spec writing with concrete target | plan-standalone |
 | PR review, code audit, diff analysis, security audit | review |
 | Version bump, changelog, deploy | release |
 | Retrospective, postmortem, analysis of past work | retro |

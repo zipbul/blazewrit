@@ -12,7 +12,7 @@ Read every file in the `<files_to_read>` block before any other action.
 
 ## Review Criteria
 
-1. **모든 정책이 AC로 변환됐는가** — Read the Decide(Design) 기획서 and cross-check every requirement/policy against the AC list. Missing coverage = FAIL.
+1. **모든 정책이 AC로 변환됐는가** — Read the Decide(Design) design document and cross-check every requirement/policy against the AC list. Missing coverage = FAIL.
 2. **AC 측정 가능한가** — Every AC has an observable outcome that a test can verify.
 3. **코드 architecture 명확한가** — Paths are real in the project. Module boundaries make sense.
 4. **task 분해 빠짐없는가** — Tasks cover all ACs. Dependencies correct. Each maps to specific ACs.
@@ -20,7 +20,7 @@ Read every file in the `<files_to_read>` block before any other action.
 
 ## Verification Method
 
-Read the Decide(Design) 기획서 and compare every requirement/policy against the AC list.
+Read the Decide(Design) design document and compare every requirement/policy against the AC list.
 
 ## Output
 

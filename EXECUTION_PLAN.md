@@ -72,27 +72,27 @@ NEEDS_CONTEXT 발생 시:
   Triage → Clear signal → Feature
   Bash("bun .blazewrit/orchestrator.ts start feature '아바타 업로드 기능 추가'")
     → flow-state.yaml 생성
-    → 반환: "Agent(analyze) 실행. prompt: ..."
+    → 반환: "Agent(ground) 실행. prompt: ..."
   │
   ▼
-호스트 LLM: Agent(analyze, prompt="...")
-  → analyze 에이전트 실행 (fresh session)
-  → .blazewrit/analysis/feature-001.md 작성
+호스트 LLM: Agent(ground, prompt="...")
+  → ground 에이전트 실행 (fresh session)
+  → .blazewrit/grounds/feature-001.md 작성
   │
   [PostToolUse(Agent) 훅 자동 발동]  ← 기계적
   → bun .blazewrit/orchestrator.ts next
-  → orchestrator: 산출물 확인 → gate 실행 → 다음 = analyze-reviewer
-  → 반환: "Agent(analyze-reviewer) 실행. prompt: '읽어라: ...'"
+  → orchestrator: 산출물 확인 → gate 실행 → 다음 = ground-reviewer
+  → 반환: "Agent(ground-reviewer) 실행. prompt: '읽어라: ...'"
   │
   ▼
-호스트 LLM: Agent(analyze-reviewer, prompt="읽어라: ...")
+호스트 LLM: Agent(ground-reviewer, prompt="읽어라: ...")
   → PASS
   │
-  [훅 발동] → orchestrator next → 기획
+  [훅 발동] → orchestrator next → investigate → ... → decide
   │
   ▼
-호스트 LLM: Agent(기획, prompt="...")
-  ...연쇄 진행...
+호스트 LLM: Agent(investigate, prompt="...") → ... → Agent(decide, prompt="...")
+  ...연쇄 진행 (Ground → Investigate → Decide → Spec? → ...)...
 ```
 
 ### 유저 개입
@@ -217,7 +217,7 @@ orchestrator.ts 내부:
 
   플로우 정의: .blazewrit/flows/{type}.md에서 읽음
     - 스텝 순서
-    - 조건부 스텝 (기획: 일부 플로우에서 생략)
+    - 조건부 스텝 (Spec: 일부 플로우에서 생략)
     - 루프 조건 (Test⇄Implement 반복)
     - Verify 실패 라우팅
 ```
