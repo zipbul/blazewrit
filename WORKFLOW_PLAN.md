@@ -143,7 +143,7 @@ Step Agent → output
 | Step | Reviewer | Reviewer checks |
 |------|----------|----------------|
 | Ground | Ground-Reviewer | subgraph entry≥1 OR `referent_unresolved` 명시, volatile 각 항목 explicit status (success/fail/timeout/skipped-with-reason), ED ambiguous/inferred·capture 실패 모두 unknowns/conflicts에 매핑, 모든 사실 항목에 `source_tool` 존재, freshness 기록 (ed_snapshot_version + git_HEAD), 해석·판단 prose 없음 |
-| Investigate | Investigate-Reviewer | impact_map이 Ground entry_nodes 모두 커버, risk_surface가 god_nodes_in_scope 각각에 대해, compatibility_verdict 명시, **ground_unknowns_addressed 매 항목 disposition + rationale + follow_up_ref 명시** (silent 미처리 0), **matrix 권장 벗어난 경우 rationale 강화 확인**, 옵션·설계 prose 없음 (Decide 영역 침범 금지) |
+| Investigate | Investigate-Reviewer | impact_map이 Ground entry_nodes 모두 커버, risk_surface가 god_nodes_in_scope 각각에 대해, compatibility_verdict 명시 (V1-V11 통과), **validity 검사 결과 명시** (no_op 시 no_op_details + evidence ref), **ground_unknowns_addressed 매 항목 disposition + rationale + follow_up_ref 명시** (silent 미처리 0), **matrix 권장 벗어난 경우 rationale 강화 확인**, 옵션·설계 prose 없음 (Decide 영역 침범 금지) |
 | Decide | Decide-Reviewer | mode 일치 (declared vs 산출물), Record: 결정+근거 1쌍 이상, Plan: 옵션 N≥2 비교 + 선택 이유 + 우선순위, Design: 기획서 (architecture+policy+userflow+req) + intent card 생성. 모든 mode: decision_record + reason 필수. ground·investigate 사실에 근거. |
 | Spec | Spec-Reviewer | 모든 정책이 AC로 변환됐는가, AC 측정 가능한가, 코드 architecture(디렉토리/파일) 명확한가, task 분해 빠짐없는가 |
 | Test | Test-Reviewer | 테스트가 행위를 검증하는가 (smoke test 아닌가), AC traceability, 엣지 케이스 커버리지 |
@@ -549,10 +549,26 @@ Ground는 conflict resolution 안 함. 단 `active_flow_state`가 새 `request_t
 1. Impact 추적          ED traversal from entry_nodes — callers/callees/data flow
 2. Constraint 식별       정책·컨트랙트·보안 자세에서 도출
 3. Risk surface         실패 모드 (impact × Ground concerns) — severity + probability + evidence
-4. Compatibility 판정    명백 호환성만 (referent 부재, 빌드 불가 등) — proceed | blocked | needs_clarification
+4. Validity 검사         Ground 사실 vs Triage 의도 target 비교 — task가 진짜 의미 있나? (no-op 감지)
+5. Compatibility 판정    명백 호환성 + Validity 결과 → proceed | blocked | needs_clarification | no_op
                         (도달 가능성·옵션 의존 판단은 Decide 영역)
-5. Unknown disposition   Ground unknowns 각각 → 6 disposition 중 1 분류 (matrix 기반, 명시 rationale)
+6. Unknown disposition   Ground unknowns 각각 → 6 disposition 중 1 분류 (matrix 기반, 명시 rationale)
 ```
+
+### Validity 검사 — Flow별 No-op 조건
+
+| Flow | No-op 검출 |
+|---|---|
+| Performance | Ground.volatile.perf_baseline ≤ Triage 요청 target |
+| Migration | Ground.dependency_audit이 이미 target version 보여줌 |
+| Bug Fix | Ground 또는 reproduce 시도에서 bug 재현 불가 (이미 fix됨) |
+| Refactor | 코드가 이미 target 패턴 준수 |
+| Chore | 변경 target이 이미 원하는 상태 (typo 없음 등) |
+| Feature | Ground.task_subgraph에 기능 이미 구현 표시 |
+| Test | Ground.coverage가 이미 target 충족 |
+| Release | git log에 신규 commits 없음 |
+
+No-op 감지 시 → `compatibility_verdict.result = no_op` + `no_op_details` 필수.
 
 ### Unknown Disposition Matrix
 
@@ -599,7 +615,7 @@ constraints: [{ source: rule|contract|security|domain, description, blocking?: b
 risk_surface: [{ area, severity: low|med|high|critical, probability: likely|possible|unlikely, evidence }]
 
 compatibility_verdict:
-  result: proceed | blocked | needs_clarification
+  result: proceed | blocked | needs_clarification | no_op
   schema_version: 1
   checked_at: ISO8601
   source_version:                                            # freshness
@@ -642,6 +658,13 @@ compatibility_verdict:
     total_found: N
     captured: 50
     summary: <string>
+
+  no_op_details?:                                            # result=no_op일 때 필수
+    reason                                                   # 왜 no-op인가
+    evidence: <ground/investigate fact ref>                  # Ground/Triage 비교 근거
+    current_state: <캡처된 사실>                              # baseline/version/coverage 등
+    target_state: <Triage 의도 추출>                          # 요청 목표
+    suggested_action: abandon | wait_for_change | reframe_request
 ```
 
 ### Compatibility Verdict — Validation Rules (mechanical)
@@ -657,6 +680,7 @@ V7. type=other → custom_type 필수
 V8. result=blocked → blockers 비어있지 않음
 V9. result=needs_clarification → open_questions 비어있지 않음
 V10. 모든 issue에 evidence 필수 (provenance)
+V11. result=no_op → no_op_details 필수 (reason + evidence + current_state + target_state + suggested_action)
 ```
 
 ### Compatibility Verdict — Stale 검출 책임
@@ -664,7 +688,16 @@ V10. 모든 issue에 evidence 필수 (provenance)
 | 누가 | 언제 | 어떻게 |
 |---|---|---|
 | Decide | Investigate 출력 수신 시 | `source_version` 현재 값과 비교 — mismatch면 Investigate 재invoke 요청 |
-| Verify | 최종 검증 | source_version 검사 + V1-V10 통과 여부 |
+| Verify | 최종 검증 | source_version 검사 + V1-V11 통과 여부 |
+
+### Compatibility Verdict — Result별 Flow 처리
+
+| result | Orchestrator 처리 |
+|---|---|
+| proceed | Decide step 진입 |
+| blocked | Flow halt + blockers를 user/caller에 surface |
+| needs_clarification | NEEDS_CONTEXT → user/caller 응답 후 Investigate 재invoke (clarifications 누적) |
+| no_op | **Flow halt + Reflect 실행** — no_op_details 학습 누적, suggested_action 따라 abandon/wait/reframe |
 
 ### Investigate Output — 나머지 schema
 
@@ -1635,6 +1668,7 @@ blazewrit provides a reference A2A server implementation (`.blazewrit/a2a/server
 - **Compatibility Verdict 구조화 (결함 #6 해결).** 단순 `{result, reason, blockers?}`였던 verdict를 *3-state result + scoped issues list + freshness*로 확장. 4 round 적대적 검증, 25 angle 공격. codex 자기 prior 권장 (`high_risk_proceed`) **over-recommendation 인정** — risk_surface와 중복. 최종 안: (1) `result: proceed|blocked|needs_clarification` 3-state 유지, (2) `issues: [{type(15 base + other), severity, scope(component/tenant/dependency/platform/sub_flow/target_set), evidence, requires_user?, blocks_flow?, suggested_followup}]` — cap 50, dedup (root_cause+scope hash, most-severe-wins), (3) `source_version` (ed_snapshot/rules_version/contracts_version) freshness, (4) `sub_flow_verdicts` Compound 전용, (5) Validation Rules V1-V10 (mechanical hook), (6) Stale 검출 책임 Decide/Verify 명시. **scope per issue가 핵심**: 없으면 Compound·partial-compat에서 over-block (codex 시뮬레이션이 입증). type taxonomy *extensible* (closed enum 금지). 시나리오 d (Performance no-op) 는 호환성 영역 밖 — task validity 결함 #11로 별도 노트.
 - **External Research Policy (결함 #8 해결).** Investigate의 외부 도구 사용이 미정의였음 — 초안 (고정 budget + 고정 tool 우선순위 + 전체 provenance)을 codex가 *5개 항목 WRONG*으로 검증: 고정 budget=arbitrary (위험·claim 수와 무관), 고정 tool 우선순위=context-dependent (freshness 검증은 WebFetch 직접 필요), "external preferred" rule=unsafe (내부 contract silent override 위험), 균일 provenance=mechanical noise, per-flow override=too crude. 최종 정책: (1) **Triggers**: claim 단위 — lib API/version compat/CVE/license/contract/standards/runtime support/registry metadata, (2) **Source eligibility** 4-tier (high: official_current·standards·source·security_advisory / medium: official_stale·changelog·registry / low: community·archive / rejected: generated_seo), (3) **Tool selection** *context-dependent* (claim 유형별 권장 매핑), (4) **Stop criteria** — sufficient_evidence·diminishing_returns·blocking_failure·safety_cap (flow별 default cap, claim-driven override 허용 with rationale), (5) **Provenance claim 중요도별** (decision_critical: 전체, background: aggregated), (6) **Conflict 처리**: external API fact는 external 채택, *내부 contract/policy는 silent override 금지* (owner review용 기록), (7) **No-results 처리** claim 중요도별 (decision_critical→compatibility issue, version_sensitive→risk, background→defer, feasibility-critical→negative signal), (8) **Failure recovery** (rate limit fallback, auth/paywall→external_inaccessible). codex 10 항목 모두 반영.
 - **Step Depth Policy — Adaptive (결함 #10 해결).** 소형 flow over-engineering 해결. 초안 (per-flow mode declaration)을 codex가 *6개 항목 WRONG*으로 검증: LLM call 수 미감소, budget 숫자 arbitrary, compat 안전망 입력 빈약, reviewer 비용 재발, matrix sprawl, looks-trivial-but-isnt 미처리. 최종 정책: 모든 step이 *default=shallow*, 명시 mechanical trigger 발동 시 deepen. (1) **Shallow/Deep 활동 분리** 각 step 정의, (2) **Mechanical caps** (wall_s + tokens) shallow/deep별, (3) **Deepen triggers** OR 매칭 (flow_type / Triage.complexity_signal / god_node detection / volatile failures / Ground.unknowns count / entry_nodes size 등 mechanical 계산), (4) **Upstream deepen request** (Decide→orchestrator→Ground/Investigate 재invoke, cap 1회), (5) **Shallow→Deep transition** (in-place escalation + fact 재사용), (6) **Reviewer checklist mechanical** (Ground-Reviewer 3 check / Investigate-Reviewer 3 check / Decide-Reviewer 3 check — LLM 판단 최소화), (7) **god_node priority** in shallow ed_query (graph degree 기반, random 5 아닌 high-degree top), (8) **token budget** (1k for shallow ed_query, arbitrary node count 대체), (9) **Triage.complexity_signal** 부수 출력 (deepen trigger 입력). **Multi-Layer Safety 7-layer**: orchestrator triggers / step caps / reviewer checklist / Verify / Reflect / provenance / freshness. 단일 layer 실수도 다른 layer catch. codex 비판 6/6 처리.
+- **Task Validity 검출 (결함 #11 해결).** Performance baseline 이미 target 도달, Migration 이미 완료 등 *작업 자체가 의미 없는* 케이스 검출 부재였음. **Investigate 책임**으로 추가 — Ground 사실 vs Triage 의도 target 비교는 *해석* 활동이므로 적합. compatibility_verdict.result 확장 **3-state → 4-state** (proceed/blocked/needs_clarification/**no_op**). no_op는 compatibility의 "can-do" 차원과 *다른 의미* ("should-do") — codex의 high_risk_proceed 거부 사유 (risk_surface와 내용 중복)와 달리 no_op는 *어디에도 중복 없는 새 차원*이라 4-state 정당화. **검출 rule per flow** (Performance: baseline ≤ target, Migration: 이미 target version, Bug Fix: reproduce 불가, Refactor: 이미 target 패턴, Chore: 이미 원하는 상태, Feature: 이미 구현, Test: coverage 충족, Release: 신규 commit 없음). **출력**: `no_op_details {reason, evidence, current_state, target_state, suggested_action: abandon|wait_for_change|reframe_request}`. **Validation V11** 추가. **Orchestrator 처리**: result=no_op → flow halt + Reflect 실행 (학습 누적). **Activities** 6번째 추가 (Validity 검사).
 - **Decide step 신설 — Decision Ownership (universal).** Step Pool 9 → 9 (기획 → Decide로 일반화). 결함 #1 (결정 소유권 공백) 해결. 기존 기획은 *기획서 산출* 함의로 conditional 처리되어 Bug Fix / Chore / P0 / Release / Bug Fix Unreproducible flow에서 결정 owner 부재 → silent decision. **Decide는 모든 flow 필수**, 산출물 깊이는 mode로 차등: Record (1줄 결정+근거) / Plan (옵션 N개 비교+선택+우선순위) / Design (기획서: architecture+policy+userflow+req + emberdeck intent card). Mode = flow definition declared + situational upgrade (옵션 N≥2 발견 시 Record→Plan). Design mode만 intent card 자동 생성. **명명 근거 (codex)**: "기획"이 한국어로 *큰 산출물* 함의 → minimal flow에서 형식적 통과·skip 압력 유발. step 이름이 *책임 (ownership)*을 가리켜야 함. Naming은 control surface (agent 역할·산출물·review 기준 매개) — semantic noise 아님. **Triage Mismatch 처리**: Investigate가 surface하면 Decide가 reclassify trigger (orchestrator 신호) — Verify까지 안 가도 됨. Compound의 sub-flow 분해/순서는 top-level Decide(Design)에서, sub-flow별 자체 Decide는 자기 mode로 실행.
 - Flow lifecycle rules added (start, suspend, resume, complete, abandon)
 - Flow state persistence added (flow-state.yaml, list structure, archive)
