@@ -17,6 +17,7 @@
 | `conversation_context` | optional | None-state turns (user 세션) |
 | `clarifications` | optional | 이전 invocation의 Q&A 누적 `[{q, a}]` |
 | `prior_evidence` | optional | reclassify용 `{prior_flow_type, evidence}` |
+| `reclassify_count` | optional (default 0) | orchestrator 추적. Triage가 cap 도달 자체 검사 — 값 ≥ 3이면 분류 시도 없이 `ambiguous(question="reclassify cap reached, manual intervention required")` 출력 강제 (escalate signal) |
 
 **입력에 `active_flow_state` 없음.** Triage는 flow 상태 모름 — orchestrator의 일.
 

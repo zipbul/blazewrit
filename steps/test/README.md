@@ -8,9 +8,15 @@ Test ⇄ Implement는 RED-GREEN-REFACTOR 루프 (Test가 RED, Implement가 GREEN
 
 ## Inputs
 
-- Spec 출력 (acceptance_criteria, tasks, code_architecture)
+**Required (정확히 하나)** — flow-conditional:
+- Spec 출력 (acceptance_criteria, tasks, code_architecture) — flow에 Spec 단계 있을 시
+- 또는 Decide 출력 (option_selection / decision_record) — Bug Fix (reproduce), Bug Fix Unreproducible (hypothesis), Migration (validate), Test flow의 Decide(Plan) 등 (Spec 없는 chain)
+
+**Optional enrichment**:
 - Investigate.risk_surface (edge case 우선순위)
 - Ground.volatile_state (현재 통과/실패 baseline)
+
+**Input contract rule**: minimum=1 of (Spec | Decide). reviewer는 flow chain 명시 따라 검증.
 
 ## Activities
 

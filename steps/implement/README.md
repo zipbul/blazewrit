@@ -6,9 +6,16 @@
 
 ## Inputs
 
-- Spec 출력 (acceptance_criteria, code_architecture, tasks)
-- Test 출력 (failing tests — must pass)
-- Decide 출력 (chosen approach)
+**Required (정확히 하나)** — flow-conditional:
+- Spec 출력 (acceptance_criteria, code_architecture, tasks) — flow에 Spec 단계 있을 시
+- 또는 Decide 출력 (decision_record / option_selection / design_document) — Bug Fix / Chore / Release / Spike / P0 flow (Spec 없는 chain)
+
+**Optional enrichment**:
+- Test 출력 (failing tests — RED) — flow에 Test 단계 있을 시 (Bug Fix Test, Refactor with coverage gap 등)
+- Investigate 출력 (constraints, risk_surface) — 항상 enrichment
+- Ground 출력 (volatile_state, task_subgraph) — 항상 enrichment
+
+**Input contract rule**: minimum=1 of (Spec | Decide). Test는 flow chain이 명시할 때만 required. reviewer는 chain 명시 따라 검증.
 
 ## Activities
 

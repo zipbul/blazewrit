@@ -310,7 +310,7 @@ Each step agent defines `tools` (allow list) or `disallowedTools` (deny list) in
 |-------|-------|------------|-----------|
 | ground | Read, Grep, Glob, Bash | emberdeck | Read-only + bash for typecheck/test/lint/git 실행. 사실 캡처 |
 | ground-reviewer | Read, Grep, Glob | — | Read-only. 사실 완전성·provenance·freshness 검증 |
-| investigate | **WebFetch, WebSearch only (외부)** + Read 한정 (CLAUDE.md/AGENTS.md/rules만) | emberdeck (query only), Context7 | 프로젝트 코드 read 금지 (Ground 책임). 외부 리서치만. Read 도구의 path restriction = `allowed_paths: [CLAUDE.md, AGENTS.md, .claude/rules/**]` — hook으로 강제. 위반 시 mechanical block. |
+| investigate | **WebFetch, WebSearch (외부)** + Read 한정 (rules + 이전 step artifact) | emberdeck (query only), Context7 | 프로젝트 *소스 코드* read 금지 (Ground 책임). 외부 리서치 + 이전 artifact는 허용. Read 도구의 path restriction = `allowed_paths: [CLAUDE.md, AGENTS.md, .claude/rules/**, .blazewrit/grounds/**, .blazewrit/investigations/**, .blazewrit/plans/**, .blazewrit/reports/**, .blazewrit/flow-state.yaml, .blazewrit/flow-history/**]` — hook으로 강제. 소스 코드 (src/**, lib/**, app/** 등) 위반 시 mechanical block. |
 | investigate-reviewer | Read, Grep, Glob | — | Read-only. 영향·제약·위험·호환성 검증, 옵션·설계 prose 금지 |
 | decide | Read, Grep, Glob, Write | emberdeck, pyreez | Write 한정 — decision record / plan / design document(Design mode). emberdeck intent card (Design만). pyreez deliberation (Plan/Design) |
 | decide-reviewer | Read, Grep, Glob | — | Read-only. mode 일치, decision+rationale, 옵션 비교 (Plan), design document 완전성 (Design) |
@@ -512,13 +512,13 @@ Cross-verify 결과 disagreement → producer retry with both feedbacks (3-fail 
 
 이전엔 "옵션 N≥2 발견" = LLM 판단. 옵션 못 찾으면 silent Record.
 
-**Mechanical force rules** (orchestrator가 평가):
-- `Investigate.compatibility_verdict.issues with severity ≥ medium ≥ 2` → Decide mode = **Plan** 강제 (declared가 record여도)
-- `Investigate.risk_surface contains severity=high` AND declared=record → **Plan** 강제
-- `Investigate.impact_map.affected_files.length ≥ 5` AND declared=record → **Plan** 강제
-- `Investigate output 에 architecture-level 영향` (mechanical detect: 신규 module/디렉토리 제안 또는 public API 변경) → **Design** 강제
+**Mechanical force rules** (orchestrator가 *Investigate 출력 필드*에 평가 — 모두 schema 필드, LLM judgment 우회):
+- `count(Investigate.compatibility_verdict.issues where severity ≥ medium) ≥ 2` → Decide mode = **Plan** 강제 (declared가 record여도)
+- `any(Investigate.risk_surface where severity = high)` AND declared=record → **Plan** 강제
+- `Investigate.impact_map.affected_files_count ≥ 5` AND declared=record → **Plan** 강제
+- `Investigate.architecture_impact.has_architecture_level == true` → **Design** 강제 (declared 무관)
 
-Decide LLM은 force된 mode로 진입. judgment 우회.
+Investigate가 derive하는 필드 (`affected_files_count`, `architecture_impact.has_architecture_level`)는 [steps/investigate/README.md schema](./steps/investigate/README.md) 참조. Decide LLM은 force된 mode로 진입.
 
 ### R7. Triage Classification Eval
 

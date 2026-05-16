@@ -59,11 +59,25 @@ impact_map:
   primary_areas: [{ node, change_kind, source: ed_traversal }]
   ripple: [{ node, distance, why }]
   external_surface: [{ contract, consumers, breaking?: bool }]
+  affected_files: [<path>, ...]               # mechanical derive from Ground.task_subgraph.entry_nodes + ripple. R6 입력
+  affected_files_count: <int>                 # = affected_files.length (R6 mechanical 평가용 캐시)
 
 constraints: [{ source: rule|contract|security|domain, description, blocking?: bool }]
 
 risk_surface: [{ area, severity: low|med|high|critical, probability: likely|possible|unlikely, evidence }]
+
+architecture_impact:                          # R6 입력 — mechanical detect
+  new_modules: [<path or symbol>, ...]        # 신규 디렉토리/모듈 제안 (Investigate가 ED graph + ripple로 derive)
+  public_api_changes: [<symbol>, ...]         # 변경되는 public symbol/contract list
+  has_architecture_level: <bool>              # = (new_modules.length > 0) OR (public_api_changes.length > 0). R6 force trigger
 ```
+
+**Derivation rules** (LLM judgment 우회, mechanical):
+- `affected_files` ← Ground.task_subgraph.entry_nodes의 file path + impact_map.ripple의 node가 file 유형이면 path 합집합. dedup.
+- `architecture_impact.new_modules` ← Investigate가 옵션 검토 중 *신규 디렉토리 path* 또는 *신규 module symbol* 발견 시 list 추가
+- `architecture_impact.public_api_changes` ← `impact_map.external_surface[].contract` 중 `breaking=true`인 항목
+- `has_architecture_level` ← orchestrator가 derived field로 자동 계산 (Investigate가 입력 안 함)
+- Investigate-Reviewer가 derivation 일관성 검증 (entry_nodes 변경 없는데 affected_files 누락 시 fail)
 
 ### ground_unknowns_addressed 스키마
 
@@ -92,7 +106,7 @@ verification_proof: { ed_queries, web_fetches?, file_reads }
 
 - ED MCP query (graph traversal — read only)
 - 외부 리서치 (WebFetch / WebSearch / Context7) — [external-research.md](./external-research.md) 정책 준수
-- Read (path-restricted): CLAUDE.md, AGENTS.md, .claude/rules/** 만 (project rules)
+- Read (path-restricted): `CLAUDE.md`, `AGENTS.md`, `.claude/rules/**` (project rules) + `.blazewrit/grounds/**`, `.blazewrit/investigations/**`, `.blazewrit/plans/**`, `.blazewrit/reports/**`, `.blazewrit/flow-state.yaml`, `.blazewrit/flow-history/**` (이전 step artifact — artifact chain 위해 필수)
 
 **Bash 도구 제거**: Investigate는 Bash 사용 안 함. git log 같은 commit history 필요 시 → Ground의 volatile_capture에서 미리 수집 (Ground 책임).
 

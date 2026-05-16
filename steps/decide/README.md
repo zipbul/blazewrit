@@ -14,11 +14,11 @@
 ## Mode 결정 방식 (Hybrid + Mechanical Force)
 
 1. flow definition이 *기본 mode* 선언 (`decide_mode: record | plan | design`)
-2. **Mechanical force (R6)** — orchestrator가 Decide 진입 전 강제:
-   - `Investigate.compatibility_verdict.issues with severity ≥ medium ≥ 2` → **Plan** 강제
-   - `Investigate.risk_surface contains severity=high` AND declared=record → **Plan** 강제
-   - `Investigate.impact_map.affected_files.length ≥ 5` AND declared=record → **Plan** 강제
-   - `Investigate output에 architecture-level 영향` (mechanical detect: 신규 module/디렉토리 제안 또는 public API 변경) → **Design** 강제
+2. **Mechanical force (R6)** — orchestrator가 *Investigate schema 필드*에 평가 (LLM judgment 우회):
+   - `count(Investigate.compatibility_verdict.issues where severity ≥ medium) ≥ 2` → **Plan** 강제
+   - `any(Investigate.risk_surface where severity=high)` AND declared=record → **Plan** 강제
+   - `Investigate.impact_map.affected_files_count ≥ 5` AND declared=record → **Plan** 강제
+   - `Investigate.architecture_impact.has_architecture_level == true` → **Design** 강제 (declared 무관)
 3. Decide LLM은 force된 mode로 진입. mode 발견 누락 hole 차단.
 4. Decide 첫 활동 (force 없을 시): Investigate의 옵션 신호 검사
    - 옵션 1개 (자명) → declared mode 그대로
