@@ -113,6 +113,65 @@ agents: ".claude/agents/*.md (17 files listed below…)"  # paraphrase
 
 위반 시 Ground-Reviewer FAIL.
 
+## R23 Constrained Count Schema
+
+모든 numeric count claim은 strict wrapper만:
+
+```yaml
+<field_name>:
+  value: <int>
+  source:
+    command: <exact bash command>
+    raw_stdout: <exact stdout>
+```
+
+bare integer (prose, `count: 16` style) 금지. wrapper 없는 숫자 = reviewer FAIL.
+
+## R24 Chain-of-Verification (CoVe) Before Emit
+
+Emit *전* 자체 검증 절차:
+
+1. Draft 작성
+2. 모든 factual claim list (atomic)
+3. 각 claim에 verify question 생성
+4. 도구 재실행으로 답변
+5. mismatch 수정 또는 BLOCKED
+6. `cove_log` 섹션 추가:
+
+```yaml
+cove_log:
+  claims_extracted:
+    - "entry_nodes count = 4"
+    - "agent files count = 16"
+  verifications:
+    - claim: "agent files count = 16"
+      question: "Re-execute ls and confirm count"
+      tool_invocation:
+        command: "ls -1 .claude/agents/ | wc -l"
+        raw_stdout: "16"
+      verdict: PASS
+```
+
+7. emit (artifact + cove_log)
+
+## R25 Self-Consistency Double-Run
+
+Critical fact (count/hash/HEAD/enumeration) emit 전 source command 2회 실행 + diff 검증:
+
+```yaml
+verification_proof:
+  tool_calls:
+    - id: t1
+      command: "ls -1 .claude/agents/ | wc -l"
+      raw_stdout_run1: "16"
+      raw_stdout_run2: "16"
+      diff: identical
+```
+
+mismatch (intermittent) → 1회 retry → 그래도 diff → BLOCKED with full diff.
+
+non-deterministic 명령 (`date`, `uuidgen`)은 whitelist만 single-run 허용.
+
 ## R22 Field Key Full Omission
 
 Tool 부재 / 데이터 부재 시 — schema key 자체 omit:

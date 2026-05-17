@@ -79,6 +79,44 @@ Ground이 emit한 facts를 *그대로 신뢰하지 않음*:
 - file 내용 claim (예: ".gitignore excludes X")는 *직접 file read*로 재검증
 - mismatch 발견 → `failure_origin: ground` + Verify에 escalate
 
+## R23 Constrained Count Schema (적용)
+
+Investigate가 emit하는 모든 count (affected_files_count, options_count 등)도 strict wrapper:
+
+```yaml
+affected_files_count:
+  value: 22
+  source:
+    command: "echo $(cat /tmp/affected_files.txt | wc -l)"
+    raw_stdout: "22"
+```
+
+bare integer 금지. Decide 이후 동일 강제.
+
+## R24 CoVe Before Emit
+
+CoVe log section 추가 (Ground 형식 동일). atomic claims → verify questions → tool answers → revise → emit + cove_log.
+
+## R26 Provenance Chain Propagation
+
+**Ground count/fact 참조 시 mere paraphrase 금지**:
+
+```yaml
+verification_proof:
+  inherited_from_ground:
+    - source_artifact: .blazewrit/grounds/<id>.md
+      tool_call_id: g1
+      command: "<copy from Ground.verification_proof.tool_calls[0]>"
+      raw_stdout: "<copy from Ground>"
+  self_executed:                    # Investigate가 직접 추가 실행한 명령
+    - id: i1
+      command: "<bash>"
+      raw_stdout: "<stdout>"
+```
+
+자체 *모든* count/fact는 inherited_from_ground 또는 self_executed에 mapping.
+unsupported claim 발견 시 reviewer FAIL.
+
 ## Completion
 
 stdout:

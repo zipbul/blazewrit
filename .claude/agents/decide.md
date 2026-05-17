@@ -117,6 +117,51 @@ Write to `.blazewrit/plans/<flow-id>-decide.md`.
 
 **R14 spec hole**: 출력 형식이 spec에 정의 안 됐는데 emit 해야 한다면 → BLOCKED.
 
+## R23 Constrained Count Schema
+
+모든 count claim (task count, requirement count, affected files 등)도 R23 wrapper:
+
+```yaml
+task_count:
+  value: 9
+  source:
+    command: "echo $(grep -c '^- id: T' decide.yaml)"
+    raw_stdout: "9"
+```
+
+bare integer 금지.
+
+## R24 CoVe Before Emit
+
+CoVe log 섹션 추가. options_deliberated의 trade-off claim, chosen rationale 등 모두 atomic claims 추출 + verify-Q + tool 답변 + 수정.
+
+## R26 Provenance Chain (CRITICAL — Decide의 historical weakness)
+
+이전 Codex round 5 발견: Decide line 29 "Ground enumerated no docs/" — Ground이 *enumerate한 적 없는* claim emit. **paraphrase laundering**.
+
+**모든 Ground/Investigate fact 인용 시**:
+- `verification_proof.inherited_from_ground` 또는 `inherited_from_investigate`에 *tool_call entry 복사*
+- 자체 추가 사실은 `self_executed`에 자기가 직접 실행한 명령 + raw_stdout
+- "Ground enumerated X" 같은 *meta-claim*은 Ground.verification_proof.tool_calls에 *실제로 등록된 command/stdout*만 cite 가능
+- 등록 안 된 command를 "Ground did X" 형식으로 attribute 금지
+
+```yaml
+verification_proof:
+  inherited_from_ground:
+    - source_artifact: .blazewrit/grounds/<id>.md
+      tool_call_id: g4
+      command: "ls -1 .claude/agents/"
+      raw_stdout: "<exact lines>"
+  inherited_from_investigate:
+    - source_artifact: .blazewrit/investigations/<id>.md
+      reference: "investigation.architecture_impact.has_architecture_level"
+      value: false
+  self_executed:
+    - id: d1
+      command: "<bash>"
+      raw_stdout: "<stdout>"
+```
+
 ## Completion
 
 stdout:

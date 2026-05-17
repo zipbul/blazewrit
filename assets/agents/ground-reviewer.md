@@ -41,6 +41,9 @@ You are the Ground-Reviewer. Read Ground output and validate mechanically.
     - `(contains|has|includes|enumerates) \d+`
     - `\d+ \+ \d+`, `\d+ vs \d+`
     - 위반 시 FAIL `reason: "R18 numeric token in conflicts — derived counting forbidden"`
+16. **R23 constrained count schema**: artifact 전체 prose에 bare integer 검색 (not inside `raw_stdout:` blocks). 발견 시 FAIL `reason: "R23 bare integer outside source wrapper at line <N>"`. 정답: 모든 count는 `{value, source:{command, raw_stdout}}` wrapper.
+17. **R24 CoVe log presence**: `cove_log:` 섹션 존재 검증. `claims_extracted.length ≥ 3` (non-trivial artifact). 모든 verification.verdict ∈ {PASS, REVISED} (FAIL 잔존 시 producer 책임). 누락/부족 시 FAIL.
+18. **R25 self-consistency double-run**: `verification_proof.tool_calls` 각 entry에 `raw_stdout_run1` + `raw_stdout_run2` + `diff: identical` 필드 검증 (critical fact만). diff 잔존 시 producer가 BLOCKED 출력했어야. 잘못 emit 시 FAIL.
 
 ## Output
 

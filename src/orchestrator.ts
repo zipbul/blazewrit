@@ -21,12 +21,52 @@ function runAgent(name:string,prompt:string):StepResult{try{const r=execSync(`cl
 function parseOut(out:string):StepResult{const r:StepResult={status:"DONE"};for(const line of out.trim().split("\n")){const t=line.trim();if(t.startsWith("STATUS:"))r.status=t.split(":")[1].trim()as any;if(t.startsWith("ARTIFACT:"))r.artifact=t.split(":").slice(1).join(":").trim();if(t.startsWith("CONCERNS:"))r.concerns=t.split(":").slice(1).join(":").trim();if(t.startsWith("REASON:"))r.reason=t.split(":").slice(1).join(":").trim();if(t.startsWith("QUESTION:"))r.question=t.split(":").slice(1).join(":").trim();if(t.startsWith("FAILURE_ORIGIN:"))r.failure_origin=t.split(":")[1].trim();if(t.startsWith("EVIDENCE:"))r.evidence=t.split(":").slice(1).join(":").trim();if(t.startsWith("RESULT:"))r.result=t.split(":")[1].trim();if(t.startsWith("VERDICT:"))r.result=t.split(":")[1].trim();}return r;}
 function readStepStatus():StepResult|null{if(!existsSync(STEP_STATUS))return null;try{const c=JSON.parse(readFileSync(STEP_STATUS,"utf-8"));unlinkSync(STEP_STATUS);return c as StepResult;}catch{if(existsSync(STEP_STATUS))unlinkSync(STEP_STATUS);return null;}}
 function runGates():{pass:boolean;error?:string}{try{execSync("bun run typecheck",{encoding:"utf-8",timeout:60000,stdio:"pipe"});}catch(e:any){if(e.status!=null)return{pass:false,error:`Typecheck: ${e.stderr||e.message}`};}try{execSync("bun test",{encoding:"utf-8",timeout:120000,stdio:"pipe"});}catch(e:any){return{pass:false,error:`Tests: ${e.stderr||e.message}`};}return{pass:true};}
+// R27 Mechanical Artifact Validator (hallucination prevention — code-level enforcement)
+function validateArtifact(artifactPath:string,step:string,expectedNextStep?:string):{pass:boolean;failures:string[]}{
+  if(!existsSync(artifactPath))return{pass:false,failures:[`artifact not found: ${artifactPath}`]};
+  const content=readFileSync(artifactPath,"utf-8");
+  const failures:string[]=[];
+  // Strip raw_stdout blocks (content INSIDE raw_stdout is exempt from prose checks)
+  const stripped=content.replace(/raw_stdout:\s*\|[\s\S]*?(?=\n\S|\n\s*\S+:|$)/g,"raw_stdout: <STRIPPED>").replace(/raw_stdout:\s*"[^"]*"/g,'raw_stdout: <STRIPPED>').replace(/raw_stdout_run[12]:\s*"[^"]*"/g,'raw_stdout_runX: <STRIPPED>').replace(/quote:\s*"[^"]*"/g,'quote: <STRIPPED>').replace(/```[\s\S]*?```/g,"<CODE_BLOCK>");
+  // R23 bare integer check (integers in prose outside raw_stdout/quote/code)
+  const lines=stripped.split("\n");
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i];
+    // skip comment lines + frontmatter delimiters + obvious metadata
+    if(/^\s*#/.test(line)||/^---$/.test(line.trim()))continue;
+    // skip lines that ARE structured fields (key: value where value is int with no context)
+    // We're looking for INTERPRETED integers in prose context: word-int-word
+    const proseInt=line.match(/(?<![\w.\-:/])\b\d{2,}\b\s+(entries|files|items|matches|rows|lines|nodes|hits|results|agents|steps|reviewers|producers|tasks|requirements)\b/i);
+    if(proseInt&&!line.includes("raw_stdout")&&!line.includes("command:")){
+      failures.push(`R23 bare integer in prose at line ${i+1}: "${line.trim().substring(0,100)}"`);
+    }
+  }
+  // R22 partial omission: key with value=null|comment placeholder. Empty list [] is legitimate (no items).
+  const partialOmit=content.match(/^[\w_-]+:\s*(#.*OMITTED|null|~|""|'')\s*$/gm);
+  if(partialOmit)failures.push(`R22 partial omissions: ${partialOmit.slice(0,3).join("; ")}`);
+  // R16 next_step check
+  if(expectedNextStep){
+    const m=content.match(/(?:^|\n)\s*(?:next_step:|## next_step\s*\n\s*)([a-z_]+)/i);
+    if(m&&m[1].trim().toLowerCase()!==expectedNextStep.toLowerCase()){
+      failures.push(`R16 chain violation: declared=${m[1].trim()} expected=${expectedNextStep}`);
+    }
+  }
+  // R24 cove_log presence (skip for verify/reflect)
+  if(!["verify","reflect","ground-reviewer","investigate-reviewer","decide-reviewer","spec-reviewer","test-reviewer","implement-reviewer","report-reviewer"].includes(step)){
+    if(!content.includes("cove_log:")&&!content.includes("## cove_log")){
+      failures.push("R24 missing cove_log section");
+    }
+  }
+  return{pass:failures.length===0,failures};
+}
 function evalCond(cond:string,flow:FlowEntry):boolean{if(cond==="scope_large"){const p=join(INVESTIGATIONS,`${flow.id}.md`);if(!existsSync(p))return false;const c=readFileSync(p,"utf-8");const a=c.split("files_to_read:")[1]||"";return a.split("\n").filter(l=>l.trim().startsWith("-")).length>=5;}if(cond==="coverage_below_80"){try{const o=execSync("bun test --coverage",{encoding:"utf-8",timeout:60000,stdio:"pipe"});const m=o.match(/(\d+\.?\d*)%/);if(m)return parseFloat(m[1])<80;}catch{}return false;}return true;}
 function buildPrompt(step:StepDef,flow:FlowEntry,fb?:string):string{const p=[`요청: ${flow.request}`,`플로우: ${flow.flow}`,`스텝: ${step.name}`];const arts=flow.completed_steps.filter(s=>s.artifact).map(s=>s.artifact!);if(arts.length){p.push("\n<files_to_read>");arts.forEach(a=>p.push(a));p.push("</files_to_read>");}if(step.depth)p.push(`\nDepth: ${step.depth}`);if(step.mode)p.push(`\nMode: ${step.mode}`);if(fb)p.push(`\n이전 시도 피드백:\n${fb}`);p.push(`\n완료 시 .blazewrit/.step-status에 JSON 상태 기록`);return p.join("\n");}
 function buildReviewPrompt(art:string){return`<files_to_read>\n${art}\n</files_to_read>`;}
 function artifactPath(flow:FlowEntry,step:StepDef):string|undefined{switch(step.name){case"ground":return join(GROUNDS,`${flow.id}.md`);case"investigate":return join(INVESTIGATIONS,`${flow.id}.md`);case"decide":return join(PLANS,`${flow.id}-decide.md`);case"spec":return join(PLANS,`${flow.id}-spec.md`);case"test":return join(TEST_RES,`${flow.id}.md`);case"implement":return join(IMPL_RES,`${flow.id}.md`);case"report":return join(REPORTS,`${flow.id}.md`);case"verify":return join(BW,`verify-${flow.id}.md`);case"reflect":return join(HISTORY,`${flow.id}.json`);default:return undefined;}}
 function hasArtifact(flow:FlowEntry,step:StepDef){const p=artifactPath(flow,step);return p?existsSync(p):false;}
-function execStep(step:StepDef,flow:FlowEntry,state:FlowState):StepResult{let fb:string|undefined=flow.feedback;flow.feedback=undefined;while(flow.attempt_count<3){console.log(`[orchestrator] Running ${step.name} (attempt ${flow.attempt_count+1}/3)`);const pr=runAgent(step.name,buildPrompt(step,flow,fb));if(pr.status==="BLOCKED"||pr.status==="NEEDS_CONTEXT")return pr;if(["test","implement"].includes(step.name)){const g=runGates();if(!g.pass){fb=`Gate: ${g.error}`;flow.attempt_count++;writeSt(state);continue;}}if(step.reviewer){const rr=runAgent(step.reviewer,buildReviewPrompt(pr.artifact||""));if(rr.result==="PASS")return pr;fb=rr.reason||rr.evidence||"Reviewer rejected";flow.attempt_count++;writeSt(state);continue;}return pr;}return{status:"DONE_WITH_CONCERNS",concerns:`Max attempts for ${step.name}`};}
+function execStep(step:StepDef,flow:FlowEntry,state:FlowState):StepResult{let fb:string|undefined=flow.feedback;flow.feedback=undefined;while(flow.attempt_count<3){console.log(`[orchestrator] Running ${step.name} (attempt ${flow.attempt_count+1}/3)`);const pr=runAgent(step.name,buildPrompt(step,flow,fb));if(pr.status==="BLOCKED"||pr.status==="NEEDS_CONTEXT")return pr;if(["test","implement"].includes(step.name)){const g=runGates();if(!g.pass){fb=`Gate: ${g.error}`;flow.attempt_count++;writeSt(state);continue;}}// R27 mechanical validator BEFORE reviewer
+if(pr.artifact){const def=readFlowDef(flow.flow);const idx=def.steps.findIndex(s=>s.name===step.name);const expectedNext=idx>=0&&idx<def.steps.length-1?def.steps[idx+1].name:undefined;const v=validateArtifact(pr.artifact,step.name,expectedNext);if(!v.pass){fb=`R27 validator: ${v.failures.join("; ")}`;flow.attempt_count++;writeSt(state);continue;}}
+if(step.reviewer){const rr=runAgent(step.reviewer,buildReviewPrompt(pr.artifact||""));if(rr.result==="PASS")return pr;fb=rr.reason||rr.evidence||"Reviewer rejected";flow.attempt_count++;writeSt(state);continue;}return pr;}return{status:"DONE_WITH_CONCERNS",concerns:`Max attempts for ${step.name}`};}
 function failRun(e:FlowEntry,r:StepResult,s:FlowState):never{e.status="suspended";if(r.status==="NEEDS_CONTEXT"){e.pending_question=r.question;writeSt(s);console.log(`ASK: ${r.question}`);process.exit(3);}e.suspend_reason=r.reason;writeSt(s);console.log(`BLOCKED: ${r.reason}`);process.exit(1);}
 function parseSubFlows(path:string):SubFlowEntry[]{const c=readFileSync(path,"utf-8");const sfs:SubFlowEntry[]=[];const m=c.match(/sub_flows:\n([\s\S]*?)(?:\n\n|\n#|$)/);if(!m)return sfs;let cur:Partial<SubFlowEntry>|null=null;for(const l of m[1].split("\n")){const t=l.trim();if(t.startsWith("- flow:")){if(cur?.flow)sfs.push({flow:cur.flow,summary:cur.summary||"",status:"pending"});cur={flow:t.split(":")[1].trim()};}else if(cur&&t.startsWith("summary:"))cur.summary=t.split(":").slice(1).join(":").trim().replace(/^["']|["']$/g,"");}if(cur?.flow)sfs.push({flow:cur.flow,summary:cur.summary||"",status:"pending"});return sfs;}
 function runCompound(e:FlowEntry,s:FlowState):boolean{if(!e.sub_flows?.length){const p=join(PLANS,`${e.id}-decide.md`);if(!existsSync(p))return false;e.sub_flows=parseSubFlows(p);writeSt(s);}for(const sf of e.sub_flows!){if(sf.status==="completed")continue;sf.status="active";writeSt(s);let def:FlowDefinition;try{def=readFlowDef(sf.flow);}catch{sf.status="failed";writeSt(s);return false;}let fail=false;for(const step of def.steps){e.step=`${sf.flow}:${step.name}`;e.attempt_count=0;writeSt(s);const r=execStep(step,e,s);if(r.status==="BLOCKED"||r.status==="NEEDS_CONTEXT"){sf.status="failed";writeSt(s);fail=true;break;}e.completed_steps.push({name:`${sf.flow}:${step.name}`,status:r.status==="DONE"?"DONE":"DONE_WITH_CONCERNS",artifact:r.artifact});}if(fail)return false;sf.status="completed";writeSt(s);}return true;}

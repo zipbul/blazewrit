@@ -854,6 +854,170 @@ R18 derived statement detection에 *numeric token prohibition* 추가:
 
 **Ground-Reviewer 추가 check (R18 강화)**: conflicts 섹션 regex scan — 위 패턴 발견 시 FAIL `reason: "R18 numeric token in conflicts — derived counting forbidden"`.
 
+### R23. Constrained Count Schema (industry hallucination-prevention pattern)
+
+Codex round 5 발견: paper rule "cite count"는 *형식*만 강제, 자유 prose에선 escape 가능. 실제 hallucination prevention은 *구조적 제약* (constrained decoding 패턴 — OpenAI structured outputs, GBNF grammar, Outlines library 등이 사용하는 기법).
+
+**모든 numeric count claim의 schema 강제 형식**:
+
+```yaml
+<any_count_field>:
+  value: <int | float>                     # 숫자 값
+  source:                                  # required wrapper
+    command: <exact bash command>          # 실행한 명령 raw text
+    raw_stdout: <exact stdout output>      # 명령의 raw stdout
+    timestamp?: <ISO 8601>                 # optional, R25 self-consistency용
+```
+
+**금지 형식**:
+- bare integer in prose: `"16 agents exist"` — REJECTED
+- summary number outside wrapper: `agent_count: 16` (no source) — REJECTED
+- arithmetic in prose: `"16 + 1 README = 17"` — REJECTED (R18 + R23)
+- paraphrased enumeration: `"agents include decide, spec, ..."` (no raw_stdout) — REJECTED
+
+**Reviewer mechanical check**:
+- regex extract all integer tokens from artifact prose (not inside `raw_stdout:` blocks)
+- 각 integer가 `source.raw_stdout` 안에 있는지 검증
+- 위반 시 FAIL `reason: "R23 bare integer outside source wrapper at line <N>"`
+
+**Constrained decoding 등가 효과**: agent가 자유롭게 숫자 생성 못 함. 모든 숫자는 *tool stdout copy-paste*만 가능. invent 차단.
+
+### R24. Chain-of-Verification (CoVe) Self-Check Before Emit
+
+Industry technique (Dhuliawala et al. 2023, "Chain-of-Verification reduces hallucination in LLMs"): generate → list claims → generate verification questions → answer with tools → revise.
+
+**모든 producer agent의 emit 전 강제 절차**:
+
+```
+Step 1: Draft generation (current behavior)
+Step 2: Claim extraction — draft에서 모든 factual claim 추출 (atomic facts)
+        예: "Ground subgraph has 4 entry nodes" → ["subgraph", "entry_nodes count = 4"]
+Step 3: Verification question generation
+        예: "What is the actual count of entry_nodes recorded in this artifact?"
+        예: "Does verification_proof.tool_calls register the command that produced this count?"
+Step 4: Re-execute (R25 self-consistency) — agent runs tools again to answer each verify-Q
+Step 5: Revise draft — mismatch 발견 시 수정. 수정 불가 시 BLOCKED.
+Step 6: Emit verified draft + CoVe log
+```
+
+**CoVe log 필드 (Output 추가)**:
+
+```yaml
+cove_log:                                  # required for all producer steps
+  claims_extracted: [<atomic claim>]
+  verifications:
+    - claim: <claim>
+      question: <verify question>
+      tool_invocation: { command, raw_stdout }
+      verdict: PASS | FAIL | REVISED
+      revision?: <what changed>
+```
+
+**Reviewer check**:
+- `cove_log.claims_extracted.length ≥ <threshold>` (e.g., ≥ 3 for non-trivial artifact)
+- 모든 verification.verdict ∈ {PASS, REVISED} (FAIL 잔존 시 reviewer FAIL)
+- claim count ≈ extracted count 일관성 (paraphrase 검출)
+
+**효과**: agent가 자기 hallucination을 *자체* 검출 + 수정. detection을 producer 단으로 끌어옴.
+
+### R25. Self-Consistency Double-Run (critical fact 검증)
+
+Industry technique (Wang et al. 2022, "Self-Consistency improves chain of thought reasoning"): 같은 query를 N번 실행, majority/exact-match로 검증.
+
+**Critical fact 정의** (R23 wrapper 사용 모든 필드):
+- count claim (R23 schema)
+- sha256 hash claim
+- git HEAD claim
+- file path enumeration
+
+**Strict double-run rule**:
+- agent가 critical fact emit 전, source command를 *2회 실행*
+- raw_stdout 정확 일치 확인 (no diff)
+- mismatch 시:
+  - retry 1회 (intermittent failure 가능)
+  - 그래도 mismatch → `STATUS: BLOCKED + REASON: "R25 self-consistency failed — <command> output non-deterministic between runs"` + 명령·두 stdout diff 포함
+
+**예외**: 자연스럽게 non-deterministic 명령 (`date`, `uuidgen`, network calls) — 명시 whitelist에서만 single-run 허용. whitelist는 `assets/tools/non-deterministic-commands.md` 별도 정의.
+
+**효과**: racing changes / intermittent tool failure / agent confusion 모두 hard error로 surface. silent acceptance 차단.
+
+### R26. Provenance Chain Propagation (downstream paraphrase 차단)
+
+Codex round 5 발견: R21이 Ground에서만 cite 강제. Investigate/Decide가 Ground claim을 *prose로 paraphrase*하면서 자기 `verification_proof.tool_calls` 안 가짐 → "Ground enumerated no docs/" 같은 fabrication 가능.
+
+**Downstream provenance rule**:
+- Investigate / Decide / Spec / Implement / Report 모두 자기 `verification_proof.tool_calls` 섹션 필수
+- upstream artifact의 count/fact 참조 시 — *upstream tool_call entry를 복사*하거나 *자기가 직접 재실행* (R25 권장)
+- mere paraphrase 금지
+
+**Carry-forward 형식**:
+
+```yaml
+# Investigate artifact:
+verification_proof:
+  inherited_from_ground:                   # upstream tool_calls 복사
+    - source_artifact: .blazewrit/grounds/<id>.md
+      tool_call_id: g1                      # Ground.verification_proof.tool_calls[0].id
+      command: <copy from Ground>
+      raw_stdout: <copy from Ground>
+  self_executed:                            # 자기가 직접 실행한 추가 tool calls
+    - id: i1
+      command: <bash>
+      raw_stdout: <stdout>
+```
+
+**Reviewer check**:
+- artifact에 등장한 *모든* count/fact를 `verification_proof.inherited_from_ground` 또는 `self_executed` 중 하나에 매핑
+- *unsupported claim* 발견 시 FAIL `reason: "R26 unsupported claim — no upstream cite or self-execution provenance"`
+
+**효과**: provenance chain이 *전 step* 강제 — 한 step만 enforce하던 R21 horizon 확장.
+
+### R27. Mechanical Validator Hook (paper → code 승격)
+
+Codex round 5 권장: paper rule만으론 reviewer LLM 판단에 의존 (detection만, prevention 약함). orchestrator code의 *hard validator*가 진짜 prevention.
+
+**`src/orchestrator.ts`에 `validateArtifact(artifact_path, step_name)` 함수 추가**:
+
+```typescript
+function validateArtifact(path: string, step: string): { pass: boolean; failures: string[] } {
+  const content = readFileSync(path, "utf-8");
+  const failures: string[] = [];
+
+  // R23 bare integer check
+  const proseIntegers = extractBareIntegersOutsideRawStdout(content);
+  if (proseIntegers.length > 0) failures.push(`R23 bare integers in prose: ${proseIntegers}`);
+
+  // R21/R26 count claim → tool_call mapping
+  const counts = extractCountClaims(content);
+  const toolCalls = extractToolCalls(content);
+  const unmapped = counts.filter(c => !toolCalls.some(t => t.raw_stdout.includes(c.value)));
+  if (unmapped.length > 0) failures.push(`R21/R26 unmapped counts: ${unmapped}`);
+
+  // R22 partial omission check
+  const partialOmits = extractPartialOmissions(content);   // value=null|empty|"# OMITTED" comment
+  if (partialOmits.length > 0) failures.push(`R22 partial omissions: ${partialOmits}`);
+
+  // R24 CoVe log presence
+  if (!content.includes("cove_log:") && step !== "verify" && step !== "reflect") {
+    failures.push("R24 missing cove_log section");
+  }
+
+  // R16 next_step match (orchestrator-provided expected_next_step)
+  const declared = extractNextStep(content);
+  const expected = getExpectedNextStep(step);
+  if (declared && declared !== expected) failures.push(`R16 chain violation: declared=${declared} expected=${expected}`);
+
+  return { pass: failures.length === 0, failures };
+}
+```
+
+**Orchestrator 통합**:
+- producer 완료 → `validateArtifact()` 호출 → fail 시 즉시 producer retry (reviewer 진입 전 차단)
+- pass 시만 reviewer로 진행
+- 3-fail retry cap (cross-cycle fail cap R3과 연동)
+
+**효과**: paper rule이 *코드*로 승격. LLM judgment 우회. true prevention.
+
 ## Quality Assurance
 
 How blazewrit guarantees output quality in fully autonomous A2A operation with no human in the loop. Organized by enforcement domain: harness (mechanical), context (information management), prompt (behavioral rules). Every mechanism cites evidence level and source.

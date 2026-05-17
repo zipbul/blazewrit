@@ -31,6 +31,12 @@ You are the Decide-Reviewer. Read Decide output and validate mechanically.
 14. **R16 downstream chain claim**: chosen_architecture / policies 안에 "downstream chain" 또는 "next flow" 같은 *flow chain* 언급 시 → flow_def verbatim 검증. 다른 chain 주장 시 FAIL.
 15. **R19 task_list 강제 (Design mode)**: mode=design인데 `task_list` 필드 누락 OR `task_list.length == 0` → FAIL `reason: "R19 missing concrete task list"`. 각 task에 `acceptance_test` + `verify_probe` 명시 필수.
 16. **R20 verify_probe 강제 (all modes)**: `requirements[*].verify_probe` 누락 시 FAIL `reason: "R20 missing verify_probe — Verify cannot mechanically validate REQ"`.
+17. **R23 constrained count**: artifact bare integer 검색 (not inside raw_stdout). 발견 시 FAIL.
+18. **R24 CoVe log**: cove_log 섹션 존재 + atomic claims + verifications.
+19. **R26 provenance chain (CRITICAL — Decide 약점)**: 
+    - 모든 fact claim이 `inherited_from_ground` / `inherited_from_investigate` / `self_executed` 중 하나에 매핑
+    - 특히 "Ground enumerated X", "Ground reported Y", "Investigate found Z" 같은 meta-attribution은 upstream tool_call ID + raw_stdout 직접 cite 필수 — paraphrase 시 FAIL
+    - 위반 시 FAIL `reason: "R26 unsupported meta-attribution — upstream tool_call not cited"`
 
 ## Output
 
