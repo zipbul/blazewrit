@@ -26,18 +26,27 @@ function validateArtifact(artifactPath:string,step:string,expectedNextStep?:stri
   if(!existsSync(artifactPath))return{pass:false,failures:[`artifact not found: ${artifactPath}`]};
   const content=readFileSync(artifactPath,"utf-8");
   const failures:string[]=[];
-  // Strip raw_stdout blocks (content INSIDE raw_stdout is exempt from prose checks)
-  const stripped=content.replace(/raw_stdout:\s*\|[\s\S]*?(?=\n\S|\n\s*\S+:|$)/g,"raw_stdout: <STRIPPED>").replace(/raw_stdout:\s*"[^"]*"/g,'raw_stdout: <STRIPPED>').replace(/raw_stdout_run[12]:\s*"[^"]*"/g,'raw_stdout_runX: <STRIPPED>').replace(/quote:\s*"[^"]*"/g,'quote: <STRIPPED>').replace(/```[\s\S]*?```/g,"<CODE_BLOCK>");
-  // R23 bare integer check (integers in prose outside raw_stdout/quote/code)
-  const lines=stripped.split("\n");
+  // R23: YAML-aware line scan. Track block scalars + code fences + frontmatter + cove_log section (claims legitimately contain integers).
+  const lines=content.split("\n");
+  let blockIndent=-1, inCodeFence=false, inFrontmatter=false, fmEnded=false, inCoveLog=false;
   for(let i=0;i<lines.length;i++){
     const line=lines[i];
-    // skip comment lines + frontmatter delimiters + obvious metadata
-    if(/^\s*#/.test(line)||/^---$/.test(line.trim()))continue;
-    // skip lines that ARE structured fields (key: value where value is int with no context)
-    // We're looking for INTERPRETED integers in prose context: word-int-word
+    if(line.trim()==="---"){if(!fmEnded){if(inFrontmatter){fmEnded=true;inFrontmatter=false;}else if(i===0){inFrontmatter=true;}}continue;}
+    if(inFrontmatter)continue;
+    if(/^```/.test(line)){inCodeFence=!inCodeFence;continue;}
+    if(inCodeFence)continue;
+    // cove_log section detection (## cove_log or cove_log: heading)
+    if(/^##\s+cove_log/i.test(line)||/^cove_log:/i.test(line)){inCoveLog=true;continue;}
+    // exit cove_log on next sibling ## section
+    if(inCoveLog&&/^##\s+/.test(line)&&!/^##\s+cove_log/i.test(line)){inCoveLog=false;}
+    if(inCoveLog)continue;
+    if(/^\s*#/.test(line)||!line.trim())continue;
+    const indent=line.match(/^(\s*)/)![1].length;
+    if(blockIndent>=0){if(indent>blockIndent)continue;blockIndent=-1;}
+    if(/:\s*[|>][\-+\d]*\s*$/.test(line)){blockIndent=indent;continue;}
+    if(/^\s*(raw_stdout(_run[12])?|quote|literal|verbatim|raw_quote(_line_\d+)?|command|claim|claims_extracted|reason|verify_probe|expected_result|expected|negative_test|target|value_provenance|source):/.test(line))continue;
     const proseInt=line.match(/(?<![\w.\-:/])\b\d{2,}\b\s+(entries|files|items|matches|rows|lines|nodes|hits|results|agents|steps|reviewers|producers|tasks|requirements)\b/i);
-    if(proseInt&&!line.includes("raw_stdout")&&!line.includes("command:")){
+    if(proseInt){
       failures.push(`R23 bare integer in prose at line ${i+1}: "${line.trim().substring(0,100)}"`);
     }
   }
