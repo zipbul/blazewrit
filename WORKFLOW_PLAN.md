@@ -774,6 +774,86 @@ requirements:
 
 **Decide/Report-Reviewer hook**: requirement 추가될 때마다 verify_probe 명시 강제. 누락 시 FAIL.
 
+### R21. Count Claim Mandatory Tool Citation (Ground hallucination prevention)
+
+Codex round 4에서 Ground이 `.claude/agents/*.md (17 files listed below…)` claim — `ls` 실행 안 하고 invent. README.md를 invent했고 실제는 16. 4 artifact 전파 후 Verify가 catch (반응적 detection만, prevention 부재).
+
+**Ground 강제 rule** (Ground-Reviewer check):
+
+모든 *count 또는 enumeration claim*은 다음 형식만 허용:
+
+```yaml
+- claim: ".claude/agents/ contains <N> files"
+  source_tool: "Bash"
+  command: "ls -1 .claude/agents/ | wc -l"
+  raw_stdout: "<exact stdout line>"
+```
+
+또는 명시 enumeration:
+
+```yaml
+- claim: ".claude/agents/ contains files: [...]"
+  source_tool: "Bash"
+  command: "ls -1 .claude/agents/"
+  raw_stdout: |
+    decide-reviewer.md
+    decide.md
+    ...
+```
+
+**금지 형식**:
+- ❌ "17 files listed below" (count without command cite)
+- ❌ "16 agents + README.md" (enumeration without raw stdout)
+- ❌ "agents/ directory contains decide/spec/test/..." (paraphrased)
+- ❌ 단순 prose count ("there are 9 step READMEs")
+
+**verification_proof.tool_calls 강제**: 모든 count claim의 source command가 `verification_proof.tool_calls` 표에 *반드시* 등록. 누락 시 Ground-Reviewer FAIL `reason: "R21 count claim without recorded tool call"`.
+
+**hallucination prevention 메커니즘**:
+- count는 *tool stdout copy-paste*만 — 기억/추측 차단
+- enumeration은 *exact line-by-line*만 — invent 차단 (README.md 같은 환각 차단)
+- Ground-Reviewer가 mechanical: artifact의 모든 count/list 추출 → tool_calls 표에서 cite 검증
+
+### R22. Field Key Full Omission (vs Value Omission)
+
+Codex round 4에서 Ground이 `god_nodes_in_scope:` key를 emit하고 *value를 "# field OMITTED" 주석으로 대체*. R18는 *value omission*만 명시 — *key 자체 omission*은 모호.
+
+**R22 명확화**:
+- Tool 부재 / 데이터 부재 시 → **schema key 자체 omit** (YAML에 키 등장 안 함)
+- "# field OMITTED" 같은 marker comment 금지 (key 등장 자체가 reader에 false signal)
+- 정답: 해당 키 없음 + `unknowns` 또는 별도 `omitted_fields:` 섹션에 사유 기록
+
+**예시 — ED 부재 시 Ground 출력**:
+```yaml
+# ed_snapshot_version: <key omitted entirely>
+# god_nodes_in_scope: <key omitted entirely>
+
+unknowns:
+  - dim: ed_query
+    reason: "emberdeck MCP not in session"
+
+omitted_fields:                  # NEW optional section — 어느 schema field가 왜 omit됐는지
+  - field: ed_snapshot_version
+    reason: "ED unavailable per unknowns.ed_query"
+  - field: god_nodes_in_scope
+    reason: "ED-degree classification unavailable; R18/R22 substitute prohibited"
+```
+
+**Reviewer mechanical check**: artifact 내 *value가 OMITTED/null/comment-only인 key* 검출 시 FAIL `reason: "R22 partial omission — key must be fully omitted, not value-comment"`. 
+
+### R18 강화: Numeric Token Prohibition in Conflicts
+
+R18 derived statement detection에 *numeric token prohibition* 추가:
+
+**conflicts 섹션 내 금지 패턴 (regex)**:
+- 숫자 + count 동의어: `\d+ (entries|files|items|matches|rows|lines|nodes|hits|results)` (e.g., "17 entries")
+- aggregation verb + 숫자: `(contains|has|includes|enumerates) \d+`
+- 산술 결과: `\d+ \+ \d+ = \d+`, `\d+ vs \d+`
+
+**정답**: conflicts에 숫자가 나오려면 *반드시 raw command stdout 안에만* — `'stdout: "17"'` 형태로 quote 안에. prose 숫자 금지.
+
+**Ground-Reviewer 추가 check (R18 강화)**: conflicts 섹션 regex scan — 위 패턴 발견 시 FAIL `reason: "R18 numeric token in conflicts — derived counting forbidden"`.
+
 ## Quality Assurance
 
 How blazewrit guarantees output quality in fully autonomous A2A operation with no human in the loop. Organized by enforcement domain: harness (mechanical), context (information management), prompt (behavioral rules). Every mechanism cites evidence level and source.

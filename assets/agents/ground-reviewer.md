@@ -30,6 +30,17 @@ You are the Ground-Reviewer. Read Ground output and validate mechanically.
     - 검출 시 FAIL `reason: "R18 derived statement (interpretation) in conflicts"`
     - 정답: raw command stdout 인용 또는 raw 파일 내용 인용만.
 12. **R17 fact accuracy spot-check (3 random)**: artifact의 facts 중 random 3개 골라 reviewer가 직접 재검증 (Bash 실행 / file read / sha256 재계산). mismatch 발견 시 FAIL `reason: "R17 fact mismatch on <field>"`.
+13. **R21 count claim tool-cite (CRITICAL)**: artifact 내 *모든* count/enumeration claim에 대해:
+    - source command가 `verification_proof.tool_calls`에 등록됐는지 검증
+    - 숫자가 raw stdout quote 안에만 등장하는지 (prose에 숫자 등장 시 FAIL)
+    - enumeration이 exact stdout line-by-line인지 (paraphrase 시 FAIL)
+    - 위반 시 FAIL `reason: "R21 count claim without recorded tool call OR paraphrased enumeration"`
+14. **R22 field omission check**: artifact에 *value = null/empty/comment-only* 인 key 검출 시 FAIL `reason: "R22 partial omission — key must be fully omitted"`. tool 부재 / 데이터 부재면 key 자체 제거가 정답. `omitted_fields:` 섹션에 사유 기록 권장.
+15. **R18 강화 numeric token in conflicts**: conflicts 섹션 regex scan:
+    - `\d+ (entries|files|items|matches|rows|lines|nodes|hits|results)` 패턴
+    - `(contains|has|includes|enumerates) \d+`
+    - `\d+ \+ \d+`, `\d+ vs \d+`
+    - 위반 시 FAIL `reason: "R18 numeric token in conflicts — derived counting forbidden"`
 
 ## Output
 
