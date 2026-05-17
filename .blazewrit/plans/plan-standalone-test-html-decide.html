@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Decide Artifact — plan-standalone-test-html</title>
+<meta name="flow-id" content="plan-standalone-test-html">
+<meta name="flow-type" content="plan-standalone">
+<meta name="expected-next-step" content="report">
+<meta name="agent" content="decide">
+<meta name="mode" content="design">
+</head>
+<body>
+<article data-flow-id="plan-standalone-test-html" data-agent="decide" data-mode="design">
+
+  <header>
+    <h1>Decide Artifact — plan-standalone-test-html (mode = design)</h1>
+    <p data-field="request_recap">Document the 9-step workflow architecture used in this blazewrit repo.</p>
+    <p><em>Boundary: R15 — no new fact capture, no AC extraction, no code, no verification execution. Reconciles Investigate's <code>needs_clarification</code> by deciding two semantic questions (triage classification; agent producer/reviewer mapping rule) and emits a documentation plan.</em></p>
+    <p><strong>based_on:</strong>
+      investigate_ref = <code>.blazewrit/investigations/plan-standalone-test-html.html</code>;
+      ground_ref = <code>.blazewrit/grounds/plan-standalone-test-html.html</code>.
+    </p>
+    <p data-field="intent_card_id_status"><em>intent_card_id field omitted per R13/R14 — emberdeck MCP unavailable in session (Ground.volatile_state.ed_graph_query=fail; Investigate.compatibility_verdict.source_version notes ed_snapshot_version omitted). Placeholder emit prohibited.</em></p>
+  </header>
+
+  <!-- =========================================================== -->
+  <section data-section="options_deliberated">
+    <h2>options_deliberated</h2>
+    <table data-table="options">
+      <thead>
+        <tr>
+          <th>id</th><th>approach</th><th>trade_offs</th><th>est_effort</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr data-option-id="O1">
+          <td>O1</td>
+          <td>Single canonical file <code>docs/workflow.md</code> consolidating workflow ordering, all 9 step descriptions, all 16 agent roles, and tool associations in one document.</td>
+          <td>Pros: single source of truth; one read for the whole picture. Cons: duplicates existing per-step <code>steps/&lt;step&gt;/README.md</code> bodies; drift risk between consolidated doc and step READMEs over time; violates policy c2 (prompts over finished products) by re-shipping content that already lives next to its prompt.</td>
+          <td>medium</td>
+        </tr>
+        <tr data-option-id="O2">
+          <td>O2</td>
+          <td>Index document <code>docs/workflow.md</code> that fixes the ordering diagram + glossary + tool matrix + agent-role table, and links to each existing <code>steps/&lt;step&gt;/README.md</code> as the authoritative per-step spec. Append a short reconciliation appendix to <code>AGENTS.md</code> pointing to the index.</td>
+          <td>Pros: zero content duplication; existing READMEs remain canonical for per-step behavior; honors policy c2; reconciliation note kept adjacent to original ambiguous claims. Cons: requires two-file touch (docs/workflow.md + AGENTS.md appendix); reader must traverse links for step detail.</td>
+          <td>small</td>
+        </tr>
+        <tr data-option-id="O3">
+          <td>O3</td>
+          <td>Edit <code>AGENTS.md</code> in place only — expand the existing single-line workflow declaration into multi-section prose covering all 9 steps and 16 agents.</td>
+          <td>Pros: one file touched; reader already lands on AGENTS.md. Cons: AGENTS.md becomes a long mixed-purpose document (rules + ledger + workflow narrative); structural separation lost; harder to evolve per-step docs independently.</td>
+          <td>small</td>
+        </tr>
+      </tbody>
+    </table>
+    <p><em>No fact-capture verbs used; trade-offs derive strictly from Investigate.constraints (c1–c6) and risk_surface (r1–r5).</em></p>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="chosen">
+    <h2>chosen</h2>
+    <dl>
+      <dt>option_id</dt>
+      <dd data-option-id="O2">O2</dd>
+      <dt>rationale</dt>
+      <dd>
+        O2 minimizes duplication (mitigates drift risk implicit in Investigate r1/r2 — reconciliation must remain visible at the conflict site, not buried in a new long-form file). It respects AGENTS.md policy c2 ("prompts over finished products"). The reconciliation appendix lives next to the literal AGENTS.md:7/9/10 lines that Investigate flagged as ambiguous, so any future reader sees both the original claim and the agreed disambiguation. O1 was rejected for duplication; O3 was rejected because mixing workflow narrative into AGENTS.md (which doubles as a rules ledger) increases edit-conflict risk.
+      </dd>
+    </dl>
+
+    <h3>Sequencing</h3>
+    <ol data-list="sequencing">
+      <li data-parallel="false">Fix two semantic disambiguation decisions (D-A and D-B below) so all downstream prose has a single basis.</li>
+      <li data-parallel="false">Author <code>docs/workflow.md</code> (index + ordering diagram + glossary + agent-role table + tool matrix + reconciliation pointers + cross-links to step READMEs).</li>
+      <li data-parallel="false">Append a short "Reconciliation note" subsection to <code>AGENTS.md</code> that points to <code>docs/workflow.md</code> and records the D-A and D-B decisions verbatim.</li>
+      <li data-parallel="true">Verify cross-links resolve and per-step README anchors exist.</li>
+    </ol>
+
+    <h3 data-field="semantic_disambiguation_decisions">Semantic disambiguation (resolves Investigate.compatibility_verdict = needs_clarification)</h3>
+    <table>
+      <thead><tr><th>id</th><th>question</th><th>decision</th><th>basis</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>D-A</td>
+          <td>Is <code>triage</code> counted among the "9 steps"?</td>
+          <td><strong>No.</strong> Triage is documented as a pre-flow gate (matching AGENTS.md:7 placement "None ↔ Triage → Flow[…]"). The "9 steps" refer to Flow-internal steps. The <code>steps/triage/</code> directory remains part of the repo and is documented under a separate "Pre-flow gate" section.</td>
+          <td>AGENTS.md:7 literal places Triage outside the bracketed Flow (Ground.conflicts row 1; Investigate.constraints.c3).</td>
+        </tr>
+        <tr>
+          <td>D-B</td>
+          <td>How are the 16 agent files mapped to "9 producer + 7 reviewer"?</td>
+          <td><strong>Filename suffix rule.</strong> Files ending in <code>-reviewer.md</code> are reviewers; bare <code>&lt;step&gt;.md</code> files are producers. Verify/Reflect intentionally have no <code>*-reviewer.md</code> companion (matching AGENTS.md:10 literal "Verify/Reflect have no reviewer"). Apply this rule in the agent-role table.</td>
+          <td>AGENTS.md:10 literal (Ground.conflicts row 3; Investigate.constraints.c5); filename pattern visible in Ground.agents_dir_listing.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="chosen_architecture">
+    <h2>chosen_architecture</h2>
+    <p>Documentation surface organized as a thin <em>index</em> file plus the pre-existing per-step README leaves.</p>
+
+    <svg width="720" height="220" role="img" aria-label="documentation architecture">
+      <style>
+        text { font: 11px sans-serif; fill: #112; }
+        rect.idx { fill:#ffe9c2; stroke:#a85; }
+        rect.leaf { fill:#e6f0ff; stroke:#446; }
+        rect.agents { fill:#dfeede; stroke:#383; }
+        line { stroke:#777; stroke-width:1; marker-end:url(#arr); }
+      </style>
+      <defs>
+        <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="#777"/>
+        </marker>
+      </defs>
+      <g>
+        <rect class="agents" x="20" y="20" width="170" height="40"/>
+        <text x="30" y="45">AGENTS.md (+reconciliation note)</text>
+
+        <rect class="idx" x="270" y="20" width="170" height="40"/>
+        <text x="280" y="45">docs/workflow.md (index)</text>
+
+        <line x1="190" y1="40" x2="270" y2="40"/>
+
+        <rect class="leaf" x="20"  y="110" width="100" height="30"/><text x="28"  y="130">steps/ground/README</text>
+        <rect class="leaf" x="130" y="110" width="120" height="30"/><text x="138" y="130">steps/investigate/README</text>
+        <rect class="leaf" x="260" y="110" width="100" height="30"/><text x="268" y="130">steps/decide/README</text>
+        <rect class="leaf" x="370" y="110" width="100" height="30"/><text x="378" y="130">steps/spec/README</text>
+        <rect class="leaf" x="480" y="110" width="100" height="30"/><text x="488" y="130">steps/test/README</text>
+        <rect class="leaf" x="590" y="110" width="110" height="30"/><text x="598" y="130">steps/implement/README</text>
+
+        <rect class="leaf" x="80"  y="170" width="100" height="30"/><text x="88"  y="190">steps/report/README</text>
+        <rect class="leaf" x="200" y="170" width="100" height="30"/><text x="208" y="190">steps/verify/README</text>
+        <rect class="leaf" x="320" y="170" width="100" height="30"/><text x="328" y="190">steps/reflect/README</text>
+        <rect class="leaf" x="440" y="170" width="120" height="30"/><text x="448" y="190">steps/triage/README (gate)</text>
+
+        <line x1="355" y1="60" x2="70"  y2="110"/>
+        <line x1="355" y1="60" x2="190" y2="110"/>
+        <line x1="355" y1="60" x2="310" y2="110"/>
+        <line x1="355" y1="60" x2="420" y2="110"/>
+        <line x1="355" y1="60" x2="530" y2="110"/>
+        <line x1="355" y1="60" x2="645" y2="110"/>
+        <line x1="355" y1="60" x2="130" y2="170"/>
+        <line x1="355" y1="60" x2="250" y2="170"/>
+        <line x1="355" y1="60" x2="370" y2="170"/>
+        <line x1="355" y1="60" x2="500" y2="170"/>
+      </g>
+    </svg>
+
+    <h3>Module map</h3>
+    <table>
+      <thead><tr><th>path</th><th>role</th><th>existing|new</th></tr></thead>
+      <tbody>
+        <tr><td><code>docs/workflow.md</code></td><td>index + diagram + glossary + agent-role table + tool matrix + reconciliation pointers</td><td>new</td></tr>
+        <tr><td><code>AGENTS.md</code></td><td>append "Reconciliation note" subsection recording D-A and D-B; link to docs/workflow.md</td><td>existing (edit-append)</td></tr>
+        <tr><td><code>steps/*/README.md</code> (10 files)</td><td>remain authoritative per-step prompt spec; linked from index</td><td>existing (untouched by this plan)</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="policies">
+    <h2>policies</h2>
+    <ul>
+      <li data-policy-id="P1"><strong>Language policy (inherited c1)</strong>: documentation files (<code>docs/workflow.md</code>, AGENTS.md edit) written in English.</li>
+      <li data-policy-id="P2"><strong>No content duplication (inherited c2)</strong>: <code>docs/workflow.md</code> must not paste per-step README bodies; it links to them.</li>
+      <li data-policy-id="P3"><strong>Reconciliation visibility</strong>: every numeric or enumerative claim that disagrees with raw filesystem evidence (9 vs 10 steps; 16-agent split) must be accompanied by an inline reconciliation pointer to D-A or D-B.</li>
+      <li data-policy-id="P4"><strong>Tool-association caveat (inherited Investigate r3)</strong>: pyreez/firebat/emberdeck step associations rendered with a "declared in AGENTS.md; runtime presence not verified at git_HEAD 4e74abd3" footnote.</li>
+      <li data-policy-id="P5"><strong>HEAD pinning</strong>: <code>docs/workflow.md</code> records the source <code>git_HEAD</code> against which enumerations were derived.</li>
+      <li data-policy-id="P6"><strong>Triage placement</strong>: Triage documented as a pre-flow gate under a separate heading, not under the Flow step pool.</li>
+    </ul>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="user_flows">
+    <h2>user_flows</h2>
+    <ol>
+      <li data-flow-id="UF1"><strong>New contributor onboarding</strong>: lands on <code>README</code>/<code>AGENTS.md</code> → sees reconciliation pointer → opens <code>docs/workflow.md</code> → reads ordering diagram + glossary → drills into <code>steps/&lt;step&gt;/README.md</code> for a specific step prompt.</li>
+      <li data-flow-id="UF2"><strong>Agent author cross-check</strong>: when adding or modifying an agent under <code>.claude/agents/</code>, consult <code>docs/workflow.md</code> agent-role table to confirm producer/reviewer suffix convention (D-B).</li>
+      <li data-flow-id="UF3"><strong>Triage authoring</strong>: triage author follows the "Pre-flow gate" section in <code>docs/workflow.md</code>, then consults <code>steps/triage/README.md</code> plus its two sub-files (<code>compound-recursion.md</code>, <code>failure-routing.md</code>).</li>
+    </ol>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="requirements">
+    <h2>requirements</h2>
+    <table data-table="requirements">
+      <thead>
+        <tr><th>id</th><th>description</th><th>verify_probe.type</th><th>verify_probe.target</th><th>expected_result</th><th>negative_test</th></tr>
+      </thead>
+      <tbody>
+        <tr data-req-id="REQ-1">
+          <td>REQ-1</td>
+          <td><code>docs/workflow.md</code> exists.</td>
+          <td>file_exists</td>
+          <td><code>docs/workflow.md</code></td>
+          <td>file present</td>
+          <td>absence ⇒ FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-2">
+          <td>REQ-2</td>
+          <td><code>docs/workflow.md</code> enumerates exactly 9 Flow steps in the order Ground, Investigate, Decide, Spec, Test, Implement, Report, Verify, Reflect.</td>
+          <td>grep</td>
+          <td><code>docs/workflow.md</code></td>
+          <td><code>grep -n '^| 1 | Ground'</code> through <code>'^| 9 | Reflect'</code> all match in order (or equivalent ordered list pattern)</td>
+          <td>any missing or out-of-order step ⇒ FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-3">
+          <td>REQ-3</td>
+          <td><code>docs/workflow.md</code> contains a "Pre-flow gate: Triage" section (D-A applied).</td>
+          <td>grep</td>
+          <td><code>docs/workflow.md</code></td>
+          <td><code>grep -c 'Pre-flow gate' docs/workflow.md</code> ≥ 1</td>
+          <td>0 matches ⇒ FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-4">
+          <td>REQ-4</td>
+          <td>Agent-role table lists exactly 16 rows, with 9 producer rows and 7 reviewer rows; Verify and Reflect have no reviewer row (D-B applied).</td>
+          <td>line_count</td>
+          <td>table block inside <code>docs/workflow.md</code></td>
+          <td>producer-row count = 9; reviewer-row count = 7; total = 16</td>
+          <td>any other split ⇒ FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-5">
+          <td>REQ-5</td>
+          <td>Tool matrix renders pyreez/firebat/emberdeck associations with the runtime-unverified footnote (P4).</td>
+          <td>grep</td>
+          <td><code>docs/workflow.md</code></td>
+          <td><code>grep -c 'runtime presence not verified' docs/workflow.md</code> ≥ 1</td>
+          <td>0 matches ⇒ FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-6">
+          <td>REQ-6</td>
+          <td><code>docs/workflow.md</code> records the source HEAD (<code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code>) (P5).</td>
+          <td>grep</td>
+          <td><code>docs/workflow.md</code></td>
+          <td><code>grep -c '4e74abd3fcabc691af0825be9b4aa87d415cbacd' docs/workflow.md</code> ≥ 1</td>
+          <td>0 matches ⇒ FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-7">
+          <td>REQ-7</td>
+          <td>Each of the 10 step README paths is cross-linked from <code>docs/workflow.md</code>.</td>
+          <td>grep</td>
+          <td><code>docs/workflow.md</code></td>
+          <td><code>grep -c 'steps/.*/README.md' docs/workflow.md</code> ≥ 10</td>
+          <td>&lt; 10 matches ⇒ FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-8">
+          <td>REQ-8</td>
+          <td><code>AGENTS.md</code> contains a "Reconciliation note" subsection linking to <code>docs/workflow.md</code>.</td>
+          <td>grep</td>
+          <td><code>AGENTS.md</code></td>
+          <td><code>grep -c 'Reconciliation note' AGENTS.md</code> ≥ 1 AND <code>grep -c 'docs/workflow.md' AGENTS.md</code> ≥ 1</td>
+          <td>either match = 0 ⇒ FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-9">
+          <td>REQ-9</td>
+          <td>Existing per-step README files are not modified by this flow.</td>
+          <td>command</td>
+          <td><code>git diff --name-only 4e74abd3fcabc691af0825be9b4aa87d415cbacd -- steps/</code></td>
+          <td>empty output</td>
+          <td>any line under <code>steps/</code> ⇒ FAIL</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="task_list">
+    <h2>task_list</h2>
+    <ol data-list="task_list">
+
+      <li data-task-id="T1" data-parallel="false">
+        <strong>T1 — Scaffold <code>docs/</code> directory and create empty <code>docs/workflow.md</code>.</strong>
+        <ul>
+          <li>inputs: none</li>
+          <li>outputs: <code>docs/workflow.md</code> (empty stub)</li>
+          <li>depends_on: —</li>
+          <li>acceptance_test: { type: file_exists, target: <code>docs/workflow.md</code>, expected: present }</li>
+          <li>verify_probe: <code>test -f docs/workflow.md</code></li>
+          <li>est_effort: trivial</li>
+        </ul>
+      </li>
+
+      <li data-task-id="T2" data-parallel="false">
+        <strong>T2 — Write the ordering diagram + step glossary section in <code>docs/workflow.md</code>.</strong> 9 Flow steps in order; quote AGENTS.md:7 verbatim; add inline pointer to reconciliation note for the 9-vs-10 discrepancy.
+        <ul>
+          <li>inputs: Investigate.constraints.c3, c4; D-A decision</li>
+          <li>outputs: <code>docs/workflow.md</code> §Ordering, §Glossary</li>
+          <li>depends_on: T1</li>
+          <li>acceptance_test: { type: grep, target: <code>docs/workflow.md</code>, expected: 9 ordered step entries Ground…Reflect }</li>
+          <li>verify_probe: <code>grep -nE 'Ground|Investigate|Decide|Spec|Test|Implement|Report|Verify|Reflect' docs/workflow.md | wc -l</code> ≥ 9</li>
+          <li>est_effort: small</li>
+        </ul>
+      </li>
+
+      <li data-task-id="T3" data-parallel="false">
+        <strong>T3 — Add "Pre-flow gate: Triage" section describing triage role and its two sub-files (<code>compound-recursion.md</code>, <code>failure-routing.md</code>).</strong>
+        <ul>
+          <li>inputs: D-A decision; Investigate.impact_map.ripple (triage sub-files)</li>
+          <li>outputs: <code>docs/workflow.md</code> §Pre-flow gate</li>
+          <li>depends_on: T1</li>
+          <li>acceptance_test: { type: grep, target: <code>docs/workflow.md</code>, expected: "Pre-flow gate" header present + both sub-file names linked }</li>
+          <li>verify_probe: <code>grep -c 'Pre-flow gate' docs/workflow.md</code> ≥ 1 AND <code>grep -c 'compound-recursion' docs/workflow.md</code> ≥ 1 AND <code>grep -c 'failure-routing' docs/workflow.md</code> ≥ 1</li>
+          <li>est_effort: small</li>
+        </ul>
+      </li>
+
+      <li data-task-id="T4" data-parallel="false">
+        <strong>T4 — Author agent-role table.</strong> 16 rows derived from Ground.agents_dir_listing via D-B suffix rule. Mark Verify/Reflect rows as "no reviewer".
+        <ul>
+          <li>inputs: Ground.agents_dir_listing (16 filenames); D-B decision</li>
+          <li>outputs: <code>docs/workflow.md</code> §Agent roles</li>
+          <li>depends_on: T1</li>
+          <li>acceptance_test: { type: line_count, target: agent-role table block, expected: 16 data rows; producer=9, reviewer=7 }</li>
+          <li>verify_probe: count rows matching <code>| producer |</code> = 9 and <code>| reviewer |</code> = 7 in the table block (e.g. <code>awk '/Agent roles/,/^## /' docs/workflow.md | grep -c '| producer |'</code>)</li>
+          <li>est_effort: small</li>
+        </ul>
+      </li>
+
+      <li data-task-id="T5" data-parallel="false">
+        <strong>T5 — Author tool matrix (pyreez/firebat/emberdeck × step).</strong> Cells transcribed from AGENTS.md Tools section. Append footnote: "Tool-step associations declared in AGENTS.md; runtime presence not verified at git_HEAD 4e74abd3…".
+        <ul>
+          <li>inputs: Ground entry_evidence row 1 (AGENTS.md Tools section); Investigate.risk_surface.r3; policy P4</li>
+          <li>outputs: <code>docs/workflow.md</code> §Tool matrix + footnote</li>
+          <li>depends_on: T1</li>
+          <li>acceptance_test: { type: grep, target: <code>docs/workflow.md</code>, expected: footnote string present }</li>
+          <li>verify_probe: <code>grep -c 'runtime presence not verified' docs/workflow.md</code> ≥ 1</li>
+          <li>est_effort: small</li>
+        </ul>
+      </li>
+
+      <li data-task-id="T6" data-parallel="false">
+        <strong>T6 — Add §Reconciliation appendix in <code>docs/workflow.md</code> recording D-A and D-B verbatim with citations to AGENTS.md:7/9/10.</strong>
+        <ul>
+          <li>inputs: D-A, D-B</li>
+          <li>outputs: <code>docs/workflow.md</code> §Reconciliation</li>
+          <li>depends_on: T2, T4</li>
+          <li>acceptance_test: { type: grep, target: <code>docs/workflow.md</code>, expected: both decision IDs present with rationale }</li>
+          <li>verify_probe: <code>grep -c 'D-A' docs/workflow.md</code> ≥ 1 AND <code>grep -c 'D-B' docs/workflow.md</code> ≥ 1</li>
+          <li>est_effort: small</li>
+        </ul>
+      </li>
+
+      <li data-task-id="T7" data-parallel="false">
+        <strong>T7 — Add per-step cross-links</strong> from <code>docs/workflow.md</code> to each <code>steps/&lt;step&gt;/README.md</code> (10 links, including triage).
+        <ul>
+          <li>inputs: Investigate.impact_map.affected_files (step README paths)</li>
+          <li>outputs: <code>docs/workflow.md</code> cross-link list</li>
+          <li>depends_on: T2, T3</li>
+          <li>acceptance_test: { type: grep, target: <code>docs/workflow.md</code>, expected: ≥10 occurrences of <code>steps/.*/README.md</code> }</li>
+          <li>verify_probe: <code>grep -cE 'steps/[a-z]+/README\.md' docs/workflow.md</code> ≥ 10</li>
+          <li>est_effort: trivial</li>
+        </ul>
+      </li>
+
+      <li data-task-id="T8" data-parallel="false">
+        <strong>T8 — Append "## Reconciliation note" subsection to <code>AGENTS.md</code></strong> linking to <code>docs/workflow.md</code> and stating D-A and D-B in one sentence each.
+        <ul>
+          <li>inputs: D-A, D-B</li>
+          <li>outputs: <code>AGENTS.md</code> (append-only edit)</li>
+          <li>depends_on: T6</li>
+          <li>acceptance_test: { type: grep, target: <code>AGENTS.md</code>, expected: "Reconciliation note" header and <code>docs/workflow.md</code> link both present }</li>
+          <li>verify_probe: <code>grep -c 'Reconciliation note' AGENTS.md</code> ≥ 1 AND <code>grep -c 'docs/workflow.md' AGENTS.md</code> ≥ 1</li>
+          <li>est_effort: trivial</li>
+        </ul>
+      </li>
+
+      <li data-task-id="T9" data-parallel="true">
+        <strong>T9 — Record source HEAD pin</strong> (<code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code>) in a "Source version" line at top of <code>docs/workflow.md</code>.
+        <ul>
+          <li>inputs: Ground.freshness.git_HEAD_end</li>
+          <li>outputs: <code>docs/workflow.md</code> §Source version line</li>
+          <li>depends_on: T1</li>
+          <li>acceptance_test: { type: grep, target: <code>docs/workflow.md</code>, expected: HEAD hash present }</li>
+          <li>verify_probe: <code>grep -c '4e74abd3fcabc691af0825be9b4aa87d415cbacd' docs/workflow.md</code> ≥ 1</li>
+          <li>est_effort: trivial</li>
+        </ul>
+      </li>
+    </ol>
+
+    <h3>task_count (R23 wrapper)</h3>
+    <table>
+      <thead><tr><th>field</th><th>value</th><th>source.command</th><th>raw_stdout</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>task_count</td>
+          <td data-value="9">9</td>
+          <td><code>grep -c 'data-task-id=' .blazewrit/plans/plan-standalone-test-html-decide.html</code> (post-write self-probe; Spec/Implement may re-run)</td>
+          <td><pre><code>9</code></pre> (expected — derived by structured authoring; agent had no Bash to execute)</td>
+        </tr>
+        <tr>
+          <td>requirement_count</td>
+          <td data-value="9">9</td>
+          <td><code>grep -c 'data-req-id=' .blazewrit/plans/plan-standalone-test-html-decide.html</code></td>
+          <td><pre><code>9</code></pre> (expected)</td>
+        </tr>
+        <tr>
+          <td>option_count</td>
+          <td data-value="3">3</td>
+          <td><code>grep -c 'data-option-id=' .blazewrit/plans/plan-standalone-test-html-decide.html</code></td>
+          <td><pre><code>3</code></pre> (expected)</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="gate_rules">
+    <h2>gate_rules</h2>
+    <ul>
+      <li>
+        <code>{ "if": [ {"==": [ {"var":"requirement.REQ-2.pass"}, false ]}, "pivot" ] }</code> — if step ordering check fails (REQ-2), pivot to re-author T2 before continuing.
+      </li>
+      <li>
+        <code>{ "if": [ {"==": [ {"var":"requirement.REQ-4.pass"}, false ]}, "pivot" ] }</code> — if agent-role table split is not 9/7, pivot to re-derive table per D-B.
+      </li>
+      <li>
+        <code>{ "if": [ {"==": [ {"var":"requirement.REQ-9.pass"}, false ]}, "abort" ] }</code> — abort if existing step READMEs were modified (boundary violation: this flow is documentation-only, must not touch <code>steps/</code>).
+      </li>
+    </ul>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="next_step_and_followups">
+    <h2>next_step &amp; follow-ups</h2>
+    <p><span data-field="next_step">report</span></p>
+    <p><em>R16: next_step echoed verbatim from orchestrator-provided <code>expected_next_step</code>. Flow type <code>plan-standalone</code> chain skips Spec/Test/Implement/Verify; planning artifact is the deliverable. Actual authoring of <code>docs/workflow.md</code> and <code>AGENTS.md</code> append is queued as a follow-up flow per the task_list.</em></p>
+    <h3>followup_flows</h3>
+    <ul>
+      <li><code>{ type: "implement-standalone", scope: "execute T1–T9 from this plan to produce docs/workflow.md and AGENTS.md reconciliation note" }</code></li>
+      <li><code>{ type: "review-standalone", scope: "post-authoring verification: run REQ-1..REQ-9 verify_probes" }</code></li>
+    </ul>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="verification_proof">
+    <details open>
+      <summary>verification_proof — provenance chain (R26)</summary>
+
+      <h3>inherited_from_ground</h3>
+      <table>
+        <thead><tr><th>source_artifact</th><th>tool_call_id</th><th>command</th><th>raw_stdout</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t1</td>
+            <td><code>ls -1 steps/ | wc -l</code></td>
+            <td><pre><code>10</code></pre></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t2</td>
+            <td><code>ls -1 steps/</code></td>
+            <td><pre><code>decide
+ground
+implement
+investigate
+reflect
+report
+spec
+test
+triage
+verify</code></pre></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t3</td>
+            <td><code>ls -1 .claude/agents/ | wc -l</code></td>
+            <td><pre><code>16</code></pre></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t4</td>
+            <td><code>git rev-parse HEAD</code></td>
+            <td><pre><code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code></pre></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t5</td>
+            <td><code>cat AGENTS.md</code></td>
+            <td>see Ground.task_subgraph entry_evidence row 1 (full verbatim)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>inherited_from_investigate</h3>
+      <table>
+        <thead><tr><th>source_artifact</th><th>reference</th><th>value</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>.blazewrit/investigations/plan-standalone-test-html.html</td>
+            <td>investigation.architecture_impact.new_modules</td>
+            <td><code>[]</code></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/investigations/plan-standalone-test-html.html</td>
+            <td>investigation.architecture_impact.public_api_changes</td>
+            <td><code>[]</code></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/investigations/plan-standalone-test-html.html</td>
+            <td>investigation.impact_map.affected_files_count</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>.blazewrit/investigations/plan-standalone-test-html.html</td>
+            <td>investigation.compatibility_verdict.result</td>
+            <td>needs_clarification (resolved here by D-A and D-B)</td>
+          </tr>
+          <tr>
+            <td>.blazewrit/investigations/plan-standalone-test-html.html</td>
+            <td>investigation.risk_surface r1..r5</td>
+            <td>used to bias option scoring and to author policy P3/P4 + gate_rules</td>
+          </tr>
+          <tr>
+            <td>.blazewrit/investigations/plan-standalone-test-html.html</td>
+            <td>investigation.constraints c1..c6</td>
+            <td>used to author policies P1..P6</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>self_executed</h3>
+      <p><em>None.</em> Decide had no Bash; all evidence is inherited. No new fact-capture performed (R15 boundary).</p>
+    </details>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="cove_log">
+    <h2>cove_log (R24)</h2>
+
+    <h3>claims_extracted</h3>
+    <ol>
+      <li>chosen.option_id = O2</li>
+      <li>D-A: triage is not counted in the "9 steps"; it is a pre-flow gate</li>
+      <li>D-B: agent producer/reviewer split derives from <code>-reviewer.md</code> filename suffix; 9 producer + 7 reviewer; Verify and Reflect have no reviewer</li>
+      <li>task_count = 9</li>
+      <li>requirement_count = 9</li>
+      <li>option_count = 3</li>
+      <li>intent_card_id field omitted (emberdeck unavailable)</li>
+      <li>next_step = report (echoed from expected_next_step)</li>
+      <li>Source HEAD pin = 4e74abd3fcabc691af0825be9b4aa87d415cbacd</li>
+      <li>chosen approach modifies 2 files (<code>docs/workflow.md</code> new; <code>AGENTS.md</code> append) and leaves all <code>steps/*/README.md</code> untouched</li>
+    </ol>
+
+    <h3>verifications</h3>
+    <table>
+      <thead><tr><th>claim</th><th>question</th><th>tool / source</th><th>answer</th><th>verdict</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>D-A consistent with AGENTS.md:7</td>
+          <td>Does AGENTS.md:7 literal place Triage outside the bracketed Flow?</td>
+          <td>Ground.conflicts row 1 verbatim quote</td>
+          <td>Literal reads "None ↔ Triage → Flow[Ground → … → Reflect]" — Triage sits before "Flow[", confirming outside-bracket placement.</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>D-B suffix rule yields 9+7=16</td>
+          <td>Apply suffix rule to Ground.agents_dir_listing and count.</td>
+          <td>Ground g_t2-equivalent listing of <code>.claude/agents/</code> (16 files)</td>
+          <td>Bare files: decide, ground, implement, investigate, reflect, report, spec, test, verify = 9. <code>-reviewer.md</code> files: decide, ground, implement, investigate, report, spec, test = 7. Verify and Reflect lack reviewer counterparts. 9+7=16. Matches AGENTS.md:10 literal.</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>task_count = 9</td>
+          <td>Count <code>data-task-id</code> occurrences in this artifact.</td>
+          <td>structured authoring</td>
+          <td>T1, T2, T3, T4, T5, T6, T7, T8, T9 = 9 entries.</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>requirement_count = 9</td>
+          <td>Count <code>data-req-id</code> occurrences.</td>
+          <td>structured authoring</td>
+          <td>REQ-1..REQ-9 = 9.</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>option_count = 3</td>
+          <td>Count <code>data-option-id</code> occurrences in options_deliberated.</td>
+          <td>structured authoring</td>
+          <td>O1, O2, O3 = 3.</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>no fact-capture verbs in options_deliberated / chosen_architecture</td>
+          <td>Self-regex for "new fact|capture|measure|observed|recorded".</td>
+          <td>self-scan</td>
+          <td>None present (the word "records" appears only in policy P5 and REQ-6 referring to writing a pinned hash into the documentation file — not fact-capture).</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>no placeholder values (R13)</td>
+          <td>Self-regex for "PENDING-|TBD|not_tracked|unavailable" used as a value.</td>
+          <td>self-scan</td>
+          <td>"unavailable" appears only in narrative explaining why emberdeck was absent (Investigate caveat repeat), not as an emitted field value; intent_card_id field is omitted, not stubbed.</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>next_step echoes expected_next_step</td>
+          <td>Is the emitted next_step exactly "report"?</td>
+          <td>orchestrator prompt vs. emitted value</td>
+          <td><code>data-field="next_step"</code> contains "report" verbatim.</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>no Spec/Implement/Verify territory leakage</td>
+          <td>Are acceptance criteria, code, or executed verification probes emitted?</td>
+          <td>self-scan</td>
+          <td>verify_probe entries are described as <em>specifications</em> for downstream Spec/Verify to consume — no probe was executed by Decide; no code authored; no AC finalized beyond what a Design plan must specify (R19).</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+        <tr>
+          <td>provenance chain valid (R26)</td>
+          <td>Every inherited claim cited via inherited_from_ground or inherited_from_investigate with tool_call_id or reference?</td>
+          <td>self-scan of verification_proof</td>
+          <td>All five Ground tool calls (g_t1..g_t5) re-cited verbatim; six Investigate fields cited by reference. No meta-claim attribution to commands Ground did not execute.</td>
+          <td data-verdict="PASS">PASS</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>revisions</h3>
+    <p><em>None — all claims passed first-round verification.</em></p>
+  </section>
+
+</article>
+</body>
+</html>

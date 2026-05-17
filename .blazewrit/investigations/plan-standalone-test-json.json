@@ -1,0 +1,327 @@
+{
+  "flow_id": "plan-standalone-test-json",
+  "based_on_ground": ".blazewrit/grounds/plan-standalone-test-json.json",
+  "schema_version": 1,
+  "impact_map": {
+    "primary_areas": [
+      {
+        "id": "AGENTS.md",
+        "path": "AGENTS.md",
+        "kind": "doc",
+        "rationale": "Ground entry node; contains conflicting count claims '(9 steps)' (line 9) and '(16 agents: 9 producer + 7 reviewer)' (line 10) that diverge from filesystem inventory (10 steps/ dirs, 16 agents)."
+      },
+      {
+        "id": "steps/",
+        "path": "steps/",
+        "kind": "directory",
+        "rationale": "Ground entry node; ls -1 enumerates 10 subdirectories including triage/, which AGENTS.md:9 'Step pool' phrasing excludes."
+      },
+      {
+        "id": ".claude/agents/",
+        "path": ".claude/agents/",
+        "kind": "directory",
+        "rationale": "Ground entry node; ls -1 enumerates 16 agent files; matches AGENTS.md:10 total but AGENTS.md decomposition '9 producer + 7 reviewer' is internally inconsistent with the 16 listed (9 producer + 7 reviewer = 16 producer/reviewer pairs minus reflect/verify reviewers — needs interpretation)."
+      },
+      {
+        "id": "package.json",
+        "path": "package.json",
+        "kind": "manifest",
+        "rationale": "Ground entry node; typecheck succeeded (exit 0), no test/lint scripts."
+      }
+    ],
+    "ripple": [
+      {
+        "id": "steps/triage/README.md",
+        "path": "steps/triage/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor; triage/ exists on filesystem but AGENTS.md:9 'Step pool' enumeration omits it (counts only 9 names) — discrepancy locus."
+      },
+      {
+        "id": "steps/ground/README.md",
+        "path": "steps/ground/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor; referenced in AGENTS.md:9 step pool."
+      },
+      {
+        "id": "steps/investigate/README.md",
+        "path": "steps/investigate/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor; referenced in AGENTS.md:9 step pool."
+      },
+      {
+        "id": "steps/decide/README.md",
+        "path": "steps/decide/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor."
+      },
+      {
+        "id": "steps/spec/README.md",
+        "path": "steps/spec/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor."
+      },
+      {
+        "id": "steps/test/README.md",
+        "path": "steps/test/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor."
+      },
+      {
+        "id": "steps/implement/README.md",
+        "path": "steps/implement/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor."
+      },
+      {
+        "id": "steps/verify/README.md",
+        "path": "steps/verify/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor."
+      },
+      {
+        "id": "steps/report/README.md",
+        "path": "steps/report/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor."
+      },
+      {
+        "id": "steps/reflect/README.md",
+        "path": "steps/reflect/README.md",
+        "relation": "step-readme",
+        "rationale": "Ground neighbor."
+      },
+      {
+        "id": ".blazewrit/orchestrator.ts",
+        "path": ".blazewrit/orchestrator.ts",
+        "relation": "orchestrator",
+        "rationale": "Ground neighbor; typechecks clean (Ground t6 exit 0)."
+      }
+    ],
+    "external_surface": [],
+    "affected_files": [
+      "AGENTS.md",
+      "steps/",
+      ".claude/agents/",
+      "package.json",
+      "steps/triage/README.md",
+      "steps/ground/README.md",
+      "steps/investigate/README.md",
+      "steps/decide/README.md",
+      "steps/spec/README.md",
+      "steps/test/README.md",
+      "steps/implement/README.md",
+      "steps/verify/README.md",
+      "steps/report/README.md",
+      "steps/reflect/README.md",
+      ".blazewrit/orchestrator.ts"
+    ],
+    "affected_files_count": {
+      "value": 15,
+      "source": {
+        "command": "count of dedup union(entry_nodes.path, neighbors.id) from Ground",
+        "raw_stdout": "15"
+      }
+    }
+  },
+  "constraints": [
+    {
+      "id": "k1",
+      "kind": "policy",
+      "statement": "AGENTS.md is project canonical instruction file (per .blazewrit/CLAUDE.md 'See AGENTS.md'); count claims therein function as normative documentation.",
+      "evidence": "Ground entry_nodes includes AGENTS.md as doc; CLAUDE.md content shown in system context."
+    },
+    {
+      "id": "k2",
+      "kind": "contract",
+      "statement": "Filesystem inventory of steps/ (10 dirs) and .claude/agents/ (16 files) is ground truth via Ground tool_calls t3/t4/t2/t5 with identical run1/run2.",
+      "evidence": "Ground.verification_proof.tool_calls t2-t5 diff=identical."
+    },
+    {
+      "id": "k3",
+      "kind": "policy",
+      "statement": "ED (emberdeck) snapshot unavailable; ED-degree-derived fields must be omitted, not substituted.",
+      "evidence": "Ground.omitted_fields[0,1] + unknowns.ed_query."
+    }
+  ],
+  "risk_surface": [
+    {
+      "id": "r1",
+      "failure_mode": "Documentation count drift: AGENTS.md:9 says '9 steps' but steps/ contains 10 entries including triage/.",
+      "severity": "medium",
+      "probability": "confirmed",
+      "evidence": "Ground.conflicts.c1 raw_evidence (AGENTS.md:9 vs ls steps/ stdout)."
+    },
+    {
+      "id": "r2",
+      "failure_mode": "Agent decomposition arithmetic inconsistency: AGENTS.md:10 claims '9 producer + 7 reviewer' totalling 16, but filesystem shows 16 files where producer count = 10 (decide, ground, implement, investigate, reflect, report, spec, test, verify — note no triage agent file) and reviewer count = 7 (no reflect-reviewer, no verify-reviewer, no triage-reviewer).",
+      "severity": "medium",
+      "probability": "confirmed",
+      "evidence": "Ground.conflicts.c2 raw_evidence; counting agent files from t5 stdout."
+    },
+    {
+      "id": "r3",
+      "failure_mode": "Triage step's status ambiguous: directory exists (steps/triage/) but no triage agent file in .claude/agents/ — orchestration role of triage not surfaced in AGENTS.md step pool.",
+      "severity": "medium",
+      "probability": "confirmed",
+      "evidence": "Ground t4 lists 'triage/'; Ground t5 lists no 'triage*.md' agent file; AGENTS.md:7 'None (free conversation) ↔ Triage → Flow[...]' positions Triage as a pre-flow stage."
+    },
+    {
+      "id": "r4",
+      "failure_mode": "Omission risk in count reporting: emit '9 steps' verbatim from AGENTS.md without filesystem reconciliation would propagate stale count downstream.",
+      "severity": "low",
+      "probability": "possible",
+      "evidence": "Ground.unknowns.request_phrasing_vs_repo_inventory."
+    }
+  ],
+  "architecture_impact": {
+    "new_modules": [],
+    "public_api_changes": [],
+    "has_architecture_level": false
+  },
+  "validity_check": {
+    "ground_facts_summary": "Ground provides: AGENTS.md:9 phrasing '(9 steps)'; AGENTS.md:10 phrasing '(16 agents: 9 producer + 7 reviewer — Verify/Reflect have no reviewer)'; ls steps/ enumerates 10 directories (decide ground implement investigate reflect report spec test triage verify); ls .claude/agents/ enumerates 16 files; typecheck exit 0; git HEAD stable at 4e74abd; working tree dirty on WORKFLOW_PLAN.md only.",
+    "triage_intent_target": "plan-standalone flow_type; interpret '9-step workflow architecture' referent against repo inventory.",
+    "no_op_detection": "Not a no-op: Ground.conflicts c1+c2 surface real divergence between documentation phrasing and filesystem inventory that requires interpretation.",
+    "task_meaningful": true
+  },
+  "compatibility_verdict": {
+    "result": "needs_clarification",
+    "source_version": {
+      "git_head": "4e74abd3fcabc691af0825be9b4aa87d415cbacd"
+    },
+    "issues": [
+      {
+        "id": "v1",
+        "summary": "Ambiguity: does '9-step workflow' refer to AGENTS.md:9 step pool (excludes triage) or filesystem inventory (10 dirs including triage)?",
+        "blocks": false,
+        "ground_ref": "Ground.unknowns.request_phrasing_vs_repo_inventory + Ground.conflicts.c1"
+      },
+      {
+        "id": "v2",
+        "summary": "Agent decomposition (9 producer + 7 reviewer) vs filesystem listing requires explicit role mapping (triage has no agent file; reflect/verify have no reviewer).",
+        "blocks": false,
+        "ground_ref": "Ground.conflicts.c2"
+      }
+    ]
+  },
+  "ground_unknowns_addressed": [
+    {
+      "ground_unknown_dim": "ed_query",
+      "disposition": "deferred_irrelevant",
+      "rationale": "Documentation/inventory flow; ED graph not required for interpretation of count claims."
+    },
+    {
+      "ground_unknown_dim": "perf_baseline",
+      "disposition": "deferred_irrelevant",
+      "rationale": "No runtime/perf-affecting change in scope."
+    },
+    {
+      "ground_unknown_dim": "dependency_audit",
+      "disposition": "deferred_irrelevant",
+      "rationale": "Not requested by flow_type."
+    },
+    {
+      "ground_unknown_dim": "request_phrasing_vs_repo_inventory",
+      "disposition": "elevated_to_clarification",
+      "rationale": "Drives compatibility_verdict.result = needs_clarification (v1)."
+    }
+  ],
+  "verification_proof": {
+    "inherited_from_ground": [
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t1",
+        "command": "git rev-parse HEAD",
+        "raw_stdout": "4e74abd3fcabc691af0825be9b4aa87d415cbacd"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t2",
+        "command": "ls -1 .claude/agents/ | wc -l",
+        "raw_stdout": "16"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t3",
+        "command": "ls -1 steps/ | wc -l",
+        "raw_stdout": "10"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t4",
+        "command": "ls -1 steps/",
+        "raw_stdout": "decide/\nground/\nimplement/\ninvestigate/\nreflect/\nreport/\nspec/\ntest/\ntriage/\nverify/"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t5",
+        "command": "ls -1 .claude/agents/",
+        "raw_stdout": "decide-reviewer.md\ndecide.md\nground-reviewer.md\nground.md\nimplement-reviewer.md\nimplement.md\ninvestigate-reviewer.md\ninvestigate.md\nreflect.md\nreport-reviewer.md\nreport.md\nspec-reviewer.md\nspec.md\ntest-reviewer.md\ntest.md\nverify.md"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t6",
+        "command": "npx tsc --noEmit; echo EXIT=$?",
+        "raw_stdout": "TypeScript compilation completed\nEXIT=0"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t7",
+        "command": "git status --short",
+        "raw_stdout": " M WORKFLOW_PLAN.md"
+      }
+    ],
+    "self_executed": []
+  },
+  "cove_log": {
+    "claims_extracted": [
+      "affected_files_count = 15 derived from union of 4 entry_nodes paths + 11 neighbor ids",
+      "primary_areas drawn exclusively from Ground.task_subgraph.entry_nodes (4 items)",
+      "ripple drawn exclusively from Ground.task_subgraph.neighbors (11 items)",
+      "architecture_impact.new_modules = [] (none derived from Ground ripple)",
+      "architecture_impact.public_api_changes = [] (no external_surface entries with breaking=true)",
+      "compatibility_verdict.result = needs_clarification driven by Ground.unknowns.request_phrasing_vs_repo_inventory and conflicts c1/c2",
+      "source_version contains only git_head; ed_snapshot_version omitted per Ground.omitted_fields",
+      "risk r1 confirmed by Ground.conflicts.c1; r2 by c2; r3 by t4+t5 cross-reference"
+    ],
+    "verifications": [
+      {
+        "claim": "affected_files_count = 15",
+        "question": "Count entry_nodes (4) + neighbors (11) from Ground",
+        "tool_invocation": { "command": "len(Ground.entry_nodes)+len(Ground.neighbors)", "result": "4+11=15" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "compatibility_verdict.result is enum member",
+        "question": "Is 'needs_clarification' in {proceed,blocked,needs_clarification,no_op,partial_proceed}?",
+        "tool_invocation": { "command": "enum check", "result": "yes" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "source_version omits ed_snapshot_version",
+        "question": "Does Ground.omitted_fields list ed_snapshot_version?",
+        "tool_invocation": { "command": "grep ed_snapshot_version Ground.omitted_fields", "result": "present with reason 'ED (emberdeck) unavailable'" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "Triage has no agent file",
+        "question": "Does Ground t5 stdout contain any 'triage' substring?",
+        "tool_invocation": { "command": "grep triage <Ground.t5.raw_stdout>", "result": "no match" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "AGENTS.md:9 literal phrase '(9 steps)' present",
+        "question": "Does Ground.conflicts.c1 quote contain '(9 steps)'?",
+        "tool_invocation": { "command": "string search", "result": "match" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "architecture_impact.new_modules = []",
+        "question": "Are any neighbors flagged as new modules in Ground?",
+        "tool_invocation": { "command": "scan Ground neighbors for 'new' relation", "result": "none" },
+        "verdict": "PASS"
+      }
+    ],
+    "revisions": []
+  }
+}

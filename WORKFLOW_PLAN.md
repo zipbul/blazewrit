@@ -1018,6 +1018,175 @@ function validateArtifact(path: string, step: string): { pass: boolean; failures
 
 **효과**: paper rule이 *코드*로 승격. LLM judgment 우회. true prevention.
 
+### R28-R36: Industry 10/10 Path (Codex round 7 cross-tool comparison)
+
+Codex가 spec-kit/GSD-2/GSD-1/MetaGPT example과 직접 비교 — blazewrit가 Ground 8.40 / Investigate 8.25 (1위), Decide 8.05 (GSD-2 8.40에 밀림). 만점 도달 위한 차용:
+
+### R28. Word-Integer Detection (Ground/Investigate/Decide)
+
+Codex round 6에서 발견된 escape route: "Eleven edit sites", "nine step READMEs" 같은 영어 word-integer가 `\d+` regex 우회.
+
+**Validator extension** (orchestrator.ts):
+- Regex: `\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)\s+(entries|files|items|agents|steps|reviewers|...)\b/i`
+- 검출 시 R23 violation, producer retry
+
+### R29. Execution Metadata Required
+
+Codex: "double-run fraud 가능 — LLM이 같은 값 두 번 적었을 수도".
+
+**모든 tool_call entry 강제 추가 필드**:
+```yaml
+- id: t1
+  command: <bash>
+  raw_stdout_run1: <stdout>
+  exec_meta_run1:
+    pid: <int>
+    timestamp_ms: <unix epoch>
+    exit_code: <int>
+    duration_ms: <int>
+  raw_stdout_run2: <stdout>
+  exec_meta_run2:
+    pid: <int>
+    timestamp_ms: <unix epoch>
+    exit_code: <int>
+    duration_ms: <int>
+  diff: identical
+```
+
+**Validator check**: `exec_meta_run1.pid != exec_meta_run2.pid` AND `exec_meta_run1.timestamp_ms != exec_meta_run2.timestamp_ms` (distinct executions 증명). 동일 PID면 FAIL.
+
+### R30. Orchestrator-side Re-execute Verification
+
+Codex: "verifier evidence is independently replayable" 필요. LLM self-attestation 신뢰 안 함.
+
+**orchestrator validateArtifact() 확장**:
+- artifact의 모든 `tool_calls`에서 command extract
+- 각 command를 orchestrator가 *직접 execSync*로 재실행
+- 결과를 artifact의 `raw_stdout` 또는 `raw_stdout_run1`과 비교
+- mismatch 시 producer가 거짓 emit한 것 → `failure_origin: <step>` + `reason: "R30 fabricated tool output"`
+
+**Whitelist된 명령만 자동 재실행** (안전 위해): `ls`, `wc`, `grep`, `cat`, `git rev-parse`, `git status`, `git log`, `sha256sum`, `find`, `stat`. 다른 명령은 sandbox 없으면 skip + warn.
+
+### R31. CoVe Must Have Real Revision
+
+Codex: "all-PASS cove_log = suspicious. assertion by inspection, not independent verification".
+
+**Reviewer + validator check**:
+- `cove_log.verifications`에 최소 1개 `verdict: REVISED` OR 명시 `verdict: PASS` rationale에 "external recheck" 증거 (예: re-execute output diff)
+- 모든 verdict가 PASS이고 rationale이 단순 "matches" 형식 → reviewer FAIL `reason: "R31 CoVe contains no real verification (all-PASS + assertion only)"`
+
+**Adversarial 강제**: producer가 *고의로 ambiguous claim* 하나 포함 → CoVe가 *catch + REVISE* 또는 BLOCKED. claims_extracted에 최소 1개 "marginal claim"이 있어야 함 (uncertain enough to potentially fail).
+
+### R32. Forbid Derived Commands
+
+Codex: `affected_files_count: wc -l <<< list-above` — derived form, not isolated tool call.
+
+**Validator check on command field**:
+- 금지 pattern: `<<<`, `<(...)`, multiple piped processes (`|` count > 2), in-process expression (`$(...)` nested)
+- 정답: *isolated whitelist commands*만 (ls, wc, grep, cat, git, sha256sum, find, stat)
+- 위반 시 FAIL `reason: "R32 derived command not allowed"`
+
+### R33. spec-kit Task List Patterns (Decide.task_list 차용)
+
+spec-kit `/tasks` template (`.research/spec-kit/templates/tasks-template.md`)의 best-in-class 패턴 차용 — Decide.task_list에 spec-kit 형식 강제:
+
+```yaml
+task_list:
+  - id: T001
+    description: <imperative action>
+    parallel_marker: bool                # spec-kit [P] equivalent
+    story: <US1 | US2 | US3>             # user story grouping
+    phase: setup | foundational | story_n | polish
+    depends_on: [T002, T005]
+    file_paths: [<exact path>]           # spec-kit "exact file paths in descriptions"
+    independent_test: <description>      # MVP-able indication
+    acceptance_test: { type, target, expected }
+    verify_probe: <bash>
+```
+
+**Decide-Reviewer check**:
+- task_list 각 항목에 `parallel_marker`, `phase`, `file_paths`, `independent_test` 명시
+- task ID는 `T001` 형식 (zero-padded)
+- 동일 file에 작업하는 tasks는 `parallel_marker=false` (mutual exclusion)
+
+### R34. ADR-style Decision Record (Decide 차용 from spec-kit + GSD-2)
+
+Decide(Design) 추가 schema field:
+
+```yaml
+adr:                                     # Architecture Decision Record (ADR-001 형식)
+  id: ADR-001
+  context: <문제 + 제약>
+  decision: <선택된 option_id>
+  status: proposed | accepted | superseded
+  consequences:
+    positive: [...]
+    negative: [...]
+  weighted_scoring:                       # 가중치 부여 option 비교
+    criteria:
+      - name: factual_accuracy, weight: 0.25
+      - name: maintainability, weight: 0.25
+      - name: cost, weight: 0.20
+      - name: latency, weight: 0.15
+      - name: risk, weight: 0.15
+    scores:
+      opt-A: { factual: 7, maintain: 6, cost: 8, latency: 7, risk: 7, weighted_total: 7.0 }
+      opt-B: { factual: 9, maintain: 8, cost: 7, latency: 8, risk: 8, weighted_total: 8.05 }
+  rollback_criteria:                      # GSD-2 quality gate equivalent
+    triggers:
+      - "<measurable condition>"
+    rollback_action: <revert command or follow-up flow>
+  drift_detection:                        # GSD-2 quality gate
+    metric: <name>
+    baseline: <value>
+    threshold: <delta>
+    check_frequency: <interval>
+```
+
+### R35. Dependency Graph + Downstream Consumer Contract (Investigate)
+
+Investigate output 추가 field — codex 권장:
+
+```yaml
+dependency_graph:                         # impact ripple as explicit graph
+  nodes: [{ id, type, path }]
+  edges: [{ from, to, relation: depends_on | called_by | uses | implements }]
+downstream_consumer_contract:             # 다음 step (Decide)이 받아야 할 contract
+  expected_inputs:
+    - field: <name>
+      type: <type>
+      source: <where in Investigate output>
+  expected_artifacts:
+    - path: <expected output path>
+      content_schema: <ref>
+```
+
+### R36. Line-Number Anchor + Source Manifest (Ground)
+
+Codex: "모든 인용에 자동 line-number anchor 추가; machine-readable source manifest".
+
+Ground output 추가 field:
+
+```yaml
+source_manifest:                          # machine-readable
+  - path: AGENTS.md
+    sha256: <hash>
+    line_count: 22
+    cited_lines: [7, 9, 10]               # 어느 line들이 cited됐는지
+    last_modified: <epoch>
+  - path: WORKFLOW_PLAN.md
+    sha256: <hash>
+    line_count: 1048
+    cited_lines: [3, 16, 21, 31, 130-148]
+    last_modified: <epoch>
+
+# All citations in artifact MUST use form:
+#   <path>:<line> or <path>:<start>-<end>
+# Validator extracts all `<path>:<int>` patterns and verifies they exist in source_manifest.cited_lines
+```
+
+**Validator check**: 모든 file:line reference가 source_manifest에 등록 + sha256 verifiable.
+
 ## Quality Assurance
 
 How blazewrit guarantees output quality in fully autonomous A2A operation with no human in the loop. Organized by enforcement domain: harness (mechanical), context (information management), prompt (behavioral rules). Every mechanism cites evidence level and source.

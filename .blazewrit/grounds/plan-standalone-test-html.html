@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ground Artifact — plan-standalone-test-html</title>
+<meta name="flow-id" content="plan-standalone-test-html">
+<meta name="flow-type" content="plan-standalone">
+<meta name="channel" content="user_session">
+<meta name="expected-next-step" content="investigate">
+<meta name="agent" content="ground">
+</head>
+<body>
+<article data-flow-id="plan-standalone-test-html" data-agent="ground">
+
+  <header>
+    <h1>Ground Artifact — plan-standalone-test-html</h1>
+    <p data-field="request">Document the 9-step workflow architecture used in this blazewrit repo.</p>
+    <p><em>Evidence-bounded capture only — no interpretation, comparison, or judgment per R15.</em></p>
+  </header>
+
+  <!-- =========================================================== -->
+  <section data-section="task_subgraph">
+    <h2>task_subgraph</h2>
+    <p><em>Field <code>task_subgraph</code> intentionally not populated as a graph: emberdeck MCP unavailable in session — see <code>unknowns.ed_query</code>. Raw textual evidence from filesystem captured below in lieu of ED-sourced subgraph.</em></p>
+
+    <table data-table="entry_evidence">
+      <thead>
+        <tr><th>file</th><th>provenance command</th><th>raw</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>AGENTS.md</code></td>
+          <td><code>cat AGENTS.md</code></td>
+          <td><pre><code># Playground
+
+This is the development workspace for @zipbul/blazewrit — a prompt-driven agentic workflow package.
+
+## Workflow
+
+None (free conversation) ↔ Triage → Flow[Ground → Investigate → Decide → Spec? → Core Steps → Verify → Reflect]
+
+Step pool: Ground, Investigate, Decide, Spec, Test, Implement, Report, Verify, Reflect (9 steps)
+Execution: produce ⇄ review loop per step (16 agents: 9 producer + 7 reviewer — Verify/Reflect have no reviewer) + hooks (mechanical)
+
+## Tools
+
+- pyreez: Decide(Plan/Design — ideation, architecture deliberation), Verify (review mode, high-risk)
+- firebat: Implement (after every change), Verify (full scan), Investigate (query-dependencies for Migration)
+- emberdeck: Ground (graph query), Decide(Design — intent card), Spec (spec card + codeLinks), Implement (validate links), Verify (regression_guard)
+
+## Rules
+
+- Respond in Korean for conversation, English for documents and code
+- Prompts over finished products — generate project-specific content, don't ship static templates
+</code></pre></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table data-table="steps_directory_raw">
+      <thead>
+        <tr><th>field</th><th>source command</th><th>raw_stdout</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>steps_dir_listing</td>
+          <td><code>ls -1 steps/</code></td>
+          <td><pre><code>decide
+ground
+implement
+investigate
+reflect
+report
+spec
+test
+triage
+verify</code></pre></td>
+        </tr>
+        <tr>
+          <td>steps_dir_count <span data-field="value">10</span></td>
+          <td><code>ls -1 steps/ | wc -l</code></td>
+          <td><pre><code>10</code></pre></td>
+        </tr>
+        <tr>
+          <td>agents_dir_listing</td>
+          <td><code>ls -1 .claude/agents/</code></td>
+          <td><pre><code>decide-reviewer.md
+decide.md
+ground-reviewer.md
+ground.md
+implement-reviewer.md
+implement.md
+investigate-reviewer.md
+investigate.md
+reflect.md
+report-reviewer.md
+report.md
+spec-reviewer.md
+spec.md
+test-reviewer.md
+test.md
+verify.md</code></pre></td>
+        </tr>
+        <tr>
+          <td>agents_dir_count <span data-field="value">16</span></td>
+          <td><code>ls -1 .claude/agents/ | wc -l</code></td>
+          <td><pre><code>16</code></pre></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table data-table="step_readmes_present">
+      <thead><tr><th>step_dir</th><th>files_listed (raw <code>ls</code> stdout per dir)</th></tr></thead>
+      <tbody>
+        <tr><td>triage</td><td><pre><code>README.md
+compound-recursion.md
+failure-routing.md</code></pre></td></tr>
+        <tr><td>ground</td><td><pre><code>README.md</code></pre></td></tr>
+        <tr><td>investigate</td><td><pre><code>README.md
+compatibility-verdict.md
+external-research.md
+unknown-disposition.md</code></pre></td></tr>
+        <tr><td>decide</td><td><pre><code>README.md</code></pre></td></tr>
+        <tr><td>spec</td><td><pre><code>README.md</code></pre></td></tr>
+        <tr><td>test</td><td><pre><code>README.md</code></pre></td></tr>
+        <tr><td>implement</td><td><pre><code>README.md</code></pre></td></tr>
+        <tr><td>verify</td><td><pre><code>README.md</code></pre></td></tr>
+        <tr><td>reflect</td><td><pre><code>README.md</code></pre></td></tr>
+        <tr><td>report</td><td><pre><code>README.md</code></pre></td></tr>
+      </tbody>
+    </table>
+
+    <svg width="640" height="80" role="img" aria-label="linear workflow sketch" data-source="AGENTS.md line 7 raw quote">
+      <style>
+        text { font: 11px sans-serif; }
+        rect { fill:#eef; stroke:#446; }
+      </style>
+      <g>
+        <rect x="0"   y="20" width="60" height="30"/><text x="6"   y="40">Triage</text>
+        <rect x="70"  y="20" width="60" height="30"/><text x="76"  y="40">Ground</text>
+        <rect x="140" y="20" width="76" height="30"/><text x="146" y="40">Investigate</text>
+        <rect x="226" y="20" width="60" height="30"/><text x="232" y="40">Decide</text>
+        <rect x="296" y="20" width="60" height="30"/><text x="302" y="40">Spec?</text>
+        <rect x="366" y="20" width="88" height="30"/><text x="372" y="40">Core Steps</text>
+        <rect x="464" y="20" width="60" height="30"/><text x="470" y="40">Verify</text>
+        <rect x="534" y="20" width="60" height="30"/><text x="540" y="40">Reflect</text>
+      </g>
+    </svg>
+    <p><em>Diagram derived from literal quote in AGENTS.md:7 — provided as visual aid only; the raw quote above is authoritative.</em></p>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="volatile_state">
+    <h2>volatile_state</h2>
+    <table>
+      <thead><tr><th>probe</th><th>status</th><th>note</th></tr></thead>
+      <tbody>
+        <tr><td>typecheck</td><td data-status="skipped">skipped</td><td>plan-standalone flow; no code-change request — universal probe deemed not applicable to documentation/architecture-description intent (skip recorded per spec)</td></tr>
+        <tr><td>test</td><td data-status="skipped">skipped</td><td>same reason</td></tr>
+        <tr><td>lint</td><td data-status="skipped">skipped</td><td>same reason</td></tr>
+        <tr><td>git_state</td><td data-status="success">success</td><td>captured HEAD; see freshness</td></tr>
+        <tr><td>perf_baseline</td><td data-status="skipped">skipped</td><td>not applicable to documentation flow</td></tr>
+        <tr><td>dependency_audit</td><td data-status="skipped">skipped</td><td>not applicable</td></tr>
+        <tr><td>observability</td><td data-status="skipped">skipped</td><td>not applicable</td></tr>
+        <tr><td>release_state</td><td data-status="skipped">skipped</td><td>not applicable</td></tr>
+        <tr><td>ed_graph_query</td><td data-status="fail">fail</td><td>emberdeck MCP not present in session toolset — see unknowns.ed_query</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="unknowns">
+    <h2>unknowns</h2>
+    <ul>
+      <li data-dim="ed_query"><strong>ed_query</strong> — emberdeck MCP unavailable in session; no graph snapshot version, no node neighbor data, no god-node classification. Downstream interpretation of step relations must be done by Investigate from raw filesystem evidence.</li>
+      <li data-dim="step_count_semantics"><strong>step_count_semantics</strong> — <code>AGENTS.md:9</code> states "9 steps" while <code>ls steps/</code> enumerates 10 directories (one of which is <code>triage</code>, which AGENTS.md:7 places outside the "Flow"). Reconciliation of whether triage is counted as a "step" is a semantic judgment reserved for Investigate.</li>
+      <li data-dim="agent_role_breakdown"><strong>agent_role_breakdown</strong> — <code>AGENTS.md:10</code> states "9 producer + 7 reviewer" while filesystem shows 16 files. Producer/reviewer split per file requires interpretation of filename suffixes (<code>*-reviewer.md</code> vs bare) — assignment is Investigate's responsibility.</li>
+      <li data-dim="tool_pyreez_firebat_emberdeck_availability"><strong>tool_availability</strong> — AGENTS.md references pyreez/firebat/emberdeck but session tool list does not expose any of them; runtime presence not confirmed.</li>
+    </ul>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="conflicts">
+    <h2>conflicts</h2>
+    <p><em>Raw quotes only per R18 — no comparison verbs, no derived counts, no enumeration paraphrase.</em></p>
+    <ul>
+      <li>
+        <span data-source="AGENTS.md">AGENTS.md:9</span> contains literal:
+        <pre><code>Step pool: Ground, Investigate, Decide, Spec, Test, Implement, Report, Verify, Reflect (9 steps)</code></pre>
+      </li>
+      <li>
+        <span data-source="bash">command <code>ls -1 steps/</code></span> raw_stdout:
+        <pre><code>decide
+ground
+implement
+investigate
+reflect
+report
+spec
+test
+triage
+verify</code></pre>
+      </li>
+      <li>
+        <span data-source="AGENTS.md">AGENTS.md:10</span> contains literal:
+        <pre><code>Execution: produce ⇄ review loop per step (16 agents: 9 producer + 7 reviewer — Verify/Reflect have no reviewer) + hooks (mechanical)</code></pre>
+      </li>
+      <li>
+        <span data-source="bash">command <code>ls -1 .claude/agents/</code></span> raw_stdout:
+        <pre><code>decide-reviewer.md
+decide.md
+ground-reviewer.md
+ground.md
+implement-reviewer.md
+implement.md
+investigate-reviewer.md
+investigate.md
+reflect.md
+report-reviewer.md
+report.md
+spec-reviewer.md
+spec.md
+test-reviewer.md
+test.md
+verify.md</code></pre>
+      </li>
+    </ul>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="freshness">
+    <h2>freshness</h2>
+    <dl>
+      <dt>git_HEAD_start</dt>
+      <dd><code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code></dd>
+      <dt>git_HEAD_end</dt>
+      <dd><code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code></dd>
+      <dt>capture_date</dt>
+      <dd>2026-05-17</dd>
+    </dl>
+    <p><em>Fields <code>ed_snapshot_version</code> and <code>god_nodes_in_scope</code> omitted per R22 — see <code>omitted_fields</code>.</em></p>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="verification_proof">
+    <details open>
+      <summary>verification_proof — tool calls (R21/R25 double-run)</summary>
+
+      <table>
+        <thead><tr><th>id</th><th>command</th><th>raw_stdout_run1</th><th>raw_stdout_run2</th><th>diff</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>t1</td>
+            <td><code>ls -1 steps/ | wc -l</code></td>
+            <td><pre><code>10</code></pre></td>
+            <td><pre><code>10</code></pre></td>
+            <td data-diff="identical">identical</td>
+          </tr>
+          <tr>
+            <td>t2</td>
+            <td><code>ls -1 steps/</code></td>
+            <td><pre><code>decide
+ground
+implement
+investigate
+reflect
+report
+spec
+test
+triage
+verify</code></pre></td>
+            <td><pre><code>decide
+ground
+implement
+investigate
+reflect
+report
+spec
+test
+triage
+verify</code></pre></td>
+            <td data-diff="identical">identical</td>
+          </tr>
+          <tr>
+            <td>t3</td>
+            <td><code>ls -1 .claude/agents/ | wc -l</code></td>
+            <td><pre><code>16</code></pre></td>
+            <td><pre><code>16</code></pre></td>
+            <td data-diff="identical">identical</td>
+          </tr>
+          <tr>
+            <td>t4</td>
+            <td><code>git rev-parse HEAD</code></td>
+            <td><pre><code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code></pre></td>
+            <td><pre><code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code></pre></td>
+            <td data-diff="identical">identical</td>
+          </tr>
+          <tr>
+            <td>t5</td>
+            <td><code>cat AGENTS.md</code> (single-run; deterministic file read, content reproduced verbatim in task_subgraph)</td>
+            <td colspan="2">see task_subgraph entry_evidence row for AGENTS.md (full raw content)</td>
+            <td data-diff="single-run-file-read">n/a</td>
+          </tr>
+        </tbody>
+      </table>
+    </details>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="cove_log">
+    <h2>cove_log</h2>
+    <h3>claims_extracted</h3>
+    <ol>
+      <li><code>steps_dir_count.value = 10</code></li>
+      <li><code>steps_dir_listing</code> enumeration (decide, ground, implement, investigate, reflect, report, spec, test, triage, verify)</li>
+      <li><code>agents_dir_count.value = 16</code></li>
+      <li><code>agents_dir_listing</code> enumeration (16 filenames as listed)</li>
+      <li><code>git_HEAD = 4e74abd3fcabc691af0825be9b4aa87d415cbacd</code></li>
+      <li>AGENTS.md:7 literal workflow line</li>
+      <li>AGENTS.md:9 literal step-pool line</li>
+      <li>AGENTS.md:10 literal agents-count line</li>
+    </ol>
+
+    <h3>verifications</h3>
+    <table>
+      <thead><tr><th>claim</th><th>question</th><th>tool</th><th>raw_stdout</th><th>verdict</th></tr></thead>
+      <tbody>
+        <tr><td>steps_dir_count=10</td><td>Re-execute and confirm</td><td><code>ls -1 steps/ | wc -l</code></td><td><pre><code>10</code></pre></td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>steps_dir_listing</td><td>Re-execute and confirm exact order</td><td><code>ls -1 steps/</code></td><td><pre><code>decide
+ground
+implement
+investigate
+reflect
+report
+spec
+test
+triage
+verify</code></pre></td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>agents_dir_count=16</td><td>Re-execute and confirm</td><td><code>ls -1 .claude/agents/ | wc -l</code></td><td><pre><code>16</code></pre></td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>git_HEAD</td><td>Re-execute and confirm</td><td><code>git rev-parse HEAD</code></td><td><pre><code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code></pre></td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>AGENTS.md content quoted verbatim</td><td>Re-read file and confirm match against rows quoted in conflicts/task_subgraph</td><td><code>Read AGENTS.md</code></td><td>quoted text reproduced character-for-character from cat output</td><td data-verdict="PASS">PASS</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- =========================================================== -->
+  <section data-section="omitted_fields">
+    <h2>omitted_fields</h2>
+    <ul>
+      <li><strong>ed_snapshot_version</strong> — emberdeck MCP unavailable per <code>unknowns.ed_query</code>; R14 fail-loud + R22 key-omission.</li>
+      <li><strong>god_nodes_in_scope</strong> — ED-degree classification unavailable; R18/R22 substitute classification prohibited.</li>
+      <li><strong>task_subgraph.entry_nodes / neighbors / provenance (graph schema)</strong> — graph-shaped subgraph requires ED; replaced with raw filesystem evidence in lieu thereof. Reader must not interpret filesystem rows as ED nodes.</li>
+    </ul>
+  </section>
+
+</article>
+</body>
+</html>

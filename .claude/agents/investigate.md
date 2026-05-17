@@ -43,9 +43,93 @@ Read every file in `<files_to_read>` before any action. Ground 출력 (`.blazewr
 
 [external-research.md](../../steps/investigate/external-research.md) 정책 준수. claim 단위 trigger. trust tier 4종.
 
-## Output
+## Output Format — HTML5 (default, Phase F empirical)
 
-Write to `.blazewrit/investigations/<flow-id>.md`. Schema: [steps/investigate/README.md § Output 구조](../../steps/investigate/README.md)
+Write to `.blazewrit/investigations/<flow-id>.html`:
+
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Investigate — {flow_id}</title>
+  <script type="application/json" id="meta">{"flow_id":"...","based_on_ground":"<path>","schema_version":1}</script>
+</head>
+<body>
+<article data-step="investigate" data-flow-id="{flow_id}">
+  <section data-section="impact_map">
+    <h2>Impact Map</h2>
+    <table data-table="primary_areas"><thead>...</thead><tbody>...</tbody></table>
+    <table data-table="ripple"><thead>...</thead><tbody>...</tbody></table>
+    <table data-table="external_surface"><thead>...</thead><tbody>...</tbody></table>
+    <span data-field="affected_files_count" data-value="22">22</span>
+    <svg data-diagram="dependency_graph">...</svg>  <!-- R35 -->
+  </section>
+
+  <section data-section="constraints">
+    <h2>Constraints</h2>
+    <ol>
+      <li data-constraint-id="c1" data-source="rule" data-blocking="false">...</li>
+      ...
+    </ol>
+  </section>
+
+  <section data-section="risk_surface">
+    <h2>Risk Surface</h2>
+    <table>
+      <thead><tr><th>id</th><th>area</th><th>severity</th><th>probability</th><th>evidence</th></tr></thead>
+      <tbody>
+        <tr data-risk-id="r1" data-severity="medium" data-probability="possible">...</tr>
+        ...
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="architecture_impact">
+    <h2>Architecture Impact</h2>
+    <ul data-field="new_modules">...</ul>
+    <ul data-field="public_api_changes">...</ul>
+    <span data-field="has_architecture_level" data-value="false">false</span>
+  </section>
+
+  <section data-section="validity_check">
+    <h2>Validity Check</h2>
+    <span data-field="no_op_detected" data-value="false">false</span>
+    <p data-field="rationale">...</p>
+  </section>
+
+  <section data-section="compatibility_verdict">
+    <h2>Compatibility Verdict</h2>
+    <span data-field="result" data-value="proceed">proceed</span>
+    <table data-table="issues">...</table>
+  </section>
+
+  <section data-section="ground_unknowns_addressed">
+    <h2>Ground Unknowns Addressed</h2>
+    <table>
+      <thead><tr><th>unknown_ref</th><th>disposition</th><th>rationale</th><th>follow_up_ref</th></tr></thead>
+      <tbody><tr data-disposition="risk">...</tr>...</tbody>
+    </table>
+  </section>
+
+  <section data-section="verification_proof">
+    <h2>Verification Proof (R26 chain)</h2>
+    <details><summary>inherited_from_ground</summary>
+      <table>...</table>
+    </details>
+    <details><summary>self_executed</summary>
+      <table>...</table>
+    </details>
+  </section>
+
+  <section data-section="cove_log">
+    <h2>CoVe (R24)</h2>
+    ...
+  </section>
+</article>
+</body>
+</html>
+```
 
 ## Boundary (R15 mechanical)
 

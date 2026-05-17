@@ -1,0 +1,232 @@
+{
+  "flow_id": "plan-standalone-test-json",
+  "flow_type": "plan-standalone",
+  "schema_version": 1,
+  "captured_at": "2026-05-17T07:56:31Z",
+  "task_subgraph": {
+    "entry_nodes": [
+      {
+        "id": "AGENTS.md",
+        "path": "AGENTS.md",
+        "kind": "doc",
+        "provenance": "filesystem read"
+      },
+      {
+        "id": "steps/",
+        "path": "steps/",
+        "kind": "directory",
+        "provenance": "ls -1 steps/"
+      },
+      {
+        "id": ".claude/agents/",
+        "path": ".claude/agents/",
+        "kind": "directory",
+        "provenance": "ls -1 .claude/agents/"
+      },
+      {
+        "id": "package.json",
+        "path": "package.json",
+        "kind": "manifest",
+        "provenance": "filesystem read"
+      }
+    ],
+    "neighbors": [
+      { "id": "steps/triage/README.md", "relation": "step-readme", "provenance": "ls steps/triage/" },
+      { "id": "steps/ground/README.md", "relation": "step-readme", "provenance": "ls steps/ground/" },
+      { "id": "steps/investigate/README.md", "relation": "step-readme", "provenance": "ls steps/investigate/" },
+      { "id": "steps/decide/README.md", "relation": "step-readme", "provenance": "ls steps/decide/" },
+      { "id": "steps/spec/README.md", "relation": "step-readme", "provenance": "ls steps/spec/" },
+      { "id": "steps/test/README.md", "relation": "step-readme", "provenance": "ls steps/test/" },
+      { "id": "steps/implement/README.md", "relation": "step-readme", "provenance": "ls steps/implement/" },
+      { "id": "steps/verify/README.md", "relation": "step-readme", "provenance": "ls steps/verify/" },
+      { "id": "steps/report/README.md", "relation": "step-readme", "provenance": "ls steps/report/" },
+      { "id": "steps/reflect/README.md", "relation": "step-readme", "provenance": "ls steps/reflect/" },
+      { "id": ".blazewrit/orchestrator.ts", "relation": "orchestrator", "provenance": "ls .blazewrit/" }
+    ]
+  },
+  "volatile_state": {
+    "typecheck": {
+      "status": "success",
+      "command": "npx tsc --noEmit",
+      "exit_code": 0,
+      "raw_stdout_tail": "TypeScript compilation completed"
+    },
+    "tests": {
+      "status": "skipped",
+      "reason": "no test script declared in package.json"
+    },
+    "lint": {
+      "status": "skipped",
+      "reason": "no lint script declared in package.json"
+    },
+    "git": {
+      "status": "success",
+      "head": "4e74abd3fcabc691af0825be9b4aa87d415cbacd",
+      "dirty": true,
+      "raw_status_stdout": " M WORKFLOW_PLAN.md"
+    }
+  },
+  "unknowns": [
+    {
+      "dim": "ed_query",
+      "reason": "emberdeck MCP not invoked in this session"
+    },
+    {
+      "dim": "perf_baseline",
+      "reason": "not applicable to documentation flow (plan-standalone)"
+    },
+    {
+      "dim": "dependency_audit",
+      "reason": "not requested by flow_type"
+    },
+    {
+      "dim": "request_phrasing_vs_repo_inventory",
+      "reason": "request mentions '9-step workflow architecture'; raw inventory of steps/ shows 10 entries — interpretation deferred to Investigate"
+    }
+  ],
+  "conflicts": [
+    {
+      "id": "c1",
+      "raw_evidence": [
+        {
+          "source": "AGENTS.md:9",
+          "quote": "Step pool: Ground, Investigate, Decide, Spec, Test, Implement, Report, Verify, Reflect (9 steps)"
+        },
+        {
+          "source": "AGENTS.md:7",
+          "quote": "None (free conversation) ↔ Triage → Flow[Ground → Investigate → Decide → Spec? → Core Steps → Verify → Reflect]"
+        },
+        {
+          "source": "ls -1 steps/ stdout",
+          "quote": "decide/\nground/\nimplement/\ninvestigate/\nreflect/\nreport/\nspec/\ntest/\ntriage/\nverify/"
+        }
+      ]
+    },
+    {
+      "id": "c2",
+      "raw_evidence": [
+        {
+          "source": "AGENTS.md:10",
+          "quote": "Execution: produce ⇄ review loop per step (16 agents: 9 producer + 7 reviewer — Verify/Reflect have no reviewer) + hooks (mechanical)"
+        },
+        {
+          "source": "ls -1 .claude/agents/ stdout",
+          "quote": "decide-reviewer.md\ndecide.md\nground-reviewer.md\nground.md\nimplement-reviewer.md\nimplement.md\ninvestigate-reviewer.md\ninvestigate.md\nreflect.md\nreport-reviewer.md\nreport.md\nspec-reviewer.md\nspec.md\ntest-reviewer.md\ntest.md\nverify.md"
+        }
+      ]
+    }
+  ],
+  "freshness": {
+    "git_head_start": "4e74abd3fcabc691af0825be9b4aa87d415cbacd",
+    "git_head_end": "4e74abd3fcabc691af0825be9b4aa87d415cbacd",
+    "racing_changes": false
+  },
+  "verification_proof": {
+    "tool_calls": [
+      {
+        "id": "t1",
+        "command": "git rev-parse HEAD",
+        "raw_stdout_run1": "4e74abd3fcabc691af0825be9b4aa87d415cbacd",
+        "raw_stdout_run2": "4e74abd3fcabc691af0825be9b4aa87d415cbacd",
+        "diff": "identical"
+      },
+      {
+        "id": "t2",
+        "command": "ls -1 .claude/agents/ | wc -l",
+        "raw_stdout_run1": "16",
+        "raw_stdout_run2": "16",
+        "diff": "identical"
+      },
+      {
+        "id": "t3",
+        "command": "ls -1 steps/ | wc -l",
+        "raw_stdout_run1": "10",
+        "raw_stdout_run2": "10",
+        "diff": "identical"
+      },
+      {
+        "id": "t4",
+        "command": "ls -1 steps/",
+        "raw_stdout_run1": "decide/\nground/\nimplement/\ninvestigate/\nreflect/\nreport/\nspec/\ntest/\ntriage/\nverify/",
+        "raw_stdout_run2": "decide/\nground/\nimplement/\ninvestigate/\nreflect/\nreport/\nspec/\ntest/\ntriage/\nverify/",
+        "diff": "identical"
+      },
+      {
+        "id": "t5",
+        "command": "ls -1 .claude/agents/",
+        "raw_stdout_run1": "decide-reviewer.md\ndecide.md\nground-reviewer.md\nground.md\nimplement-reviewer.md\nimplement.md\ninvestigate-reviewer.md\ninvestigate.md\nreflect.md\nreport-reviewer.md\nreport.md\nspec-reviewer.md\nspec.md\ntest-reviewer.md\ntest.md\nverify.md",
+        "raw_stdout_run2": "decide-reviewer.md\ndecide.md\nground-reviewer.md\nground.md\nimplement-reviewer.md\nimplement.md\ninvestigate-reviewer.md\ninvestigate.md\nreflect.md\nreport-reviewer.md\nreport.md\nspec-reviewer.md\nspec.md\ntest-reviewer.md\ntest.md\nverify.md",
+        "diff": "identical"
+      },
+      {
+        "id": "t6",
+        "command": "npx tsc --noEmit; echo EXIT=$?",
+        "raw_stdout_tail": "TypeScript compilation completed\nEXIT=0"
+      },
+      {
+        "id": "t7",
+        "command": "git status --short",
+        "raw_stdout": " M WORKFLOW_PLAN.md"
+      }
+    ]
+  },
+  "omitted_fields": [
+    {
+      "field": "ed_snapshot_version",
+      "reason": "ED (emberdeck) unavailable per unknowns.ed_query"
+    },
+    {
+      "field": "god_nodes_in_scope",
+      "reason": "ED-degree classification unavailable; R18/R22 substitute prohibited"
+    }
+  ],
+  "cove_log": {
+    "claims_extracted": [
+      "git HEAD = 4e74abd3fcabc691af0825be9b4aa87d415cbacd",
+      "ls -1 .claude/agents/ | wc -l raw_stdout = '16'",
+      "ls -1 steps/ | wc -l raw_stdout = '10'",
+      "AGENTS.md:9 contains literal '(9 steps)' phrasing",
+      "AGENTS.md:10 contains literal '(16 agents: 9 producer + 7 reviewer ...)' phrasing",
+      "typecheck exit code = 0",
+      "git status --short raw_stdout = ' M WORKFLOW_PLAN.md'"
+    ],
+    "verifications": [
+      {
+        "claim": "git HEAD",
+        "question": "Re-run git rev-parse HEAD and compare",
+        "tool_invocation": { "command": "git rev-parse HEAD", "raw_stdout": "4e74abd3fcabc691af0825be9b4aa87d415cbacd" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "agents file count",
+        "question": "Re-run ls -1 .claude/agents/ | wc -l and compare",
+        "tool_invocation": { "command": "ls -1 .claude/agents/ | wc -l", "raw_stdout": "16" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "steps dir count",
+        "question": "Re-run ls -1 steps/ | wc -l and compare",
+        "tool_invocation": { "command": "ls -1 steps/ | wc -l", "raw_stdout": "10" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "AGENTS.md literal phrasings",
+        "question": "Re-read AGENTS.md lines 7,9,10 and confirm exact quotes",
+        "tool_invocation": { "command": "Read AGENTS.md", "result": "lines 7,9,10 match quoted strings" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "typecheck exit code",
+        "question": "Re-run npx tsc --noEmit and capture exit",
+        "tool_invocation": { "command": "npx tsc --noEmit; echo EXIT=$?", "raw_stdout_tail": "TypeScript compilation completed\nEXIT=0" },
+        "verdict": "PASS"
+      },
+      {
+        "claim": "git working tree status",
+        "question": "Re-run git status --short",
+        "tool_invocation": { "command": "git status --short", "raw_stdout": " M WORKFLOW_PLAN.md" },
+        "verdict": "PASS"
+      }
+    ]
+  }
+}

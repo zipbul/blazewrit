@@ -22,10 +22,55 @@ function parseOut(out:string):StepResult{const r:StepResult={status:"DONE"};for(
 function readStepStatus():StepResult|null{if(!existsSync(STEP_STATUS))return null;try{const c=JSON.parse(readFileSync(STEP_STATUS,"utf-8"));unlinkSync(STEP_STATUS);return c as StepResult;}catch{if(existsSync(STEP_STATUS))unlinkSync(STEP_STATUS);return null;}}
 function runGates():{pass:boolean;error?:string}{try{execSync("bun run typecheck",{encoding:"utf-8",timeout:60000,stdio:"pipe"});}catch(e:any){if(e.status!=null)return{pass:false,error:`Typecheck: ${e.stderr||e.message}`};}try{execSync("bun test",{encoding:"utf-8",timeout:120000,stdio:"pipe"});}catch(e:any){return{pass:false,error:`Tests: ${e.stderr||e.message}`};}return{pass:true};}
 // R27 Mechanical Artifact Validator (hallucination prevention — code-level enforcement)
+// Phase F empirical: primary format = HTML. Validator handles HTML/JSON/MD.
 function validateArtifact(artifactPath:string,step:string,expectedNextStep?:string):{pass:boolean;failures:string[]}{
   if(!existsSync(artifactPath))return{pass:false,failures:[`artifact not found: ${artifactPath}`]};
   const content=readFileSync(artifactPath,"utf-8");
   const failures:string[]=[];
+  const isHtml=artifactPath.endsWith(".html")||content.trimStart().startsWith("<!DOCTYPE");
+  const isJson=artifactPath.endsWith(".json")||content.trimStart().startsWith("{");
+  // HTML/JSON have structured validation; MD uses legacy regex below.
+  if(isHtml){
+    // HTML R16 next_step
+    if(expectedNextStep){
+      const m=content.match(/<span\s+data-field=["']next_step["']\s+data-value=["']([^"']+)["']/i);
+      if(m&&m[1].trim().toLowerCase()!==expectedNextStep.toLowerCase()){
+        failures.push(`R16 chain violation (HTML): declared=${m[1].trim()} expected=${expectedNextStep}`);
+      }
+    }
+    // R24 cove_log presence
+    if(!["verify","reflect"].includes(step)&&!step.endsWith("-reviewer")){
+      if(!/data-section=["']cove_log["']/i.test(content))failures.push("R24 missing cove_log section (HTML)");
+    }
+    // R23 bare integer in prose — scan only text outside <pre>/<code>/<script>/data-* attribute values
+    const stripped=content
+      .replace(/<pre[\s\S]*?<\/pre>/gi,"<pre>X</pre>")
+      .replace(/<code[\s\S]*?<\/code>/gi,"<code>X</code>")
+      .replace(/<script[\s\S]*?<\/script>/gi,"<script>X</script>")
+      .replace(/<svg[\s\S]*?<\/svg>/gi,"<svg>X</svg>")
+      .replace(/data-[\w-]+=["'][^"']*["']/g,"")
+      .replace(/<[^>]+>/g," ");  // strip tags, keep text
+    const proseInt=stripped.match(/\b\d{2,}\s+(entries|files|items|agents|steps|reviewers|producers|tasks|requirements)\b/gi);
+    if(proseInt&&proseInt.length>0)failures.push(`R23 HTML prose integers: ${proseInt.slice(0,3).join(", ")}`);
+    return{pass:failures.length===0,failures};
+  }
+  if(isJson){
+    try{
+      const d=JSON.parse(content);
+      // R16
+      if(expectedNextStep&&d.next_step&&d.next_step!==expectedNextStep){
+        failures.push(`R16 chain violation (JSON): declared=${d.next_step} expected=${expectedNextStep}`);
+      }
+      // R24
+      if(!["verify","reflect"].includes(step)&&!step.endsWith("-reviewer")){
+        if(!d.cove_log)failures.push("R24 missing cove_log (JSON)");
+      }
+    }catch(e:any){
+      failures.push(`R1 JSON parse fail: ${e.message}`);
+    }
+    return{pass:failures.length===0,failures};
+  }
+  // ===== MD fallback (legacy) =====
   // R23: YAML-aware line scan. Track block scalars + code fences + frontmatter + cove_log section (claims legitimately contain integers).
   const lines=content.split("\n");
   let blockIndent=-1, inCodeFence=false, inFrontmatter=false, fmEnded=false, inCoveLog=false;
@@ -71,7 +116,7 @@ function validateArtifact(artifactPath:string,step:string,expectedNextStep?:stri
 function evalCond(cond:string,flow:FlowEntry):boolean{if(cond==="scope_large"){const p=join(INVESTIGATIONS,`${flow.id}.md`);if(!existsSync(p))return false;const c=readFileSync(p,"utf-8");const a=c.split("files_to_read:")[1]||"";return a.split("\n").filter(l=>l.trim().startsWith("-")).length>=5;}if(cond==="coverage_below_80"){try{const o=execSync("bun test --coverage",{encoding:"utf-8",timeout:60000,stdio:"pipe"});const m=o.match(/(\d+\.?\d*)%/);if(m)return parseFloat(m[1])<80;}catch{}return false;}return true;}
 function buildPrompt(step:StepDef,flow:FlowEntry,fb?:string):string{const p=[`요청: ${flow.request}`,`플로우: ${flow.flow}`,`스텝: ${step.name}`];const arts=flow.completed_steps.filter(s=>s.artifact).map(s=>s.artifact!);if(arts.length){p.push("\n<files_to_read>");arts.forEach(a=>p.push(a));p.push("</files_to_read>");}if(step.depth)p.push(`\nDepth: ${step.depth}`);if(step.mode)p.push(`\nMode: ${step.mode}`);if(fb)p.push(`\n이전 시도 피드백:\n${fb}`);p.push(`\n완료 시 .blazewrit/.step-status에 JSON 상태 기록`);return p.join("\n");}
 function buildReviewPrompt(art:string){return`<files_to_read>\n${art}\n</files_to_read>`;}
-function artifactPath(flow:FlowEntry,step:StepDef):string|undefined{switch(step.name){case"ground":return join(GROUNDS,`${flow.id}.md`);case"investigate":return join(INVESTIGATIONS,`${flow.id}.md`);case"decide":return join(PLANS,`${flow.id}-decide.md`);case"spec":return join(PLANS,`${flow.id}-spec.md`);case"test":return join(TEST_RES,`${flow.id}.md`);case"implement":return join(IMPL_RES,`${flow.id}.md`);case"report":return join(REPORTS,`${flow.id}.md`);case"verify":return join(BW,`verify-${flow.id}.md`);case"reflect":return join(HISTORY,`${flow.id}.json`);default:return undefined;}}
+function artifactPath(flow:FlowEntry,step:StepDef):string|undefined{switch(step.name){case"ground":return join(GROUNDS,`${flow.id}.html`);case"investigate":return join(INVESTIGATIONS,`${flow.id}.html`);case"decide":return join(PLANS,`${flow.id}-decide.html`);case"spec":return join(PLANS,`${flow.id}-spec.html`);case"test":return join(TEST_RES,`${flow.id}.html`);case"implement":return join(IMPL_RES,`${flow.id}.html`);case"report":return join(REPORTS,`${flow.id}.html`);case"verify":return join(BW,`verify-${flow.id}.html`);case"reflect":return join(HISTORY,`${flow.id}.json`);default:return undefined;}}
 function hasArtifact(flow:FlowEntry,step:StepDef){const p=artifactPath(flow,step);return p?existsSync(p):false;}
 function execStep(step:StepDef,flow:FlowEntry,state:FlowState):StepResult{let fb:string|undefined=flow.feedback;flow.feedback=undefined;while(flow.attempt_count<3){console.log(`[orchestrator] Running ${step.name} (attempt ${flow.attempt_count+1}/3)`);const pr=runAgent(step.name,buildPrompt(step,flow,fb));if(pr.status==="BLOCKED"||pr.status==="NEEDS_CONTEXT")return pr;if(["test","implement"].includes(step.name)){const g=runGates();if(!g.pass){fb=`Gate: ${g.error}`;flow.attempt_count++;writeSt(state);continue;}}// R27 mechanical validator BEFORE reviewer
 if(pr.artifact){const def=readFlowDef(flow.flow);const idx=def.steps.findIndex(s=>s.name===step.name);const expectedNext=idx>=0&&idx<def.steps.length-1?def.steps[idx+1].name:undefined;const v=validateArtifact(pr.artifact,step.name,expectedNext);if(!v.pass){fb=`R27 validator: ${v.failures.join("; ")}`;flow.attempt_count++;writeSt(state);continue;}}

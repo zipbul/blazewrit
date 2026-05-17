@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Investigation Artifact — plan-standalone-test-html</title>
+<meta name="flow-id" content="plan-standalone-test-html">
+<meta name="flow-type" content="plan-standalone">
+<meta name="expected-next-step" content="decide">
+<meta name="agent" content="investigate">
+</head>
+<body>
+<article data-flow-id="plan-standalone-test-html" data-agent="investigate">
+
+  <header>
+    <h1>Investigation Artifact — plan-standalone-test-html</h1>
+    <p data-field="request_recap">Document the 9-step workflow architecture used in this blazewrit repo.</p>
+    <p><em>Boundary: R15 — no option generation, no design prose, no downstream artifact path mention.</em></p>
+  </header>
+
+  <!-- ============================================================== -->
+  <section data-section="impact_map">
+    <h2>impact_map</h2>
+    <p><em>Derived from Ground filesystem evidence only (no ED graph available — see <code>ground_unknowns_addressed.ed_query</code>).</em></p>
+
+    <table data-table="primary_areas">
+      <thead><tr><th>area</th><th>kind</th><th>evidence (Ground row)</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>AGENTS.md</code></td>
+          <td>authoritative narrative source</td>
+          <td>Ground.task_subgraph entry_evidence row 1 (literal content of AGENTS.md)</td>
+        </tr>
+        <tr>
+          <td><code>steps/</code> (10 directories)</td>
+          <td>step definition root</td>
+          <td>Ground.task_subgraph steps_directory_raw row <code>steps_dir_listing</code></td>
+        </tr>
+        <tr>
+          <td><code>.claude/agents/</code> (16 files)</td>
+          <td>agent definition root</td>
+          <td>Ground.task_subgraph steps_directory_raw row <code>agents_dir_listing</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>ripple</h3>
+    <ul>
+      <li>per-step README.md files enumerated in Ground.task_subgraph <code>step_readmes_present</code> (10 README.md files, one per step directory)</li>
+      <li>investigate sub-spec files: <code>compatibility-verdict.md</code>, <code>external-research.md</code>, <code>unknown-disposition.md</code> (Ground row)</li>
+      <li>triage sub-spec files: <code>compound-recursion.md</code>, <code>failure-routing.md</code> (Ground row)</li>
+    </ul>
+
+    <h3>external_surface</h3>
+    <p>None. Documentation describes existing repo internals; no external contract changes identified in Ground evidence.</p>
+
+    <h3>affected_files (enumerated)</h3>
+    <ol data-list="affected_files">
+      <li><code>AGENTS.md</code></li>
+      <li><code>steps/decide/README.md</code></li>
+      <li><code>steps/ground/README.md</code></li>
+      <li><code>steps/implement/README.md</code></li>
+      <li><code>steps/investigate/README.md</code></li>
+      <li><code>steps/investigate/compatibility-verdict.md</code></li>
+      <li><code>steps/investigate/external-research.md</code></li>
+      <li><code>steps/investigate/unknown-disposition.md</code></li>
+      <li><code>steps/reflect/README.md</code></li>
+      <li><code>steps/report/README.md</code></li>
+      <li><code>steps/spec/README.md</code></li>
+      <li><code>steps/test/README.md</code></li>
+      <li><code>steps/triage/README.md</code></li>
+      <li><code>steps/triage/compound-recursion.md</code></li>
+      <li><code>steps/triage/failure-routing.md</code></li>
+      <li><code>steps/verify/README.md</code></li>
+    </ol>
+    <p>
+      <span data-field="affected_files_count" data-value="16">16</span>
+      <em> — derivation: 1 (AGENTS.md) + 10 step READMEs (Ground steps_dir_listing) + 3 investigate sub-files + 2 triage sub-files = 16. Source: Ground <code>step_readmes_present</code> table rows, all entries.</em>
+    </p>
+  </section>
+
+  <!-- ============================================================== -->
+  <section data-section="constraints">
+    <h2>constraints</h2>
+    <table>
+      <thead><tr><th>id</th><th>kind</th><th>statement</th><th>evidence</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>c1</td><td>policy</td>
+          <td>Respond in Korean for conversation, English for documents and code.</td>
+          <td>AGENTS.md Rules section (Ground entry_evidence)</td>
+        </tr>
+        <tr>
+          <td>c2</td><td>policy</td>
+          <td>Prompts over finished products — generate project-specific content, don't ship static templates.</td>
+          <td>AGENTS.md Rules section (Ground entry_evidence)</td>
+        </tr>
+        <tr>
+          <td>c3</td><td>structural</td>
+          <td>Workflow ordering literal: None ↔ Triage → Flow[Ground → Investigate → Decide → Spec? → Core Steps → Verify → Reflect].</td>
+          <td>AGENTS.md:7 (Ground conflicts list, literal quote)</td>
+        </tr>
+        <tr>
+          <td>c4</td><td>structural</td>
+          <td>Step pool literal enumeration: Ground, Investigate, Decide, Spec, Test, Implement, Report, Verify, Reflect (9 steps).</td>
+          <td>AGENTS.md:9 (Ground conflicts list, literal quote)</td>
+        </tr>
+        <tr>
+          <td>c5</td><td>structural</td>
+          <td>Agent population literal: 16 agents = 9 producer + 7 reviewer; Verify/Reflect have no reviewer.</td>
+          <td>AGENTS.md:10 (Ground conflicts list, literal quote)</td>
+        </tr>
+        <tr>
+          <td>c6</td><td>tooling</td>
+          <td>pyreez / firebat / emberdeck tool associations per step are declared in AGENTS.md Tools section but runtime presence unconfirmed.</td>
+          <td>Ground.unknowns.tool_availability</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============================================================== -->
+  <section data-section="risk_surface">
+    <h2>risk_surface</h2>
+    <table>
+      <thead><tr><th>id</th><th>failure_mode</th><th>severity</th><th>probability</th><th>evidence</th></tr></thead>
+      <tbody>
+        <tr data-severity="high">
+          <td>r1</td>
+          <td>Step-count discrepancy (AGENTS.md says 9, <code>ls steps/</code> shows 10 — triage classification ambiguity) propagated into documentation without explicit reconciliation note.</td>
+          <td data-severity="high">high</td>
+          <td>high</td>
+          <td>Ground.conflicts rows 1+2; Ground.unknowns.step_count_semantics</td>
+        </tr>
+        <tr data-severity="high">
+          <td>r2</td>
+          <td>Agent role-split claim (9 producer + 7 reviewer) presented without per-file mapping derivation; reader cannot audit which 7 reviewers exist (Verify/Reflect excluded).</td>
+          <td data-severity="high">high</td>
+          <td>high</td>
+          <td>Ground.conflicts rows 3+4; Ground.unknowns.agent_role_breakdown</td>
+        </tr>
+        <tr data-severity="med">
+          <td>r3</td>
+          <td>Tool-to-step association documented as fact when runtime presence of pyreez/firebat/emberdeck is unverified.</td>
+          <td data-severity="med">med</td>
+          <td>med</td>
+          <td>Ground.unknowns.tool_availability; Ground.volatile_state.ed_graph_query=fail</td>
+        </tr>
+        <tr data-severity="med">
+          <td>r4</td>
+          <td>Omission risk: produce⇄review loop semantics + hooks (mechanical) mentioned in AGENTS.md:10 but no further evidence about hook mechanism captured in Ground; documentation may understate or overstate hook role.</td>
+          <td data-severity="med">med</td>
+          <td>med</td>
+          <td>AGENTS.md:10 literal (Ground conflicts row 3); absence of hook-related Ground evidence</td>
+        </tr>
+        <tr data-severity="low">
+          <td>r5</td>
+          <td>Source HEAD freshness — single commit captured; if documentation effort spans multiple sessions, HEAD drift could invalidate enumerations.</td>
+          <td data-severity="low">low</td>
+          <td>low</td>
+          <td>Ground.freshness git_HEAD_start == git_HEAD_end</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============================================================== -->
+  <section data-section="architecture_impact">
+    <h2>architecture_impact</h2>
+    <ul>
+      <li><strong>new_modules</strong>: <code>[]</code> — Ground evidence shows no signal of new module introduction; request is documentation of existing structure.</li>
+      <li><strong>public_api_changes</strong>: <code>[]</code> — no external_surface entries with breaking=true.</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================== -->
+  <section data-section="validity_check">
+    <h2>validity_check</h2>
+    <dl>
+      <dt>Triage intent target</dt>
+      <dd>Produce documentation describing the 9-step workflow.</dd>
+      <dt>Ground facts pertinent to validity</dt>
+      <dd>AGENTS.md exists and already contains a one-line workflow declaration (AGENTS.md:7) plus step pool (AGENTS.md:9) and agent count (AGENTS.md:10). Per-step README files exist for all 10 step directories (Ground step_readmes_present). The numeric claim "9 steps" in AGENTS.md does not match the 10-entry filesystem listing.</dd>
+      <dt>verdict</dt>
+      <dd data-verdict="valid_with_reconciliation_required">Task is non-redundant: existing AGENTS.md provides only a single-line summary; comprehensive per-step documentation is not present in Ground evidence. However, the task requires reconciling the 9-vs-10 numeric discrepancy before authoring proceeds.</dd>
+    </dl>
+  </section>
+
+  <!-- ============================================================== -->
+  <section data-section="compatibility_verdict">
+    <h2>compatibility_verdict</h2>
+    <p data-field="result" data-result="needs_clarification"><strong>result: needs_clarification</strong></p>
+    <h3>rationale</h3>
+    <ul>
+      <li>Task scope says "9-step workflow" but filesystem enumerates 10 step directories. Without an authoritative decision on whether triage is included or excluded from the documentation, documentation cannot proceed without arbitrary interpretation.</li>
+      <li>"16 agents: 9 producer + 7 reviewer" claim must be reconciled with the 16 filename entries; deciding whether to document by-file-suffix interpretation is a Decide-step responsibility.</li>
+    </ul>
+    <h3>source_version</h3>
+    <ul>
+      <li><code>git_HEAD = 4e74abd3fcabc691af0825be9b4aa87d415cbacd</code> (Ground.freshness)</li>
+      <li><em>ed_snapshot_version</em>: field omitted per R14 — emberdeck unavailable</li>
+      <li><em>rules_version</em>: field omitted — no tracker for .claude/rules versioning present in Ground evidence</li>
+      <li><em>contracts_version</em>: field omitted — not tracked</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================== -->
+  <section data-section="ground_unknowns_addressed">
+    <h2>ground_unknowns_addressed</h2>
+    <table>
+      <thead><tr><th>unknown</th><th>disposition</th><th>note</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>ed_query</td>
+          <td data-disposition="accepted_as_limitation">accepted_as_limitation</td>
+          <td>emberdeck MCP unavailable; Investigate proceeds from raw filesystem evidence only. No graph-derived claims made.</td>
+        </tr>
+        <tr>
+          <td>step_count_semantics</td>
+          <td data-disposition="escalated_to_decide">escalated_to_decide</td>
+          <td>Reconciliation of 9-vs-10 step count is a semantic decision (include/exclude triage) — out of Investigate scope.</td>
+        </tr>
+        <tr>
+          <td>agent_role_breakdown</td>
+          <td data-disposition="escalated_to_decide">escalated_to_decide</td>
+          <td>Producer/reviewer mapping requires interpretation of filename convention — explicit assignment is a downstream decision.</td>
+        </tr>
+        <tr>
+          <td>tool_availability</td>
+          <td data-disposition="documentation_caveat_required">documentation_caveat_required</td>
+          <td>Tool-step associations should be marked as declared (per AGENTS.md) but not runtime-verified.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============================================================== -->
+  <section data-section="verification_proof">
+    <details open>
+      <summary>verification_proof — provenance chain (R26)</summary>
+
+      <h3>inherited_from_ground</h3>
+      <table>
+        <thead><tr><th>source_artifact</th><th>tool_call_id</th><th>command</th><th>raw_stdout</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t1</td>
+            <td><code>ls -1 steps/ | wc -l</code></td>
+            <td><pre><code>10</code></pre></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t2</td>
+            <td><code>ls -1 steps/</code></td>
+            <td><pre><code>decide
+ground
+implement
+investigate
+reflect
+report
+spec
+test
+triage
+verify</code></pre></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t3</td>
+            <td><code>ls -1 .claude/agents/ | wc -l</code></td>
+            <td><pre><code>16</code></pre></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t4</td>
+            <td><code>git rev-parse HEAD</code></td>
+            <td><pre><code>4e74abd3fcabc691af0825be9b4aa87d415cbacd</code></pre></td>
+          </tr>
+          <tr>
+            <td>.blazewrit/grounds/plan-standalone-test-html.html</td>
+            <td>g_t5</td>
+            <td><code>cat AGENTS.md</code></td>
+            <td>see Ground.task_subgraph entry_evidence (full literal content)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>self_executed</h3>
+      <p><em>None.</em> Investigate did not execute additional tool calls; all evidence is inherited from Ground (Bash is not available to Investigate per role tooling restriction).</p>
+
+      <h3>claim → provenance mapping</h3>
+      <table>
+        <thead><tr><th>claim in this artifact</th><th>source</th></tr></thead>
+        <tbody>
+          <tr><td>steps directory enumerates 10 entries</td><td>g_t1 + g_t2</td></tr>
+          <tr><td>.claude/agents/ contains 16 files</td><td>g_t3</td></tr>
+          <tr><td>affected_files_count = 16</td><td>Ground.step_readmes_present table (10 step READMEs) + 3 investigate sub-files + 2 triage sub-files + AGENTS.md root</td></tr>
+          <tr><td>workflow ordering literal</td><td>g_t5 (AGENTS.md:7)</td></tr>
+          <tr><td>9-step pool literal</td><td>g_t5 (AGENTS.md:9)</td></tr>
+          <tr><td>16-agent / 9 producer / 7 reviewer literal</td><td>g_t5 (AGENTS.md:10)</td></tr>
+          <tr><td>git_HEAD source version</td><td>g_t4</td></tr>
+        </tbody>
+      </table>
+    </details>
+  </section>
+
+  <!-- ============================================================== -->
+  <section data-section="cove_log">
+    <h2>cove_log</h2>
+    <h3>claims_extracted</h3>
+    <ol>
+      <li>affected_files_count = 16</li>
+      <li>impact_map.primary_areas comprises AGENTS.md, steps/, .claude/agents/</li>
+      <li>architecture_impact.new_modules = []</li>
+      <li>architecture_impact.public_api_changes = []</li>
+      <li>compatibility_verdict.result = needs_clarification</li>
+      <li>source_version.git_HEAD = 4e74abd3fcabc691af0825be9b4aa87d415cbacd</li>
+      <li>risk r1 severity = high (step-count discrepancy)</li>
+      <li>risk r2 severity = high (agent role-split unverified)</li>
+    </ol>
+
+    <h3>verifications</h3>
+    <table>
+      <thead><tr><th>claim</th><th>question</th><th>answer source</th><th>verdict</th></tr></thead>
+      <tbody>
+        <tr><td>affected_files_count = 16</td><td>Does the enumerated list contain exactly 16 entries?</td><td>Enumerated <code>ol[data-list=affected_files]</code> contains 16 <code>li</code> items (manually counted: 1 AGENTS.md + 10 step READMEs + 3 investigate sub + 2 triage sub = 16)</td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>steps/ contains 10 directories</td><td>Does Ground confirm?</td><td>Ground g_t1 raw_stdout = 10</td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>.claude/agents/ contains 16 files</td><td>Does Ground confirm?</td><td>Ground g_t3 raw_stdout = 16</td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>compatibility result enum valid</td><td>Is "needs_clarification" in {proceed, blocked, needs_clarification, no_op, partial_proceed}?</td><td>Yes — listed in spec</td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>no future-artifact path mentioned</td><td>Regex-scan for <code>.blazewrit/plans/|.blazewrit/reports/|.blazewrit/spec/</code></td><td>Self-scan: none present</td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>no option/design verbs</td><td>Scan for chosen|select|pick|recommend|design|proposed approach</td><td>Self-scan: none present</td><td data-verdict="PASS">PASS</td></tr>
+        <tr><td>ed_snapshot_version handled correctly</td><td>Is field omitted (not placeholder-invented)?</td><td>Yes — explicitly marked omitted in compatibility_verdict.source_version</td><td data-verdict="PASS">PASS</td></tr>
+      </tbody>
+    </table>
+
+    <h3>revisions</h3>
+    <p><em>None — all claims passed first-round verification.</em></p>
+  </section>
+
+</article>
+</body>
+</html>

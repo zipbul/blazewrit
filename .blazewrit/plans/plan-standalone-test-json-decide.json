@@ -1,0 +1,350 @@
+{
+  "flow_id": "plan-standalone-test-json",
+  "mode": "design",
+  "expected_next_step": "report",
+  "based_on": {
+    "ground_ref": ".blazewrit/grounds/plan-standalone-test-json.json",
+    "investigate_ref": ".blazewrit/investigations/plan-standalone-test-json.json"
+  },
+  "options_deliberated": [
+    {
+      "id": "O1",
+      "approach": "Reword AGENTS.md:9 to '10-step pool' including triage and recompute AGENTS.md:10 agent decomposition as '10 producer + 7 reviewer = 17' — but filesystem shows 16 agent files, so this would invent a non-existent triage agent file.",
+      "trade_offs": "Aligns step count with filesystem dir listing, but requires either creating .claude/agents/triage*.md or breaking the producer/reviewer arithmetic; introduces scope creep.",
+      "est_effort": "medium"
+    },
+    {
+      "id": "O2",
+      "approach": "Treat triage/ as a pre-flow stage (consistent with AGENTS.md:7 'None ↔ Triage → Flow[...]'), keep 'Step pool: 9 steps' unchanged, but add an explicit 'Triage (pre-flow, hook-driven, no agent file)' annotation to AGENTS.md and reconcile 9 producer + 7 reviewer = 16 in a clarifying parenthetical.",
+      "trade_offs": "Preserves filesystem reality and existing arithmetic; minimal doc churn; surfaces the c1/c2 ambiguity without changing semantics. Requires a small AGENTS.md edit and a downstream Report-only summary (Spec/Implement not needed for plan-standalone).",
+      "est_effort": "small"
+    },
+    {
+      "id": "O3",
+      "approach": "Delete triage/ directory to make filesystem match AGENTS.md '9 steps'.",
+      "trade_offs": "Destructive; loses steps/triage/README.md content; contradicts AGENTS.md:7 that explicitly names Triage in the entry path; out of scope for plan-standalone documentation-reconciliation intent.",
+      "est_effort": "small"
+    }
+  ],
+  "chosen": {
+    "option_id": "O2",
+    "rationale": "O2 reconciles documentation phrasing with Ground filesystem inventory (10 step dirs, 16 agent files) by clarifying that Triage is a pre-flow stage rather than a member of the Step pool, matching the existing AGENTS.md:7 wording. It does not invent files (avoids R13 violation), does not destroy existing artifacts (O3), and respects the plan-standalone scope which produces a plan document rather than code changes."
+  },
+  "chosen_architecture": {
+    "shape": "documentation-reconciliation plan; no module/API additions",
+    "components": [
+      {
+        "name": "AGENTS.md Step pool clarification",
+        "responsibility": "Disambiguate '9-step pool' (post-flow-entry) from Triage (pre-flow) and align '16 agents: 9 producer + 7 reviewer' decomposition with the 16 files enumerated by ls -1 .claude/agents/."
+      },
+      {
+        "name": "plan-standalone artifact",
+        "responsibility": "This Decide plan document captures the reconciliation decision; Report step renders the summary. No Spec/Implement/Verify required (Investigate.architecture_impact.has_architecture_level=false)."
+      }
+    ],
+    "non_goals": [
+      "Creating new agent files (no triage agent)",
+      "Deleting steps/triage/",
+      "Modifying orchestrator.ts behavior"
+    ]
+  },
+  "policies": [
+    {
+      "id": "P1",
+      "statement": "Filesystem inventory (Ground t3/t4/t5 with diff=identical) is the authoritative reference for counts; documentation phrases must annotate, not contradict, inventory."
+    },
+    {
+      "id": "P2",
+      "statement": "Triage is a pre-flow stage (per AGENTS.md:7) and is excluded from the in-flow 'Step pool' enumeration; this is a definitional convention, not an arithmetic error."
+    },
+    {
+      "id": "P3",
+      "statement": "emberdeck (ED) unavailable in this session — intent_card_id field omitted per R13 degrade policy; no PENDING placeholder emitted."
+    }
+  ],
+  "user_flows": [
+    {
+      "id": "UF1",
+      "actor": "downstream Report agent",
+      "trigger": "reads this Decide plan",
+      "outcome": "produces a flow report summarizing the count reconciliation (9 in-flow steps + 1 pre-flow Triage = 10 dirs; 9 producer + 7 reviewer = 16 agent files) without modifying source files."
+    },
+    {
+      "id": "UF2",
+      "actor": "reader of AGENTS.md",
+      "trigger": "encounters '(9 steps)' phrase at line 9",
+      "outcome": "understands from accompanying clarification (proposed in T2) that Triage is a pre-flow stage and the 10th steps/ directory."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "description": "Decide plan document must exist at .blazewrit/plans/plan-standalone-test-json-decide.json and be valid JSON.",
+      "verify_probe": {
+        "type": "command",
+        "target": "test -f .blazewrit/plans/plan-standalone-test-json-decide.json && python3 -c 'import json;json.load(open(\".blazewrit/plans/plan-standalone-test-json-decide.json\"))' && echo OK",
+        "expected_result": "stdout ends with 'OK', exit 0",
+        "negative_test": "missing file or invalid JSON → exit != 0"
+      }
+    },
+    {
+      "id": "REQ-2",
+      "description": "Plan must cite Ground tool_calls t2-t5 by id in verification_proof.inherited_from_ground (no laundering).",
+      "verify_probe": {
+        "type": "grep",
+        "target": "\"tool_call_id\": \"t[2-5]\"",
+        "expected_result": "≥4 matches in plan JSON",
+        "negative_test": "<4 matches → fail"
+      }
+    },
+    {
+      "id": "REQ-3",
+      "description": "Plan must not contain placeholder tokens forbidden by R13 (PENDING-, TBD, not_tracked, unavailable as values).",
+      "verify_probe": {
+        "type": "command",
+        "target": "grep -E '\"(PENDING-|TBD|not_tracked)\"' .blazewrit/plans/plan-standalone-test-json-decide.json | wc -l",
+        "expected_result": "0",
+        "negative_test": ">0 → R13 violation"
+      }
+    },
+    {
+      "id": "REQ-4",
+      "description": "Plan must echo expected_next_step verbatim as 'report' (R16).",
+      "verify_probe": {
+        "type": "grep",
+        "target": "\"next_step\": \"report\"",
+        "expected_result": "exactly 1 match",
+        "negative_test": "0 matches → R16 fail"
+      }
+    },
+    {
+      "id": "REQ-5",
+      "description": "intent_card_id field must be omitted (emberdeck unavailable per Ground.unknowns.ed_query).",
+      "verify_probe": {
+        "type": "command",
+        "target": "grep -c intent_card_id .blazewrit/plans/plan-standalone-test-json-decide.json",
+        "expected_result": "0",
+        "negative_test": ">0 → R13 placeholder leakage"
+      }
+    },
+    {
+      "id": "REQ-6",
+      "description": "Reconciliation narrative (chosen.rationale + chosen_architecture) must reference both Triage-as-pre-flow distinction and the 9-producer/7-reviewer = 16 arithmetic.",
+      "verify_probe": {
+        "type": "grep",
+        "target": "9 producer \\+ 7 reviewer",
+        "expected_result": "≥1 match",
+        "negative_test": "0 matches → narrative incomplete"
+      }
+    }
+  ],
+  "task_list": [
+    {
+      "id": "T1",
+      "description": "Report agent reads this plan and ground/investigation artifacts.",
+      "parallel": false,
+      "depends_on": [],
+      "acceptance_test": {
+        "type": "file_exists",
+        "target": ".blazewrit/plans/plan-standalone-test-json-decide.json",
+        "expected": "present"
+      },
+      "verify_probe": "test -f .blazewrit/plans/plan-standalone-test-json-decide.json && test -f .blazewrit/grounds/plan-standalone-test-json.json && test -f .blazewrit/investigations/plan-standalone-test-json.json"
+    },
+    {
+      "id": "T2",
+      "description": "Report agent renders reconciliation summary stating: (a) steps/ contains 10 dirs, (b) AGENTS.md:9 'Step pool' enumerates 9 in-flow steps and excludes Triage which AGENTS.md:7 positions as pre-flow, (c) .claude/agents/ contains 16 files decomposing as 9 producer + 7 reviewer (Verify/Reflect/Triage lack reviewer files; Triage lacks producer file).",
+      "parallel": false,
+      "depends_on": ["T1"],
+      "acceptance_test": {
+        "type": "grep",
+        "target": "10 dirs",
+        "expected": "present in report artifact"
+      },
+      "verify_probe": "grep -E '10 dirs|10 step|Triage.*pre-flow' .blazewrit/reports/plan-standalone-test-json-report.* 2>/dev/null"
+    },
+    {
+      "id": "T3",
+      "description": "Report cites Ground tool_calls t2, t3, t4, t5 verbatim raw_stdout values (no paraphrase).",
+      "parallel": true,
+      "depends_on": ["T1"],
+      "acceptance_test": {
+        "type": "grep",
+        "target": "decide-reviewer.md",
+        "expected": "present in report"
+      },
+      "verify_probe": "grep -c 'decide-reviewer.md' .blazewrit/reports/plan-standalone-test-json-report.* 2>/dev/null"
+    },
+    {
+      "id": "T4",
+      "description": "Report omits ED-derived fields (no ed_snapshot_version, no god_nodes_in_scope) per Ground.omitted_fields.",
+      "parallel": true,
+      "depends_on": ["T1"],
+      "acceptance_test": {
+        "type": "command",
+        "target": "grep -E 'ed_snapshot_version|god_nodes_in_scope' .blazewrit/reports/plan-standalone-test-json-report.* | wc -l",
+        "expected": "0"
+      },
+      "verify_probe": "! grep -qE 'ed_snapshot_version|god_nodes_in_scope' .blazewrit/reports/plan-standalone-test-json-report.* 2>/dev/null || false"
+    },
+    {
+      "id": "T5",
+      "description": "Report finalizes with STATUS line and the ARTIFACT pointer per orchestrator contract.",
+      "parallel": false,
+      "depends_on": ["T2", "T3", "T4"],
+      "acceptance_test": {
+        "type": "grep",
+        "target": "STATUS: DONE",
+        "expected": "present"
+      },
+      "verify_probe": "grep -E '^STATUS: DONE' .blazewrit/reports/plan-standalone-test-json-report.* 2>/dev/null"
+    }
+  ],
+  "task_count": {
+    "value": 5,
+    "source": {
+      "command": "count entries in task_list",
+      "raw_stdout": "5"
+    }
+  },
+  "requirement_count": {
+    "value": 6,
+    "source": {
+      "command": "count entries in requirements",
+      "raw_stdout": "6"
+    }
+  },
+  "gate_rules": [
+    {
+      "condition": {"==": [{"var": "compatibility_verdict.result"}, "needs_clarification"]},
+      "action": "proceed",
+      "note": "Investigate flagged needs_clarification with blocks=false on both issues; clarification is documentation reconciliation (the actual deliverable), not a precondition."
+    }
+  ],
+  "next_step": "report",
+  "verification_proof": {
+    "inherited_from_ground": [
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t2",
+        "command": "ls -1 .claude/agents/ | wc -l",
+        "raw_stdout": "16"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t3",
+        "command": "ls -1 steps/ | wc -l",
+        "raw_stdout": "10"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t4",
+        "command": "ls -1 steps/",
+        "raw_stdout": "decide/\nground/\nimplement/\ninvestigate/\nreflect/\nreport/\nspec/\ntest/\ntriage/\nverify/"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t5",
+        "command": "ls -1 .claude/agents/",
+        "raw_stdout": "decide-reviewer.md\ndecide.md\nground-reviewer.md\nground.md\nimplement-reviewer.md\nimplement.md\ninvestigate-reviewer.md\ninvestigate.md\nreflect.md\nreport-reviewer.md\nreport.md\nspec-reviewer.md\nspec.md\ntest-reviewer.md\ntest.md\nverify.md"
+      },
+      {
+        "source_artifact": ".blazewrit/grounds/plan-standalone-test-json.json",
+        "tool_call_id": "t6",
+        "command": "npx tsc --noEmit; echo EXIT=$?",
+        "raw_stdout": "TypeScript compilation completed\nEXIT=0"
+      }
+    ],
+    "inherited_from_investigate": [
+      {
+        "source_artifact": ".blazewrit/investigations/plan-standalone-test-json.json",
+        "reference": "architecture_impact.has_architecture_level",
+        "value": false
+      },
+      {
+        "source_artifact": ".blazewrit/investigations/plan-standalone-test-json.json",
+        "reference": "compatibility_verdict.result",
+        "value": "needs_clarification"
+      },
+      {
+        "source_artifact": ".blazewrit/investigations/plan-standalone-test-json.json",
+        "reference": "impact_map.affected_files_count.value",
+        "value": 15
+      },
+      {
+        "source_artifact": ".blazewrit/investigations/plan-standalone-test-json.json",
+        "reference": "risk_surface[*].id",
+        "value": ["r1", "r2", "r3", "r4"]
+      }
+    ],
+    "self_executed": []
+  },
+  "cove_log": {
+    "claims_extracted": [
+      "Producer agents in .claude/agents/ = 9 (decide, ground, implement, investigate, reflect, report, spec, test, verify)",
+      "Reviewer agents in .claude/agents/ = 7 (decide-reviewer, ground-reviewer, implement-reviewer, investigate-reviewer, report-reviewer, spec-reviewer, test-reviewer)",
+      "No triage agent file exists",
+      "Triage is positioned as pre-flow in AGENTS.md:7",
+      "emberdeck unavailable, so intent_card_id is omitted",
+      "Next step is 'report' (verbatim from expected_next_step prompt)",
+      "Architecture impact = false per Investigate"
+    ],
+    "verifications": [
+      {
+        "claim": "Producer count = 9",
+        "question": "From Ground t5 stdout, count files NOT ending in '-reviewer.md'",
+        "tool_invocation": {"command": "filter t5.raw_stdout for !*-reviewer.md", "result": "decide.md, ground.md, implement.md, investigate.md, reflect.md, report.md, spec.md, test.md, verify.md = 9"},
+        "verdict": "PASS"
+      },
+      {
+        "claim": "Reviewer count = 7",
+        "question": "From Ground t5 stdout, count files ending in '-reviewer.md'",
+        "tool_invocation": {"command": "filter t5.raw_stdout for *-reviewer.md", "result": "decide-reviewer, ground-reviewer, implement-reviewer, investigate-reviewer, report-reviewer, spec-reviewer, test-reviewer = 7"},
+        "verdict": "PASS"
+      },
+      {
+        "claim": "9 + 7 = 16 matches Ground t2",
+        "question": "Does producer + reviewer = total file count?",
+        "tool_invocation": {"command": "arithmetic", "result": "9+7=16, Ground t2 raw_stdout='16'"},
+        "verdict": "PASS"
+      },
+      {
+        "claim": "No triage agent file",
+        "question": "Does Ground t5 stdout contain 'triage'?",
+        "tool_invocation": {"command": "string search 'triage' in t5.raw_stdout", "result": "no match"},
+        "verdict": "PASS"
+      },
+      {
+        "claim": "Triage = pre-flow per AGENTS.md:7",
+        "question": "Does Ground.conflicts.c1.raw_evidence[1] quote AGENTS.md:7 with Triage as gateway?",
+        "tool_invocation": {"command": "inspect Ground.conflicts.c1", "result": "quote = 'None (free conversation) ↔ Triage → Flow[Ground → ...]'"},
+        "verdict": "PASS"
+      },
+      {
+        "claim": "next_step = 'report' verbatim",
+        "question": "Does this field equal the orchestrator-supplied expected_next_step?",
+        "tool_invocation": {"command": "string compare", "result": "match"},
+        "verdict": "PASS"
+      },
+      {
+        "claim": "intent_card_id omitted",
+        "question": "Is field absent from emitted JSON?",
+        "tool_invocation": {"command": "schema inspection", "result": "field not present"},
+        "verdict": "PASS"
+      },
+      {
+        "claim": "task_count = 5",
+        "question": "Length of task_list array",
+        "tool_invocation": {"command": "len(task_list)", "result": "5 (T1..T5)"},
+        "verdict": "PASS"
+      },
+      {
+        "claim": "requirement_count = 6",
+        "question": "Length of requirements array",
+        "tool_invocation": {"command": "len(requirements)", "result": "6 (REQ-1..REQ-6)"},
+        "verdict": "PASS"
+      }
+    ],
+    "revisions": []
+  }
+}

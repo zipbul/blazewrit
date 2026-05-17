@@ -20,15 +20,108 @@ Read every file in `<files_to_read>` before any action.
 2. **Volatile capture** — flow_type별 measurement profile (universal: typecheck/test/lint/git; conditional: perf_baseline/dependency_audit/observability/release_state)
 3. **Surface** — ED ambiguous/inferred + capture 실패 → unknowns/conflicts
 
-## Output
+## Output Format — HTML5 (default, per empirical Phase F result + Anthropic 2026 trend)
 
-Write to `.blazewrit/grounds/<flow-id>.md`:
-- `task_subgraph` (entry_nodes + neighbors + provenance)
-- `volatile_state` (각 항목 status: success/fail/timeout/skipped-with-reason)
-- `unknowns` (silent gap 금지)
-- `conflicts`
-- `freshness` (ed_snapshot_version, git_HEAD start/end)
-- `verification_proof` (tool call hashes)
+Write to `.blazewrit/grounds/<flow-id>.html` as semantic HTML5:
+
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Ground — {flow_id}</title>
+  <script type="application/json" id="meta">
+    {"flow_id":"...","flow_type":"...","schema_version":1,"captured_at":"..."}
+  </script>
+</head>
+<body>
+<article data-step="ground" data-flow-id="{flow_id}">
+  <section data-section="task_subgraph">
+    <h2>Task Subgraph</h2>
+    <table data-table="entry_nodes">
+      <thead><tr><th>id</th><th>path</th><th>source_tool</th><th>sha256</th><th>mtime</th></tr></thead>
+      <tbody>...</tbody>
+    </table>
+    <table data-table="neighbors">...</table>
+  </section>
+
+  <section data-section="volatile_state">
+    <h2>Volatile State</h2>
+    <table>
+      <thead><tr><th>field</th><th>status</th><th>command</th><th>raw_stdout</th></tr></thead>
+      <tbody>
+        <tr data-field="typecheck" data-status="success">
+          <td>typecheck</td><td>success</td>
+          <td><code>tsc --noEmit</code></td>
+          <td><pre>...</pre></td>
+        </tr>
+        ...
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="unknowns">
+    <h2>Unknowns</h2>
+    <ul>
+      <li data-unknown-type="tool_unavailable"><strong>ed_query</strong>: emberdeck MCP not in session</li>
+      ...
+    </ul>
+  </section>
+
+  <section data-section="conflicts">
+    <h2>Conflicts (raw quotes only — no comparison)</h2>
+    <article data-conflict-id="c1">
+      <p>Sources: <code>AGENTS.md:9</code></p>
+      <pre data-source-tool="Read">{exact quote}</pre>
+    </article>
+    ...
+  </section>
+
+  <section data-section="freshness">
+    <h2>Freshness</h2>
+    <dl>
+      <dt>git_head_start</dt><dd><code>...</code></dd>
+      <dt>git_head_end</dt><dd><code>...</code></dd>
+      <dt>racing_changes</dt><dd>false</dd>
+    </dl>
+  </section>
+
+  <section data-section="omitted_fields">
+    <h2>Omitted Fields (R22)</h2>
+    <ul>
+      <li data-field="ed_snapshot_version">ED unavailable per unknowns.ed_query</li>
+    </ul>
+  </section>
+
+  <section data-section="verification_proof">
+    <h2>Verification Proof</h2>
+    <details><summary>tool_calls (with R25 double-run)</summary>
+      <table>
+        <thead><tr><th>id</th><th>command</th><th>raw_stdout_run1</th><th>raw_stdout_run2</th><th>diff</th><th>exec_meta_run1</th><th>exec_meta_run2</th></tr></thead>
+        <tbody>...</tbody>
+      </table>
+    </details>
+  </section>
+
+  <section data-section="cove_log">
+    <h2>Chain-of-Verification Log (R24)</h2>
+    <dl>
+      <dt>Claims extracted</dt>
+      <dd><ul>...</ul></dd>
+      <dt>Verifications</dt>
+      <dd><ol>...</ol></dd>
+    </dl>
+  </section>
+</article>
+</body>
+</html>
+```
+
+**중요**:
+- `data-*` attributes는 *machine parse용* (downstream agent + validator)
+- `<pre>` blocks는 raw stdout/quote 그대로 (no escaping needed)
+- `<script type="application/json" id="meta">` block은 metadata + 빠른 추출용
+- count claim 모두 `<table data-table="..."><tbody>` 안에 raw_stdout column 명시 (R21 cite)
 
 ## Boundary (R15 mechanical)
 

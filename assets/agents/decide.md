@@ -86,9 +86,111 @@ based_on: {...}
 - pyreez `deliberate` — Plan/Design mode
 - 외부 리서치 — Design mode optional
 
-## Output
+## Output Format — HTML5 (default, Phase F empirical)
 
-Write to `.blazewrit/plans/<flow-id>-decide.md`.
+Write to `.blazewrit/plans/<flow-id>-decide.html`:
+
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Decide({mode}) — {flow_id}</title>
+  <script type="application/json" id="meta">{"flow_id":"...","mode":"design|plan|record","expected_next_step":"...","schema_version":1}</script>
+</head>
+<body>
+<article data-step="decide" data-mode="design|plan|record" data-flow-id="{flow_id}">
+  <!-- Record / Plan / Design mode별 다른 sections -->
+
+  <!-- Design mode example: -->
+  <section data-section="options_deliberated">
+    <h2>Options Deliberated</h2>
+    <table>
+      <thead><tr><th>id</th><th>approach</th><th>pros</th><th>cons</th><th>est_effort</th></tr></thead>
+      <tbody><tr data-option-id="opt-A">...</tr>...</tbody>
+    </table>
+  </section>
+
+  <section data-section="chosen">
+    <h2>Chosen</h2>
+    <span data-field="option_id" data-value="opt-B">opt-B</span>
+    <p data-field="rationale">...</p>
+  </section>
+
+  <section data-section="chosen_architecture">
+    <h2>Architecture</h2>
+    <svg data-diagram="architecture">...</svg>
+    <article data-area="components">...</article>
+    <article data-area="dataflow">...</article>
+  </section>
+
+  <section data-section="policies">
+    <h2>Policies</h2>
+    <ol>
+      <li data-policy-id="P1">...</li>
+      ...
+    </ol>
+  </section>
+
+  <section data-section="user_flows">
+    <h2>User Flows</h2>
+    <ol>...</ol>
+  </section>
+
+  <section data-section="requirements">
+    <h2>Requirements (R20 verify_probe per item)</h2>
+    <table>
+      <thead><tr><th>id</th><th>description</th><th>probe_type</th><th>probe_target</th><th>expected</th><th>negative_test</th></tr></thead>
+      <tbody>
+        <tr data-req-id="REQ-1">
+          <td>REQ-1</td><td>...</td>
+          <td><code data-probe-type="file_exists">file_exists</code></td>
+          <td><code>docs/X.html</code></td>
+          <td>...</td><td>...</td>
+        </tr>
+        ...
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="task_list">
+    <h2>Task List (R19 concrete imperative tasks)</h2>
+    <ol>
+      <li data-task-id="T001" data-parallel="false" data-phase="setup">
+        <strong>T001</strong>: ...
+        <details><summary>details</summary>
+          <dl>
+            <dt>inputs</dt><dd>...</dd>
+            <dt>outputs</dt><dd>...</dd>
+            <dt>depends_on</dt><dd>...</dd>
+            <dt>verify_probe</dt><dd><code>...</code></dd>
+          </dl>
+        </details>
+      </li>
+      ...
+    </ol>
+  </section>
+
+  <section data-section="gate_rules" data-applicable="compound-only">
+    <!-- Only present for Compound top-level Decide. JsonLogic predicate. -->
+  </section>
+
+  <span data-field="next_step" data-value="report">report</span>
+
+  <section data-section="verification_proof">
+    <h2>Verification Proof (R26 chain)</h2>
+    <details><summary>inherited_from_ground</summary><table>...</table></details>
+    <details><summary>inherited_from_investigate</summary><table>...</table></details>
+    <details><summary>self_executed</summary><table>...</table></details>
+  </section>
+
+  <section data-section="cove_log">...</section>
+</article>
+</body>
+</html>
+```
+
+**Record/Plan mode**: 동일 structure, sections만 mode에 맞게 (record는 `<p data-field="decision">` + rationale; plan은 `options_considered` + `chosen` + `sequencing`).
 
 ## Boundary (R15 mechanical)
 
