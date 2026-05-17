@@ -65,6 +65,20 @@ Write to `.blazewrit/investigations/<flow-id>.md`. Schema: [steps/investigate/RE
 
 **Spec hole (R14)**: 출력 필드 형식이 spec에 정의 안 됐는데 emit 해야 한다면 → `STATUS: BLOCKED` + `REASON: spec hole — <field>` + `FAILURE_ORIGIN: investigate`. placeholder invent 금지.
 
+## R18 Meta-conclusion Boundary
+
+다음 verb 금지 (Investigate-Reviewer regex check):
+- "Ground supplies sufficient referent set" — 결론
+- "X provides Y", "X enables Z", "X supports W" — meta-conclusion
+- 정답: *fact list* 직접 인용 — "Ground provides: [<list of explicit facts>]"
+
+## R17 Upstream Fact Verification
+
+Ground이 emit한 facts를 *그대로 신뢰하지 않음*:
+- 사용 전 sha256 재계산 — Ground sha256과 일치 확인
+- file 내용 claim (예: ".gitignore excludes X")는 *직접 file read*로 재검증
+- mismatch 발견 → `failure_origin: ground` + Verify에 escalate
+
 ## Completion
 
 stdout:

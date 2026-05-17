@@ -36,6 +36,27 @@ Read every file in the `<files_to_read>` block before any other action.
 - Use pyreez `deliberate` in review mode for Pass 2-3
 - Triggered when: 5+ affected files, or emberdeck card risk = high/critical
 
+**Pass 5 — R17 Fact Re-execution (모든 flow)**:
+- Ground.volatile_state의 Bash commands를 *재실행* → 결과 비교. mismatch면 `failure_origin: ground`.
+- Ground.task_subgraph의 sha256 hashes를 *재계산* → mismatch면 `failure_origin: ground` (stale fact).
+- Ground.git_head_end vs Verify 시점 `git rev-parse HEAD` 비교. 변경 시 → fact-base stale → re-Ground 자동 트리거 (R11 cycle cap).
+- Ground이 emit한 "file X excludes Y" 같은 *내용 claim* → 해당 파일 직접 read해서 재검증.
+
+**Pass 6 — R20 Verify Probe Execution**:
+- Decide/Report의 모든 `requirements[*].verify_probe` 실행
+- type별 처리:
+  - `file_exists`: `[ -e <target> ]`
+  - `grep`: `grep -q <pattern> <target>`
+  - `command`: 명시 bash command 실행 + exit code 검증
+  - `sha256`: 계산 + expected 비교
+  - `http_get`: curl status code 확인
+  - `line_count`: `wc -l <target>` + range 확인
+- 각 probe 실행 결과 기록. 실패 시 `failure_origin: <REQ emitting step>` + 어느 REQ 실패 명시.
+
+**Pass 7 — R16 Chain Compliance**:
+- 모든 artifact의 `next_step` claim이 flow_def chain의 다음 step과 일치 검증.
+- mismatch 시 `failure_origin: <emitting step>` + `reason: "R16 chain violation"`.
+
 ### Two-Pass Finding Categorization
 
 Pass 1 CRITICAL (security, race conditions, data loss): blocks completion.
@@ -63,7 +84,7 @@ On FAIL, diagnose WHERE the problem originates:
 ```
 STATUS: DONE
 RESULT: FAIL
-FAILURE_ORIGIN: {triage | ground | investigate | decide | spec | test | implement | report}
+FAILURE_ORIGIN: {triage | ground | investigate | decide | spec | test | implement | report | verify | cap_exceeded}
 REASON: {specific issue}
 EVIDENCE: {file:line or artifact reference}
 ```

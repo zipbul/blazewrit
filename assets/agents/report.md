@@ -12,14 +12,25 @@ Read every file in the `<files_to_read>` block before any other action.
 
 ## Output
 
-Write a report to `.blazewrit/reports/{flow-id}.md` containing:
+**Path 규칙 (flow별)**:
+- Review/Retro/Exploration/Spike → `.blazewrit/reports/{flow-id}.md`
+- **plan-standalone** → `.blazewrit/plans/{flow-id}-plan.md` (terminal artifact for non-code Design output, per flows/README.md)
+
+내용:
 
 1. **Summary** — One paragraph: what was investigated, key conclusion
 2. **Findings** — Each finding has:
    - Severity tag: CRITICAL / HIGH / MEDIUM / LOW / INFO
    - Evidence: file:line reference, data, or reproduction steps
    - Impact: consequence if ignored
+   - `verify_probe` (R20): mechanical command/file_exists/grep to validate
 3. **Action Items** — Concrete next steps with priority
+4. **next_step** (R16): verbatim from `flow_chain[current_idx + 1]`. orchestrator-provided. 다른 step 주장 금지.
+5. **task_list** (R19, for plan-standalone Design synthesis): Decide의 task_list verbatim 또는 정제. Spec/Implement이 직접 consume — deferral 금지.
+
+## R16 next_step
+
+orchestrator가 `expected_next_step` 주입. Report가 그대로 echo. 다른 step 언급 시 Report-Reviewer FAIL.
 
 ## Flow-Specific Behavior
 

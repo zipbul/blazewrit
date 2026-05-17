@@ -40,18 +40,40 @@ based_on: {...}
 ```
 
 ### Design mode
-plan document (architecture + policy + userflow + req). emberdeck intent card 생성. pyreez deliberate 호출. Output:
+plan document (architecture + policy + userflow + req + task list). emberdeck intent card 생성. pyreez deliberate 호출. Output:
 ```yaml
 mode: design
 options_deliberated: [...]
 chosen_architecture: {...}
 policies: [...]
 user_flows: [...]
-requirements: [...]
-intent_card_id: <emberdeck card>
+requirements:
+  - id: REQ-1
+    description: <what must be true>
+    verify_probe:                             # R20 required
+      type: file_exists | grep | command | sha256 | http_get | line_count
+      target: <concrete path/url/command>
+      expected_result: <pass condition>
+      negative_test?: <fail condition>
+task_list:                                    # R19 required for Design
+  - id: T1
+    description: <imperative action>
+    inputs: [<artifact ref>]
+    outputs: [<artifact path or section ref>]
+    depends_on: [<task_id>]
+    acceptance_test: { type, target, expected }
+    verify_probe: <bash command>
+    est_effort: trivial | small | medium | large
+intent_card_id: <emberdeck card>             # omit if emberdeck absent (R13/R14)
 gate_rules?: [{condition: <JsonLogic>, action: proceed|pivot|abort|retry}]  # Compound top-level
+next_step: <verbatim from flow_chain[current_idx + 1]>  # R16 required
+followup_flows?: [{type, scope}]             # chain 외 추가 작업 큐잉
 based_on: {...}
 ```
+
+**R16 next_step**: orchestrator가 `expected_next_step`을 prompt에 주입. Decide는 그대로 echo. 임의 변경 시 Decide-Reviewer FAIL.
+**R19 task_list**: requirements ⇒ concrete imperative tasks. Spec/Implement이 직접 consume. deferral ("Spec이 finalize") 금지.
+**R20 verify_probe**: 모든 requirement + task에 mechanical execute 가능한 probe.
 
 ## Triage Mismatch / Upstream Deepen
 

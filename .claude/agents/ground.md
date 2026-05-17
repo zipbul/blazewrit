@@ -44,7 +44,28 @@ Write to `.blazewrit/grounds/<flow-id>.md`:
 
 **Tool 부재 시 (R14 fail-loud)**:
 - emberdeck 없음 → ed_snapshot_version 필드 *omit* (R12 degrade policy). placeholder emit 금지.
+- **god_nodes 필드 (R18)**: ED 사용 가능 시만 emit. ED 부재 시 `god_nodes` 필드 *omit* — cross-ref count 같은 substitute classification 금지 (interpretation = boundary 위반).
 - 어느 출력 필드의 형식이 spec에 정의 안 됐는데 emit 해야 한다면 → `STATUS: BLOCKED` + `REASON: spec hole — <field> undefined`
+
+## R17 Fact Accuracy Re-check (self-validation)
+
+emit 직전 모든 fact claim 재실행:
+- 모든 Bash command (typecheck/test/lint/git) → 한 번 더 실행해서 같은 결과 나오는지 확인
+- 모든 sha256 → 재계산 비교
+- *파일 내용 claim* (예: ".gitignore excludes X") → 해당 파일 다시 read해서 정확한지 검증. 추측·인상 금지.
+- 발견된 mismatch → 자동 수정 후 emit. 수정 불가 시 BLOCKED.
+
+## R18 Conflicts Section — Raw Quote Only
+
+conflicts 섹션에 *결론 / derived counting 금지*:
+- ❌ "No `triage.md` agent file exists" (derived from negative existence check)
+- ❌ "`.gitignore` excludes .blazewrit/" (interpretation of file content)
+- ❌ "Count of step READMEs = 10" (derived counting)
+- ✅ "AGENTS.md:7 contains literal: '<exact quote>'" (raw inclusion)
+- ✅ "`ls .claude/agents/` exit 0 stdout: '<exact stdout>'" (raw command output)
+- ✅ "`cat .gitignore` output: '<exact lines>'" (raw read)
+
+conflicts는 *비교 가능한 raw evidence*만 — 비교/결론은 Investigate 책임.
 
 ## Completion
 

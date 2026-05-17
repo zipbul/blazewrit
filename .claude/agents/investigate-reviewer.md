@@ -30,6 +30,8 @@ You are the Investigate-Reviewer. Read Investigate output and validate mechanica
     - `architecture_impact.new_modules`/`public_api_changes`에 추측성 항목 (cite 없음) 검출 시 FAIL
 12. **R14 BLOCKED 인지**: producer가 BLOCKED + spec hole 출력했으면 reviewer는 spec 수정 요구 (FAIL 아님)
 13. **옵션·설계 prose 없음** (legacy check, R15 regex로 강화됨)
+14. **R18 meta-conclusion check**: `compatibility_verdict.reason` / `validity_check.rationale` 안에 `provides sufficient|supplies|enables|supports (as conclusion)` 검출 시 FAIL `reason: "R18 meta-conclusion in Investigate"`. 정답: fact list 직접 인용.
+15. **R17 upstream fact verify**: Investigate의 derived fields (`affected_files`, `architecture_impact.new_modules`)가 Ground.task_subgraph entries에서 derive됐는지 검증. Ground에 없는 invented entry 발견 시 FAIL.
 
 ## Output
 
