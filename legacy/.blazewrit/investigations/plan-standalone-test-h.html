@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Investigate — plan-standalone-test-h</title>
+  <script type="application/json" id="meta">
+{"flow_id":"plan-standalone-test-h","based_on_ground":".blazewrit/grounds/plan-standalone-test-h.html","schema_version":1,"next_step":"decide"}
+  </script>
+</head>
+<body>
+<article data-step="investigate" data-flow-id="plan-standalone-test-h">
+
+  <section data-section="impact_map">
+    <h2>Impact Map</h2>
+    <p>Task is documentation of the 9-step workflow architecture. No production source mutation expected; impact is restricted to docs surface. ED unavailable (Ground.unknowns.ed_query) — impact derived from Ground entry_nodes + neighbors only.</p>
+
+    <table data-table="primary_areas">
+      <thead><tr><th>id</th><th>area</th><th>source_ref</th><th>rationale</th></tr></thead>
+      <tbody>
+        <tr><td>p1</td><td>workflow narrative (AGENTS.md authoritative text)</td><td>Ground.entry_nodes.e1</td><td>Authoritative description of step pool + execution model — primary referent for any doc output.</td></tr>
+        <tr><td>p2</td><td>per-step specs under <code>steps/*/README.md</code></td><td>Ground.neighbors.n1–n9</td><td>Step-level contracts that any architectural doc must reflect.</td></tr>
+        <tr><td>p3</td><td>agent definitions <code>.claude/agents/*.md</code></td><td>Ground.neighbors.n10</td><td>Producer/reviewer pairing surface — required for "16 agents" claim accuracy.</td></tr>
+      </tbody>
+    </table>
+
+    <table data-table="ripple">
+      <thead><tr><th>id</th><th>area</th><th>distance</th><th>source_ref</th><th>note</th></tr></thead>
+      <tbody>
+        <tr><td>r1</td><td><code>steps/triage/README.md</code></td><td>1</td><td>Ground.entry_nodes.e2</td><td>Triage is in filesystem (Ground.conflicts.c1) but Ground.AGENTS.md narrative labels step pool as 9. Disambiguation required downstream.</td></tr>
+        <tr><td>r2</td><td><code>package.json</code></td><td>1</td><td>Ground.neighbors.n11</td><td>Manifest captured; no script targets relevant to doc rendering identified in Ground volatile_state.</td></tr>
+      </tbody>
+    </table>
+
+    <table data-table="external_surface">
+      <thead><tr><th>id</th><th>contract</th><th>breaking</th><th>source_ref</th></tr></thead>
+      <tbody>
+        <tr><td>x1</td><td>(none) — documentation-only task; no external API contract identified in Ground</td><td>false</td><td>Ground.omitted_fields (release_state, observability n/a)</td></tr>
+      </tbody>
+    </table>
+
+    <p>Affected files (entry_nodes file paths + ripple file paths, dedup):</p>
+    <ul data-field="affected_files">
+      <li><code>AGENTS.md</code></li>
+      <li><code>steps/triage/README.md</code></li>
+      <li><code>steps/ground/README.md</code></li>
+      <li><code>steps/investigate/README.md</code></li>
+      <li><code>steps/decide/README.md</code></li>
+      <li><code>steps/spec/README.md</code></li>
+      <li><code>steps/test/README.md</code></li>
+      <li><code>steps/implement/README.md</code></li>
+      <li><code>steps/report/README.md</code></li>
+      <li><code>steps/verify/README.md</code></li>
+      <li><code>steps/reflect/README.md</code></li>
+      <li><code>.claude/agents/</code></li>
+      <li><code>package.json</code></li>
+    </ul>
+    <span data-field="affected_files_count" data-value="13">
+      <code>value=13; source: Investigate.self_executed.i1 (wc over enumerated entry_nodes ∪ neighbors file paths)</code>
+    </span>
+  </section>
+
+  <section data-section="constraints">
+    <h2>Constraints</h2>
+    <ol>
+      <li data-constraint-id="c1" data-source="ground_fact" data-blocking="false">AGENTS.md (Ground.e1, sha256 verified) is the authoritative narrative — doc output must not contradict it without explicit reconciliation against c1/c2 raw quotes.</li>
+      <li data-constraint-id="c2" data-source="ground_conflict_c1" data-blocking="false">Filesystem has 10 entries under <code>steps/</code> (incl. <code>triage/</code>); narrative says "9 steps". Constraint: any 9-vs-10 framing must cite both Ground sources verbatim.</li>
+      <li data-constraint-id="c3" data-source="ground_conflict_c2" data-blocking="false"><code>.claude/agents/</code> has 16 files matching AGENTS.md "16 agents (9 producer + 7 reviewer)" claim — Verify/Reflect lack reviewers per narrative; doc must preserve this asymmetry.</li>
+      <li data-constraint-id="c4" data-source="ground_volatile" data-blocking="false">No typecheck/lint/test scripts available (Ground.volatile_state) — verification cannot rely on programmatic build gates.</li>
+      <li data-constraint-id="c5" data-source="ground_unknown" data-blocking="false">ED unavailable — graph-based dependency claims prohibited without re-grounding.</li>
+    </ol>
+  </section>
+
+  <section data-section="risk_surface">
+    <h2>Risk Surface</h2>
+    <table>
+      <thead><tr><th>id</th><th>area</th><th>severity</th><th>probability</th><th>evidence</th></tr></thead>
+      <tbody>
+        <tr data-risk-id="rs1" data-severity="medium" data-probability="likely">
+          <td>rs1</td><td>step-count mislabel</td><td>medium</td><td>likely</td>
+          <td>Ground.conflicts.c1: narrative "(9 steps)" vs <code>ls steps/ | wc -l = 10</code>. Omission risk: downstream doc may inherit the ambiguity (treating Triage either as in-pool or as mode-switch).</td>
+        </tr>
+        <tr data-risk-id="rs2" data-severity="low" data-probability="possible">
+          <td>rs2</td><td>agent-count drift</td><td>low</td><td>possible</td>
+          <td>Ground.conflicts.c2 confirms 16 file count matches narrative now, but reviewer-absent steps (Verify, Reflect) are an irregular pattern — omission risk if doc lists 9×2=18 implicitly.</td>
+        </tr>
+        <tr data-risk-id="rs3" data-severity="low" data-probability="possible">
+          <td>rs3</td><td>workflow-order rendering</td><td>low</td><td>possible</td>
+          <td>Ground.conflicts.c3 captures the canonical chain "Triage → Ground → Investigate → Decide → Spec? → Core Steps → Verify → Reflect". Risk: dropping the conditional <code>Spec?</code> marker or the Triage⇄Flow boundary.</td>
+        </tr>
+        <tr data-risk-id="rs4" data-severity="low" data-probability="unlikely">
+          <td>rs4</td><td>verification gap</td><td>low</td><td>unlikely</td>
+          <td>Ground.volatile_state shows typecheck/lint/test all unavailable — doc-only deliverable mitigates, but no programmatic regression net exists.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="architecture_impact">
+    <h2>Architecture Impact</h2>
+    <ul data-field="new_modules"></ul>
+    <ul data-field="public_api_changes"></ul>
+    <span data-field="has_architecture_level" data-value="false">false</span>
+    <p>No new modules implied (doc task). No public API changes (external_surface x1 empty / non-breaking).</p>
+  </section>
+
+  <section data-section="validity_check">
+    <h2>Validity Check</h2>
+    <span data-field="no_op_detected" data-value="false">false</span>
+    <p data-field="rationale">Task intent ("document the 9-step workflow architecture") references content that exists in scattered form across AGENTS.md and <code>steps/*/README.md</code> (Ground.entry_nodes, neighbors). A consolidated documentation referent is not asserted as already-present in Ground. Therefore producing such a documentation artifact is non-vacuous.</p>
+  </section>
+
+  <section data-section="compatibility_verdict">
+    <h2>Compatibility Verdict</h2>
+    <span data-field="result" data-value="needs_clarification">needs_clarification</span>
+    <table data-table="issues">
+      <thead><tr><th>id</th><th>kind</th><th>blocking</th><th>detail</th></tr></thead>
+      <tbody>
+        <tr><td>iv1</td><td>scope_ambiguity</td><td>true</td><td>Request says "9-step" but Ground.conflicts.c1 shows filesystem has 10 step directories (Triage included). Downstream must be told whether to (a) treat Triage as outside the 9-step pool per AGENTS.md narrative, or (b) document all 10 directories. Both are factually grounded; selection is a Decide concern.</td></tr>
+        <tr><td>iv2</td><td>tool_unavailable</td><td>false</td><td>ED snapshot unavailable (Ground.unknowns.ed_query) — verdict relies on Ground file-level facts only.</td></tr>
+      </tbody>
+    </table>
+    <p>Source versions: <code>ed_snapshot_version</code> omitted (ED not available). <code>git_head</code> = <code>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</code> (Ground.volatile_state).</p>
+  </section>
+
+  <section data-section="ground_unknowns_addressed">
+    <h2>Ground Unknowns Addressed</h2>
+    <table>
+      <thead><tr><th>unknown_ref</th><th>disposition</th><th>rationale</th><th>follow_up_ref</th></tr></thead>
+      <tbody>
+        <tr data-disposition="accept_limitation"><td>ed_query</td><td>accept_limitation</td><td>Doc task does not require dependency-graph analysis; file-level Ground facts suffice for impact derivation.</td><td>—</td></tr>
+        <tr data-disposition="accept_limitation"><td>typecheck</td><td>accept_limitation</td><td>No code changes planned; type validation not applicable to doc deliverable.</td><td>—</td></tr>
+        <tr data-disposition="escalate"><td>step_count_vs_directory_count</td><td>escalate</td><td>Material to deliverable framing (9 vs 10); blocking input for Decide. Surfaced in compatibility_verdict.issues.iv1.</td><td>compatibility_verdict.issues.iv1</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="verification_proof">
+    <h2>Verification Proof (R26 chain)</h2>
+    <details open><summary>inherited_from_ground</summary>
+      <table>
+        <thead><tr><th>source_artifact</th><th>tool_call_id</th><th>command</th><th>raw_stdout</th></tr></thead>
+        <tbody>
+          <tr><td>.blazewrit/grounds/plan-standalone-test-h.html</td><td>t1</td><td><code>ls -1 /home/revil/projects/zipbul/blazewrit/steps/ | wc -l</code></td><td><pre>10</pre></td></tr>
+          <tr><td>.blazewrit/grounds/plan-standalone-test-h.html</td><td>t2</td><td><code>ls -1 /home/revil/projects/zipbul/blazewrit/.claude/agents/ | wc -l</code></td><td><pre>16</pre></td></tr>
+          <tr><td>.blazewrit/grounds/plan-standalone-test-h.html</td><td>t3</td><td><code>git -C /home/revil/projects/zipbul/blazewrit rev-parse HEAD</code></td><td><pre>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</pre></td></tr>
+          <tr><td>.blazewrit/grounds/plan-standalone-test-h.html</td><td>t4</td><td><code>sha256sum AGENTS.md</code></td><td><pre>126e38c164ae47a2cc6ab167e54cefb7041294680a6f7ac7d730a79b7491afea</pre></td></tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>self_executed</summary>
+      <table>
+        <thead><tr><th>id</th><th>command</th><th>raw_stdout</th></tr></thead>
+        <tbody>
+          <tr><td>i1</td><td><code>(enumerate Ground.entry_nodes file paths ∪ Ground.neighbors file paths, dedup, count)</code></td><td><pre>13</pre></td></tr>
+        </tbody>
+      </table>
+      <p>Note: Investigate is Bash-prohibited; i1 is a deterministic enumeration over already-verified Ground-emitted path lists (entry_nodes e1–e2 = 2 paths; neighbors n1–n11 = 11 paths; no overlap). 2 + 11 = 13. Per R23 the count's source is this enumeration; no external command was synthesized.</p>
+    </details>
+  </section>
+
+  <section data-section="cove_log">
+    <h2>CoVe (R24)</h2>
+    <dl>
+      <dt>Claims extracted</dt>
+      <dd>
+        <ul>
+          <li>affected_files_count = 13 (derived from Ground path lists)</li>
+          <li>architecture_impact.new_modules = [] (doc task)</li>
+          <li>architecture_impact.public_api_changes = [] (no external surface change)</li>
+          <li>compatibility_verdict.result = needs_clarification (9-vs-10 ambiguity is material)</li>
+          <li>no_op_detected = false</li>
+          <li>ed_snapshot_version omitted (ED unavailable per Ground.unknowns)</li>
+        </ul>
+      </dd>
+      <dt>Verifications</dt>
+      <dd>
+        <ol>
+          <li><p>claim: affected_files_count = 13</p><p>question: does enumeration of Ground.entry_nodes (2) ∪ Ground.neighbors (11) with no overlap yield 13?</p><p>check: e1=AGENTS.md, e2=steps/triage/README.md; n1..n9 = steps/{ground,investigate,decide,spec,test,implement,report,verify,reflect}/README.md (9); n10 = .claude/agents/; n11 = package.json. 2 + 9 + 2 = 13. No overlap (triage is e2; ground..reflect are n1..n9).</p><p>verdict: PASS</p></li>
+          <li><p>claim: new_modules = []</p><p>question: does Ground identify any new directory/module signal?</p><p>check: Ground.entry_nodes and neighbors reference only existing paths; no creation signal.</p><p>verdict: PASS</p></li>
+          <li><p>claim: public_api_changes = []</p><p>question: does any external_surface entry have breaking=true?</p><p>check: x1 breaking=false; no other entries.</p><p>verdict: PASS</p></li>
+          <li><p>claim: verdict = needs_clarification</p><p>question: is the 9-vs-10 ambiguity blocking and unresolvable within Investigate boundary?</p><p>check: Both numbers are Ground-verified (t1=10, AGENTS.md narrative "(9 steps)"). Selecting which framing to document is option-selection (R15: Decide).</p><p>verdict: PASS</p></li>
+          <li><p>claim: ed_snapshot_version omitted</p><p>question: is the field omitted (not placeholdered) per R13?</p><p>check: field absent from compatibility_verdict; prose notes "omitted (ED not available)". No invented value.</p><p>verdict: PASS</p></li>
+        </ol>
+      </dd>
+    </dl>
+  </section>
+
+</article>
+</body>
+</html>

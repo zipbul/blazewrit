@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Ground — plan-standalone-test-h</title>
+  <script type="application/json" id="meta">
+{"flow_id":"plan-standalone-test-h","flow_type":"plan-standalone","channel":"user_session","schema_version":1,"captured_at":"2026-05-17","next_step":"investigate"}
+  </script>
+</head>
+<body>
+<article data-step="ground" data-flow-id="plan-standalone-test-h">
+
+  <header>
+    <p>Request: <q>Document the 9-step workflow architecture used in this blazewrit repo.</q></p>
+    <p>Next step: <span data-field="next_step" data-value="investigate">investigate</span></p>
+  </header>
+
+  <section data-section="task_subgraph">
+    <h2>Task Subgraph</h2>
+    <table data-table="entry_nodes">
+      <thead><tr><th>id</th><th>path</th><th>source_tool</th><th>sha256</th><th>mtime_epoch</th><th>verified</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>e1</td>
+          <td><code>AGENTS.md</code></td>
+          <td>Bash:cat</td>
+          <td><code>126e38c164ae47a2cc6ab167e54cefb7041294680a6f7ac7d730a79b7491afea</code></td>
+          <td>1778938408</td>
+          <td>true</td>
+        </tr>
+        <tr>
+          <td>e2</td>
+          <td><code>steps/triage/README.md</code></td>
+          <td>Bash:sha256sum</td>
+          <td><code>3c21e1ca38734be11f57641541070af18a73e986f8301cdb1316f1865ce58dfb</code></td>
+          <td>1778949033</td>
+          <td>true</td>
+        </tr>
+      </tbody>
+    </table>
+    <table data-table="neighbors">
+      <thead><tr><th>id</th><th>path</th><th>source_tool</th><th>relation</th></tr></thead>
+      <tbody>
+        <tr><td>n1</td><td><code>steps/ground/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n2</td><td><code>steps/investigate/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n3</td><td><code>steps/decide/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n4</td><td><code>steps/spec/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n5</td><td><code>steps/test/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n6</td><td><code>steps/implement/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n7</td><td><code>steps/report/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n8</td><td><code>steps/verify/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n9</td><td><code>steps/reflect/README.md</code></td><td>Bash:ls</td><td>step_spec</td></tr>
+        <tr><td>n10</td><td><code>.claude/agents/</code></td><td>Bash:ls</td><td>agent_definitions</td></tr>
+        <tr><td>n11</td><td><code>package.json</code></td><td>Bash:cat</td><td>repo_manifest</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="volatile_state">
+    <h2>Volatile State</h2>
+    <table>
+      <thead><tr><th>field</th><th>status</th><th>command</th><th>raw_stdout</th></tr></thead>
+      <tbody>
+        <tr data-field="git_status" data-status="success">
+          <td>git_status</td><td>success</td>
+          <td><code>git status --short</code></td>
+          <td><pre>ok</pre></td>
+        </tr>
+        <tr data-field="git_head" data-status="success">
+          <td>git_head</td><td>success</td>
+          <td><code>git rev-parse HEAD</code></td>
+          <td><pre>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</pre></td>
+        </tr>
+        <tr data-field="git_head_subject" data-status="success">
+          <td>git_head_subject</td><td>success</td>
+          <td><code>git log -1 --format="%H %s"</code></td>
+          <td><pre>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281 HTML single-format default — Phase F empirical decision</pre></td>
+        </tr>
+        <tr data-field="typecheck" data-status="unavailable">
+          <td>typecheck</td><td>unavailable</td>
+          <td><code>npx --no-install tsc --noEmit</code></td>
+          <td><pre>Unknown command: "tsc"  (typescript devDep listed in package.json but no local install — node_modules present per ls, but tsc binary not resolvable via npx --no-install)</pre></td>
+        </tr>
+        <tr data-field="lint" data-status="unavailable">
+          <td>lint</td><td>unavailable</td>
+          <td>n/a</td>
+          <td><pre>no lint script in package.json</pre></td>
+        </tr>
+        <tr data-field="test" data-status="unavailable">
+          <td>test</td><td>unavailable</td>
+          <td>n/a</td>
+          <td><pre>no test script in package.json</pre></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="unknowns">
+    <h2>Unknowns</h2>
+    <ul>
+      <li data-unknown-type="tool_unavailable"><strong>ed_query</strong>: emberdeck MCP not in session — graph subgraph unavailable</li>
+      <li data-unknown-type="tool_unavailable"><strong>typecheck</strong>: tsc binary not resolvable via npx --no-install</li>
+      <li data-unknown-type="scope_ambiguity"><strong>step_count_vs_directory_count</strong>: request says <q>9-step</q>; <code>steps/</code> directory entry count and AGENTS.md narrative both captured in raw form below (no comparison performed here per boundary)</li>
+    </ul>
+  </section>
+
+  <section data-section="conflicts">
+    <h2>Conflicts (raw quotes only — no comparison)</h2>
+    <article data-conflict-id="c1">
+      <p>Sources: <code>AGENTS.md:9</code>, <code>ls steps/</code></p>
+      <pre data-source-tool="Read">AGENTS.md line containing step pool:
+"Step pool: Ground, Investigate, Decide, Spec, Test, Implement, Report, Verify, Reflect (9 steps)"</pre>
+      <pre data-source-tool="Bash:ls">`ls -1 steps/` stdout:
+decide/
+ground/
+implement/
+investigate/
+reflect/
+report/
+spec/
+test/
+triage/
+verify/</pre>
+      <pre data-source-tool="Bash:wc">`ls -1 steps/ | wc -l` stdout: 10</pre>
+    </article>
+    <article data-conflict-id="c2">
+      <p>Sources: <code>AGENTS.md:10</code>, <code>ls .claude/agents/</code></p>
+      <pre data-source-tool="Read">AGENTS.md line containing agent count:
+"Execution: produce ⇄ review loop per step (16 agents: 9 producer + 7 reviewer — Verify/Reflect have no reviewer) + hooks (mechanical)"</pre>
+      <pre data-source-tool="Bash:ls">`ls -1 .claude/agents/` stdout:
+decide-reviewer.md
+decide.md
+ground-reviewer.md
+ground.md
+implement-reviewer.md
+implement.md
+investigate-reviewer.md
+investigate.md
+reflect.md
+report-reviewer.md
+report.md
+spec-reviewer.md
+spec.md
+test-reviewer.md
+test.md
+verify.md</pre>
+      <pre data-source-tool="Bash:wc">`ls -1 .claude/agents/ | wc -l` stdout: 16</pre>
+    </article>
+    <article data-conflict-id="c3">
+      <p>Sources: <code>AGENTS.md:5</code></p>
+      <pre data-source-tool="Read">AGENTS.md workflow line:
+"None (free conversation) ↔ Triage → Flow[Ground → Investigate → Decide → Spec? → Core Steps → Verify → Reflect]"</pre>
+    </article>
+  </section>
+
+  <section data-section="freshness">
+    <h2>Freshness</h2>
+    <dl>
+      <dt>git_head_start</dt><dd><code>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</code></dd>
+      <dt>git_head_end</dt><dd><code>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</code></dd>
+      <dt>racing_changes</dt><dd>false</dd>
+      <dt>working_tree</dt><dd>clean (git status --short → empty)</dd>
+    </dl>
+  </section>
+
+  <section data-section="omitted_fields">
+    <h2>Omitted Fields (R22)</h2>
+    <ul>
+      <li data-field="ed_snapshot_version">ED unavailable per unknowns.ed_query</li>
+      <li data-field="god_nodes_in_scope">ED-degree classification unavailable; R18/R22 substitute prohibited</li>
+      <li data-field="perf_baseline">flow_type=plan-standalone (doc task); not applicable</li>
+      <li data-field="dependency_audit">not requested by flow_type</li>
+      <li data-field="observability">not requested by flow_type</li>
+      <li data-field="release_state">not requested by flow_type</li>
+    </ul>
+  </section>
+
+  <section data-section="verification_proof">
+    <h2>Verification Proof</h2>
+    <details open><summary>tool_calls (with R25 double-run)</summary>
+      <table>
+        <thead><tr><th>id</th><th>command</th><th>raw_stdout_run1</th><th>raw_stdout_run2</th><th>diff</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>t1</td>
+            <td><code>ls -1 /home/revil/projects/zipbul/blazewrit/steps/ | wc -l</code></td>
+            <td><pre>10</pre></td>
+            <td><pre>10</pre></td>
+            <td>identical</td>
+          </tr>
+          <tr>
+            <td>t2</td>
+            <td><code>ls -1 /home/revil/projects/zipbul/blazewrit/.claude/agents/ | wc -l</code></td>
+            <td><pre>16</pre></td>
+            <td><pre>16</pre></td>
+            <td>identical</td>
+          </tr>
+          <tr>
+            <td>t3</td>
+            <td><code>git -C /home/revil/projects/zipbul/blazewrit rev-parse HEAD</code></td>
+            <td><pre>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</pre></td>
+            <td><pre>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</pre></td>
+            <td>identical</td>
+          </tr>
+          <tr>
+            <td>t4</td>
+            <td><code>sha256sum AGENTS.md</code></td>
+            <td><pre>126e38c164ae47a2cc6ab167e54cefb7041294680a6f7ac7d730a79b7491afea</pre></td>
+            <td><pre>126e38c164ae47a2cc6ab167e54cefb7041294680a6f7ac7d730a79b7491afea</pre></td>
+            <td>identical</td>
+          </tr>
+        </tbody>
+      </table>
+    </details>
+  </section>
+
+  <section data-section="cove_log">
+    <h2>Chain-of-Verification Log (R24)</h2>
+    <dl>
+      <dt>Claims extracted</dt>
+      <dd>
+        <ul>
+          <li>steps/ directory entry count = stdout shown in t1</li>
+          <li>.claude/agents/ entry count = stdout shown in t2</li>
+          <li>git HEAD = stdout shown in t3</li>
+          <li>AGENTS.md sha256 = stdout shown in t4</li>
+          <li>AGENTS.md contains literal "(9 steps)" string in step pool line</li>
+          <li>AGENTS.md contains literal "16 agents" string in execution line</li>
+        </ul>
+      </dd>
+      <dt>Verifications</dt>
+      <dd>
+        <ol>
+          <li>
+            <p>claim: steps/ entry count source</p>
+            <p>question: re-execute ls|wc and confirm stdout reproducibility</p>
+            <p>invocation: <code>ls -1 steps/ | wc -l</code> → raw_stdout in t1 (twice, identical)</p>
+            <p>verdict: PASS</p>
+          </li>
+          <li>
+            <p>claim: .claude/agents/ entry count source</p>
+            <p>question: re-execute ls|wc and confirm</p>
+            <p>invocation: t2 (twice, identical)</p>
+            <p>verdict: PASS</p>
+          </li>
+          <li>
+            <p>claim: AGENTS.md narrative quotes</p>
+            <p>question: re-read AGENTS.md and confirm exact strings present</p>
+            <p>invocation: <code>cat AGENTS.md</code> — lines containing "(9 steps)" and "16 agents:" both confirmed verbatim in conflicts c1 and c2</p>
+            <p>verdict: PASS</p>
+          </li>
+          <li>
+            <p>claim: typecheck unavailable</p>
+            <p>question: confirm tsc not invokable via npx --no-install</p>
+            <p>invocation: <code>npx --no-install tsc --noEmit</code> → stderr "Unknown command: \"tsc\""</p>
+            <p>verdict: PASS (status=unavailable)</p>
+          </li>
+          <li>
+            <p>claim: working tree clean</p>
+            <p>question: confirm no uncommitted changes</p>
+            <p>invocation: <code>git status --short</code> → empty stdout</p>
+            <p>verdict: PASS</p>
+          </li>
+        </ol>
+      </dd>
+    </dl>
+  </section>
+
+</article>
+</body>
+</html>

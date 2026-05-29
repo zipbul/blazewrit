@@ -1,0 +1,87 @@
+:host {
+  display: block;
+  flex: 1;
+  min-height: 0;
+}
+
+.lanes {
+  display: flex;
+  gap: 12px;
+  height: 100%;
+  overflow-x: auto;
+}
+.lane {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.lane-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+}
+.lane-h.faint { color: var(--faint); }
+.lane-h .nn {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+}
+.lane.done .nn { background: var(--success); box-shadow: 0 0 8px var(--success); }
+.lane.active .nn { background: var(--primary); box-shadow: 0 0 10px var(--primary); }
+.lane-h .ct { margin-left: auto; color: var(--faint); }
+
+.lane-body {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px dashed rgba(255, 255, 255, 0.06);
+  border-radius: var(--glass-radius);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+.lane.active .lane-body {
+  border-color: rgba(94, 200, 236, 0.3);
+  border-style: solid;
+  background: rgba(94, 200, 236, 0.04);
+}
+
+.tc { padding: 14px; }
+.tc .id { font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
+.tc .t { font-weight: 600; font-size: 14px; margin: 4px 0 8px; letter-spacing: -0.01em; }
+.tc .row { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 10px; }
+.chip {
+  border: 1px solid var(--glass-border);
+  padding: 1px 7px;
+  border-radius: 10px;
+  color: var(--muted-foreground);
+}
+.tc.live-c {
+  border-color: rgba(94, 200, 236, 0.4);
+  box-shadow: 0 0 0 1px rgba(94, 200, 236, 0.25), var(--glass-shadow);
+}
+.pulse { display: inline-flex; align-items: center; gap: 5px; color: var(--primary); }
+.pulse.ok { color: var(--success); }
+.pulse .pd {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  animation: pulse 1.3s infinite;
+}
+.dim { color: var(--muted-foreground); }
+.retry { font-family: var(--font-mono); font-size: 9.5px; color: var(--destructive); margin-top: 7px; }
+
+@keyframes pulse {
+  50% { opacity: 0.3; }
+}

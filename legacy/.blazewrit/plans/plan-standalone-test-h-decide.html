@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Decide(design) — plan-standalone-test-h</title>
+  <script type="application/json" id="meta">
+{"flow_id":"plan-standalone-test-h","mode":"design","expected_next_step":"report","schema_version":1,"based_on_ground":".blazewrit/grounds/plan-standalone-test-h.html","based_on_investigate":".blazewrit/investigations/plan-standalone-test-h.html"}
+  </script>
+</head>
+<body>
+<article data-step="decide" data-mode="design" data-flow-id="plan-standalone-test-h">
+
+  <header>
+    <p>Flow: plan-standalone — produce a consolidated workflow-architecture document (no source mutation).</p>
+    <p>Inputs: Ground (sha256-verified AGENTS.md + step/agent enumerations), Investigate (verdict=needs_clarification, iv1 9-vs-10).</p>
+    <p>emberdeck unavailable (Ground.unknowns.ed_query) → <code>intent_card_id</code> omitted per R13.</p>
+  </header>
+
+  <section data-section="options_deliberated">
+    <h2>Options Deliberated</h2>
+    <table>
+      <thead><tr><th>id</th><th>approach</th><th>pros</th><th>cons</th><th>est_effort</th></tr></thead>
+      <tbody>
+        <tr data-option-id="opt-A">
+          <td>opt-A</td>
+          <td>Document the 9-step pool per AGENTS.md narrative; render Triage as a pre-flow gateway mode (not a pool member). Single doc, primary source = AGENTS.md.</td>
+          <td>Aligns with authoritative narrative (Ground.entry_nodes.e1); preserves "16 agents = 9 producer + 7 reviewer" arithmetic (Ground.c2); matches conflict c3 chain shape.</td>
+          <td>Must explicitly footnote the 10th directory (<code>steps/triage/</code>) or Decide-Reviewer will flag iv1 as silently dropped.</td>
+          <td>small</td>
+        </tr>
+        <tr data-option-id="opt-B">
+          <td>opt-B</td>
+          <td>Document all 10 step directories as the pool; redefine narrative to "10 steps incl. Triage".</td>
+          <td>Matches filesystem (<code>ls steps/</code> = 10, Ground.t1).</td>
+          <td>Contradicts AGENTS.md verbatim "(9 steps)" + "Triage ↔ Flow[...]" boundary (Ground.c1, c3); breaks 16-agent decomposition (Triage has no producer/reviewer in <code>.claude/agents/</code>, Ground.c2). Violates constraint c1 (must not contradict narrative without reconciliation).</td>
+          <td>medium</td>
+        </tr>
+        <tr data-option-id="opt-C">
+          <td>opt-C</td>
+          <td>Dual rendering: document 9-step pool as primary, plus a separate "Triage gateway" appendix; cite both raw quotes from Ground.c1.</td>
+          <td>Resolves iv1 by reconciliation rather than selection; future-proof against re-classification.</td>
+          <td>Heavier surface for a doc-only flow; risks confusing the canonical chain (rs3) by elevating Triage to peer-section weight.</td>
+          <td>medium</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="chosen">
+    <h2>Chosen</h2>
+    <p><span data-field="option_id" data-value="opt-A">opt-A</span></p>
+    <p data-field="rationale">opt-A is the only option that simultaneously honors (i) Ground.entry_nodes.e1 (AGENTS.md authoritative narrative, sha256 verified), (ii) Ground.c2 16-agent arithmetic, and (iii) Ground.c3 canonical chain "Triage ↔ Flow[Ground → … → Reflect]" which itself encodes Triage-as-gateway. iv1 is resolved by footnote (REQ-4) rather than by contradicting the narrative (opt-B) or by inflating doc surface (opt-C). Constraint c1 (no narrative contradiction without explicit reconciliation) is satisfied via REQ-4's verbatim dual-quote.</p>
+  </section>
+
+  <section data-section="chosen_architecture">
+    <h2>Architecture (documentation artifact)</h2>
+    <svg data-diagram="architecture" viewBox="0 0 720 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Workflow chain">
+      <rect x="10" y="80" width="80" height="40" fill="#eef" stroke="#333"/>
+      <text x="50" y="105" text-anchor="middle" font-size="12">Triage</text>
+      <text x="50" y="140" text-anchor="middle" font-size="10">(gateway)</text>
+      <line x1="90" y1="100" x2="120" y2="100" stroke="#333" marker-end="url(#a)"/>
+      <rect x="120" y="80" width="560" height="40" fill="#efe" stroke="#333"/>
+      <text x="400" y="105" text-anchor="middle" font-size="11">Ground → Investigate → Decide → Spec? → Core (Test/Implement/Report) → Verify → Reflect</text>
+      <text x="400" y="140" text-anchor="middle" font-size="10">Flow (9-step pool)</text>
+      <defs><marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker></defs>
+    </svg>
+    <article data-area="components">
+      <h3>Components of the doc</h3>
+      <ul>
+        <li><strong>Overview section</strong>: cites AGENTS.md "(9 steps)" + "16 agents" verbatim.</li>
+        <li><strong>Step table</strong>: 9 rows (Ground, Investigate, Decide, Spec, Test, Implement, Report, Verify, Reflect) × columns {purpose, producer agent, reviewer agent, README ref}.</li>
+        <li><strong>Agent-pairing matrix</strong>: 9 producer rows; Verify & Reflect mark reviewer column as "—" (matches Ground.c2 stdout where <code>verify-reviewer.md</code> and <code>reflect-reviewer.md</code> are absent).</li>
+        <li><strong>Triage appendix (footnote-weight)</strong>: gateway role; explicit dual-quote from Ground.c1.</li>
+      </ul>
+    </article>
+    <article data-area="dataflow">
+      <h3>Data flow for doc construction</h3>
+      <ol>
+        <li>Source-of-truth: AGENTS.md (Ground.e1).</li>
+        <li>Per-step detail: <code>steps/&lt;step&gt;/README.md</code> (Ground.n1–n9).</li>
+        <li>Agent rows: <code>.claude/agents/*.md</code> listing (Ground.c2 stdout).</li>
+        <li>Output: single HTML doc at <code>docs/workflow-architecture.html</code>.</li>
+      </ol>
+    </article>
+  </section>
+
+  <section data-section="policies">
+    <h2>Policies</h2>
+    <ol>
+      <li data-policy-id="P1">All numeric claims in the doc (9 steps, 16 agents, 7 reviewers) MUST cite Ground tool_call IDs (t1/t2) or AGENTS.md sha256.</li>
+      <li data-policy-id="P2">Triage MUST appear only in the gateway appendix, never in the step table; the appendix MUST contain the verbatim Ground.c1 dual-quote.</li>
+      <li data-policy-id="P3">Reviewer column for Verify and Reflect MUST be rendered as "—" (em-dash), not as TBD/PENDING (R13 fail-loud).</li>
+      <li data-policy-id="P4">No claim derivable only from ED (graph degree, god-node) may appear (Ground.unknowns.ed_query).</li>
+      <li data-policy-id="P5">Doc must be self-contained HTML5 (matches repo's Phase F empirical default per Ground.git_head_subject).</li>
+    </ol>
+  </section>
+
+  <section data-section="user_flows">
+    <h2>User Flows</h2>
+    <ol>
+      <li><strong>Newcomer reads overview</strong>: opens <code>docs/workflow-architecture.html</code> → reads Overview → scans Step table → consults Agent matrix → (optional) Triage appendix.</li>
+      <li><strong>Maintainer reconciles agent count</strong>: jumps to Agent matrix → confirms 9 producer + 7 reviewer = 16 against Ground.c2 stdout.</li>
+      <li><strong>Auditor checks 9-vs-10</strong>: jumps to Triage appendix → sees both raw quotes (narrative + <code>ls</code>) → confirms reconciliation rule.</li>
+    </ol>
+  </section>
+
+  <section data-section="requirements">
+    <h2>Requirements (R20 verify_probe per item)</h2>
+    <table>
+      <thead><tr><th>id</th><th>description</th><th>probe_type</th><th>probe_target</th><th>expected</th><th>negative_test</th></tr></thead>
+      <tbody>
+        <tr data-req-id="REQ-1">
+          <td>REQ-1</td>
+          <td>Doc artifact exists at <code>docs/workflow-architecture.html</code>.</td>
+          <td><code data-probe-type="file_exists">file_exists</code></td>
+          <td><code>docs/workflow-architecture.html</code></td>
+          <td>file present, non-zero size</td>
+          <td>absent file → FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-2">
+          <td>REQ-2</td>
+          <td>Doc contains the verbatim phrase "9 steps" sourced from AGENTS.md.</td>
+          <td><code data-probe-type="grep">grep</code></td>
+          <td><code>docs/workflow-architecture.html</code></td>
+          <td><code>grep -c '9 steps' docs/workflow-architecture.html</code> ≥ 1</td>
+          <td>0 matches → FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-3">
+          <td>REQ-3</td>
+          <td>Doc contains the verbatim phrase "16 agents".</td>
+          <td><code data-probe-type="grep">grep</code></td>
+          <td><code>docs/workflow-architecture.html</code></td>
+          <td><code>grep -c '16 agents' docs/workflow-architecture.html</code> ≥ 1</td>
+          <td>0 matches → FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-4">
+          <td>REQ-4</td>
+          <td>Triage appendix present and dual-quotes Ground.c1 (both "(9 steps)" narrative and <code>ls steps/</code> 10-line stdout).</td>
+          <td><code data-probe-type="grep">grep</code></td>
+          <td><code>docs/workflow-architecture.html</code></td>
+          <td><code>grep -c 'Triage' docs/workflow-architecture.html</code> ≥ 1 AND <code>grep -c 'triage/' docs/workflow-architecture.html</code> ≥ 1</td>
+          <td>missing either quote → FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-5">
+          <td>REQ-5</td>
+          <td>Step table renders exactly 9 step rows (Ground, Investigate, Decide, Spec, Test, Implement, Report, Verify, Reflect).</td>
+          <td><code data-probe-type="grep">grep</code></td>
+          <td><code>docs/workflow-architecture.html</code></td>
+          <td><code>grep -c 'data-step-row=' docs/workflow-architecture.html</code> = 9</td>
+          <td>count ≠ 9 → FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-6">
+          <td>REQ-6</td>
+          <td>Verify and Reflect rows show reviewer = "—" (em-dash, U+2014), not "TBD"/"PENDING".</td>
+          <td><code data-probe-type="grep">grep</code></td>
+          <td><code>docs/workflow-architecture.html</code></td>
+          <td><code>grep -E 'data-step-row="(verify|reflect)"' </code> rows contain <code>&amp;mdash;</code> or U+2014; AND <code>grep -c 'PENDING\|TBD' docs/workflow-architecture.html</code> = 0</td>
+          <td>any TBD/PENDING token → FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-7">
+          <td>REQ-7</td>
+          <td>Doc cites Ground git HEAD <code>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</code> as freshness anchor.</td>
+          <td><code data-probe-type="grep">grep</code></td>
+          <td><code>docs/workflow-architecture.html</code></td>
+          <td><code>grep -c 'd248cc57cc15f5f8e6b8f99795bbf962ffa2b281' docs/workflow-architecture.html</code> ≥ 1</td>
+          <td>0 matches → FAIL</td>
+        </tr>
+        <tr data-req-id="REQ-8">
+          <td>REQ-8</td>
+          <td>Doc is valid HTML5 (starts with <code>&lt;!DOCTYPE html&gt;</code>).</td>
+          <td><code data-probe-type="grep">grep</code></td>
+          <td><code>docs/workflow-architecture.html</code></td>
+          <td><code>head -1 docs/workflow-architecture.html</code> = <code>&lt;!DOCTYPE html&gt;</code></td>
+          <td>any other first line → FAIL</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section data-section="task_list">
+    <h2>Task List (R19 concrete imperative tasks)</h2>
+    <ol>
+      <li data-task-id="T001" data-parallel="false" data-phase="setup">
+        <strong>T001</strong>: Create directory <code>docs/</code> if absent.
+        <details><summary>details</summary>
+          <dl>
+            <dt>inputs</dt><dd>(none)</dd>
+            <dt>outputs</dt><dd><code>docs/</code></dd>
+            <dt>depends_on</dt><dd>—</dd>
+            <dt>acceptance_test</dt><dd>{type: file_exists, target: <code>docs/</code>, expected: directory present}</dd>
+            <dt>verify_probe</dt><dd><code>test -d docs &amp;&amp; echo ok</code></dd>
+            <dt>est_effort</dt><dd>trivial</dd>
+          </dl>
+        </details>
+      </li>
+      <li data-task-id="T002" data-parallel="false" data-phase="author">
+        <strong>T002</strong>: Author HTML5 skeleton at <code>docs/workflow-architecture.html</code> with <code>&lt;!DOCTYPE html&gt;</code>, <code>&lt;title&gt;Workflow Architecture&lt;/title&gt;</code>, and section anchors for Overview/StepTable/AgentMatrix/TriageAppendix.
+        <details><summary>details</summary>
+          <dl>
+            <dt>inputs</dt><dd>AGENTS.md (Ground.e1)</dd>
+            <dt>outputs</dt><dd><code>docs/workflow-architecture.html</code> (skeleton)</dd>
+            <dt>depends_on</dt><dd>T001</dd>
+            <dt>acceptance_test</dt><dd>{type: grep, target: <code>docs/workflow-architecture.html</code>, expected: contains <code>&lt;!DOCTYPE html&gt;</code> at line 1}</dd>
+            <dt>verify_probe</dt><dd><code>head -1 docs/workflow-architecture.html | grep -q '^&lt;!DOCTYPE html&gt;$'</code></dd>
+            <dt>est_effort</dt><dd>trivial</dd>
+          </dl>
+        </details>
+      </li>
+      <li data-task-id="T003" data-parallel="false" data-phase="author">
+        <strong>T003</strong>: Populate Overview section with verbatim quotes "9 steps" and "16 agents" from AGENTS.md plus the git HEAD freshness anchor <code>d248cc57…</code>.
+        <details><summary>details</summary>
+          <dl>
+            <dt>inputs</dt><dd>Ground.conflicts.c1 quote, Ground.conflicts.c2 quote, Ground.freshness.git_head_start</dd>
+            <dt>outputs</dt><dd><code>docs/workflow-architecture.html</code> §Overview</dd>
+            <dt>depends_on</dt><dd>T002</dd>
+            <dt>acceptance_test</dt><dd>{type: grep, target: <code>docs/workflow-architecture.html</code>, expected: ≥1 match each for "9 steps", "16 agents", "d248cc57cc15f5f8e6b8f99795bbf962ffa2b281"}</dd>
+            <dt>verify_probe</dt><dd><code>grep -q '9 steps' docs/workflow-architecture.html &amp;&amp; grep -q '16 agents' docs/workflow-architecture.html &amp;&amp; grep -q 'd248cc57cc15f5f8e6b8f99795bbf962ffa2b281' docs/workflow-architecture.html</code></dd>
+            <dt>est_effort</dt><dd>small</dd>
+          </dl>
+        </details>
+      </li>
+      <li data-task-id="T004" data-parallel="false" data-phase="author">
+        <strong>T004</strong>: Emit Step Table with 9 rows tagged <code>data-step-row="ground|investigate|decide|spec|test|implement|report|verify|reflect"</code>; columns purpose / producer-agent / reviewer-agent / README ref.
+        <details><summary>details</summary>
+          <dl>
+            <dt>inputs</dt><dd>steps/&lt;step&gt;/README.md (Ground.n1–n9, e2 excluded — Triage not in pool)</dd>
+            <dt>outputs</dt><dd><code>docs/workflow-architecture.html</code> §StepTable</dd>
+            <dt>depends_on</dt><dd>T002</dd>
+            <dt>acceptance_test</dt><dd>{type: grep, target: <code>docs/workflow-architecture.html</code>, expected: <code>grep -c 'data-step-row=' </code> = 9}</dd>
+            <dt>verify_probe</dt><dd><code>[ "$(grep -c 'data-step-row=' docs/workflow-architecture.html)" = "9" ]</code></dd>
+            <dt>est_effort</dt><dd>medium</dd>
+          </dl>
+        </details>
+      </li>
+      <li data-task-id="T005" data-parallel="true" data-phase="author">
+        <strong>T005</strong>: Emit Agent Matrix with 9 producer rows; for Verify and Reflect rows render reviewer cell as <code>&amp;mdash;</code>; ensure zero occurrences of TBD/PENDING.
+        <details><summary>details</summary>
+          <dl>
+            <dt>inputs</dt><dd>.claude/agents/ listing (Ground.c2 stdout)</dd>
+            <dt>outputs</dt><dd><code>docs/workflow-architecture.html</code> §AgentMatrix</dd>
+            <dt>depends_on</dt><dd>T004</dd>
+            <dt>acceptance_test</dt><dd>{type: grep, target: <code>docs/workflow-architecture.html</code>, expected: 0 matches for <code>PENDING\|TBD</code>; at least 2 matches for <code>&amp;mdash;</code>}</dd>
+            <dt>verify_probe</dt><dd><code>[ "$(grep -c 'PENDING\|TBD' docs/workflow-architecture.html)" = "0" ] &amp;&amp; [ "$(grep -c '&amp;mdash;' docs/workflow-architecture.html)" -ge "2" ]</code></dd>
+            <dt>est_effort</dt><dd>small</dd>
+          </dl>
+        </details>
+      </li>
+      <li data-task-id="T006" data-parallel="true" data-phase="author">
+        <strong>T006</strong>: Emit Triage Appendix containing verbatim dual-quote from Ground.c1 (narrative "(9 steps)" + <code>ls steps/</code> 10-line stdout including <code>triage/</code>).
+        <details><summary>details</summary>
+          <dl>
+            <dt>inputs</dt><dd>Ground.conflicts.c1 raw quotes</dd>
+            <dt>outputs</dt><dd><code>docs/workflow-architecture.html</code> §TriageAppendix</dd>
+            <dt>depends_on</dt><dd>T002</dd>
+            <dt>acceptance_test</dt><dd>{type: grep, target: <code>docs/workflow-architecture.html</code>, expected: ≥1 match for <code>Triage</code> and ≥1 match for <code>triage/</code>}</dd>
+            <dt>verify_probe</dt><dd><code>grep -q 'Triage' docs/workflow-architecture.html &amp;&amp; grep -q 'triage/' docs/workflow-architecture.html</code></dd>
+            <dt>est_effort</dt><dd>small</dd>
+          </dl>
+        </details>
+      </li>
+      <li data-task-id="T007" data-parallel="false" data-phase="validate">
+        <strong>T007</strong>: Run all REQ-1..REQ-8 verify_probes and record stdout in Verify step.
+        <details><summary>details</summary>
+          <dl>
+            <dt>inputs</dt><dd>REQ-1..REQ-8 from requirements section</dd>
+            <dt>outputs</dt><dd>verify report</dd>
+            <dt>depends_on</dt><dd>T003, T004, T005, T006</dd>
+            <dt>acceptance_test</dt><dd>{type: command, target: bash, expected: all 8 probes exit 0}</dd>
+            <dt>verify_probe</dt><dd><code>bash -c 'for p in "test -s docs/workflow-architecture.html" "grep -q \"9 steps\" docs/workflow-architecture.html" "grep -q \"16 agents\" docs/workflow-architecture.html" "grep -q triage/ docs/workflow-architecture.html" "[ $(grep -c data-step-row= docs/workflow-architecture.html) = 9 ]" "[ $(grep -c PENDING\\\\|TBD docs/workflow-architecture.html) = 0 ]" "grep -q d248cc57cc15f5f8e6b8f99795bbf962ffa2b281 docs/workflow-architecture.html" "head -1 docs/workflow-architecture.html | grep -q ^\\&lt;!DOCTYPE"; do eval "$p" || exit 1; done'</code></dd>
+            <dt>est_effort</dt><dd>trivial</dd>
+          </dl>
+        </details>
+      </li>
+    </ol>
+    <p data-field="task_count">
+      <span data-field-value="task_count">
+        value: 7; source: enumeration T001..T007 in this section; verify: <code>grep -c 'data-task-id=' .blazewrit/plans/plan-standalone-test-h-decide.html</code> → 7
+      </span>
+    </p>
+  </section>
+
+  <section data-section="gate_rules" data-applicable="compound-only">
+    <p>N/A — flow_type=plan-standalone is not Compound top-level. Omitted per spec.</p>
+  </section>
+
+  <p>Next step: <span data-field="next_step" data-value="report">report</span></p>
+
+  <section data-section="verification_proof">
+    <h2>Verification Proof (R26 chain)</h2>
+    <details open><summary>inherited_from_ground</summary>
+      <table>
+        <thead><tr><th>source_artifact</th><th>tool_call_id</th><th>command</th><th>raw_stdout</th></tr></thead>
+        <tbody>
+          <tr><td>.blazewrit/grounds/plan-standalone-test-h.html</td><td>t1</td><td><code>ls -1 /home/revil/projects/zipbul/blazewrit/steps/ | wc -l</code></td><td><pre>10</pre></td></tr>
+          <tr><td>.blazewrit/grounds/plan-standalone-test-h.html</td><td>t2</td><td><code>ls -1 /home/revil/projects/zipbul/blazewrit/.claude/agents/ | wc -l</code></td><td><pre>16</pre></td></tr>
+          <tr><td>.blazewrit/grounds/plan-standalone-test-h.html</td><td>t3</td><td><code>git -C /home/revil/projects/zipbul/blazewrit rev-parse HEAD</code></td><td><pre>d248cc57cc15f5f8e6b8f99795bbf962ffa2b281</pre></td></tr>
+          <tr><td>.blazewrit/grounds/plan-standalone-test-h.html</td><td>t4</td><td><code>sha256sum AGENTS.md</code></td><td><pre>126e38c164ae47a2cc6ab167e54cefb7041294680a6f7ac7d730a79b7491afea</pre></td></tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>inherited_from_investigate</summary>
+      <table>
+        <thead><tr><th>source_artifact</th><th>reference</th><th>value</th></tr></thead>
+        <tbody>
+          <tr><td>.blazewrit/investigations/plan-standalone-test-h.html</td><td>architecture_impact.has_architecture_level</td><td>false</td></tr>
+          <tr><td>.blazewrit/investigations/plan-standalone-test-h.html</td><td>compatibility_verdict.result</td><td>needs_clarification</td></tr>
+          <tr><td>.blazewrit/investigations/plan-standalone-test-h.html</td><td>compatibility_verdict.issues.iv1</td><td>scope_ambiguity: 9 vs 10 step framing — resolved here by opt-A + REQ-4</td></tr>
+          <tr><td>.blazewrit/investigations/plan-standalone-test-h.html</td><td>affected_files_count</td><td>13</td></tr>
+          <tr><td>.blazewrit/investigations/plan-standalone-test-h.html</td><td>risk_surface.rs1..rs4</td><td>medium/low — addressed by P1–P5 and REQ-4..REQ-6</td></tr>
+        </tbody>
+      </table>
+    </details>
+    <details><summary>self_executed</summary>
+      <table>
+        <thead><tr><th>id</th><th>command</th><th>raw_stdout</th></tr></thead>
+        <tbody>
+          <tr><td>d1</td><td><code>(enumerate task ids T001..T007 in this artifact)</code></td><td><pre>7</pre></td></tr>
+        </tbody>
+      </table>
+      <p>Note: Decide is Bash-prohibited per agent boundary; d1 is a deterministic enumeration over task_list entries authored within this document. No external command synthesized.</p>
+    </details>
+  </section>
+
+  <section data-section="cove_log">
+    <h2>Chain-of-Verification Log (R24)</h2>
+    <dl>
+      <dt>Claims extracted</dt>
+      <dd>
+        <ul>
+          <li>opt-B contradicts AGENTS.md narrative</li>
+          <li>opt-A preserves 16-agent decomposition</li>
+          <li>chosen rationale satisfies constraint c1</li>
+          <li>Verify/Reflect lack reviewer agents (justifies P3 + REQ-6)</li>
+          <li>task_count = 7</li>
+          <li>flow_type=plan-standalone is not Compound (gate_rules omitted)</li>
+          <li>intent_card_id omitted because emberdeck unavailable</li>
+          <li>next_step = report</li>
+        </ul>
+      </dd>
+      <dt>Verifications</dt>
+      <dd>
+        <ol>
+          <li><p>claim: opt-B contradicts narrative</p><p>q: does AGENTS.md narrative state "9 steps"?</p><p>check: Ground.conflicts.c1 quote "Step pool: ... (9 steps)" — verbatim. opt-B redefines to 10. Contradiction confirmed.</p><p>verdict: PASS</p></li>
+          <li><p>claim: opt-A preserves 16-agent decomposition</p><p>q: do <code>.claude/agents/</code> contents (Ground.c2 stdout) decompose as 9 producer + 7 reviewer with Verify/Reflect reviewerless?</p><p>check: stdout lists 9 producer files (decide.md, ground.md, implement.md, investigate.md, reflect.md, report.md, spec.md, test.md, verify.md) + 7 reviewer files (decide/ground/implement/investigate/report/spec/test-reviewer.md). No verify-reviewer.md or reflect-reviewer.md. 9+7=16 = Ground.t2 stdout.</p><p>verdict: PASS</p></li>
+          <li><p>claim: constraint c1 satisfied</p><p>q: does opt-A reconcile rather than contradict?</p><p>check: REQ-4 mandates verbatim dual-quote from Ground.c1; P2 confines Triage to appendix. Reconciliation explicit.</p><p>verdict: PASS</p></li>
+          <li><p>claim: task_count = 7</p><p>q: enumerate <code>data-task-id</code> entries in task_list.</p><p>check: T001, T002, T003, T004, T005, T006, T007 → 7.</p><p>verdict: PASS</p></li>
+          <li><p>claim: gate_rules N/A</p><p>q: is flow_type Compound top-level?</p><p>check: flow_type=plan-standalone per prompt. Not Compound. Omission valid per spec.</p><p>verdict: PASS</p></li>
+          <li><p>claim: intent_card_id omitted</p><p>q: is emberdeck available?</p><p>check: Ground.unknowns lists <code>ed_query</code> as tool_unavailable. R13 mandates omit (not placeholder). Field omitted from frontmatter and body.</p><p>verdict: PASS</p></li>
+          <li><p>claim: next_step = report</p><p>q: does it match expected_next_step from orchestrator prompt?</p><p>check: prompt says <code>expected_next_step: report</code>. Echoed verbatim.</p><p>verdict: PASS</p></li>
+          <li><p>claim: no fact-capture verbs in options_deliberated/chosen_architecture (R15 boundary)</p><p>q: scan for "new fact", "capture", "measure", "observed", "recorded".</p><p>check: none present in §options_deliberated or §chosen_architecture.</p><p>verdict: PASS</p></li>
+          <li><p>claim: no placeholder tokens (R13)</p><p>q: scan for PENDING-, TBD, not_tracked, unavailable in author-emitted prose.</p><p>check: "unavailable" appears only in Ground citations (emberdeck status), not as a substitute value; "—" used for reviewerless rows; no PENDING/TBD/not_tracked.</p><p>verdict: PASS</p></li>
+        </ol>
+      </dd>
+    </dl>
+  </section>
+
+</article>
+</body>
+</html>

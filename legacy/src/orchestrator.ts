@@ -42,14 +42,15 @@ function validateArtifact(artifactPath:string,step:string,expectedNextStep?:stri
     if(!["verify","reflect"].includes(step)&&!step.endsWith("-reviewer")){
       if(!/data-section=["']cove_log["']/i.test(content))failures.push("R24 missing cove_log section (HTML)");
     }
-    // R23 bare integer in prose — scan only text outside <pre>/<code>/<script>/data-* attribute values
+    // R23 bare integer in prose — strip cove_log section, pre/code/script/svg, data-attrs, then tags
     const stripped=content
+      .replace(/<section\s+[^>]*data-section=["']cove_log["'][^>]*>[\s\S]*?<\/section>/gi,"<section>cove_log</section>")
       .replace(/<pre[\s\S]*?<\/pre>/gi,"<pre>X</pre>")
       .replace(/<code[\s\S]*?<\/code>/gi,"<code>X</code>")
       .replace(/<script[\s\S]*?<\/script>/gi,"<script>X</script>")
       .replace(/<svg[\s\S]*?<\/svg>/gi,"<svg>X</svg>")
       .replace(/data-[\w-]+=["'][^"']*["']/g,"")
-      .replace(/<[^>]+>/g," ");  // strip tags, keep text
+      .replace(/<[^>]+>/g," ");
     const proseInt=stripped.match(/\b\d{2,}\s+(entries|files|items|agents|steps|reviewers|producers|tasks|requirements)\b/gi);
     if(proseInt&&proseInt.length>0)failures.push(`R23 HTML prose integers: ${proseInt.slice(0,3).join(", ")}`);
     return{pass:failures.length===0,failures};

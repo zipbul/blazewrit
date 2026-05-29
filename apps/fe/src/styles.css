@@ -1,0 +1,96 @@
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import 'tailwindcss/utilities.css';
+
+@import '@spartan-ng/brain/hlm-tailwind-preset.css';
+
+/* =====================================================================
+   blazewrit · M-dark design language (확정 2026-05)
+   다크 글래스모피즘 + 그라디언트 메시 · Bricolage Grotesque / Spline Sans Mono
+   토큰 이름은 Spartan/shadcn 표준 유지, 값만 M-dark. dark-first.
+   ===================================================================== */
+:root {
+  color-scheme: dark;
+
+  --font-sans: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Spline Sans Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --radius: 0.625rem;
+
+  /* base surfaces */
+  --background: #0a0816;
+  --foreground: #edecf4;
+  --card: rgba(18, 15, 30, 0.55);
+  --card-foreground: #edecf4;
+  --popover: #14111f;
+  --popover-foreground: #edecf4;
+  --muted: rgba(255, 255, 255, 0.04);
+  --muted-foreground: #9b96b4;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.08);
+
+  /* accents */
+  --primary: #5ec8ec;
+  --primary-foreground: #06121a;
+  --secondary: rgba(255, 255, 255, 0.06);
+  --secondary-foreground: #edecf4;
+  --accent: #9d86f0;
+  --accent-foreground: #0c0820;
+  --ring: #5ec8ec;
+
+  /* signal */
+  --destructive: #f07d92;
+  --destructive-foreground: #1a0a0e;
+  --success: #4fd9a4;
+  --warning: #f0bd5e;
+
+  /* sidebar (Spartan expects these) */
+  --sidebar: #0c0a1a;
+  --sidebar-foreground: #edecf4;
+  --sidebar-primary: #5ec8ec;
+  --sidebar-primary-foreground: #06121a;
+  --sidebar-accent: rgba(255, 255, 255, 0.06);
+  --sidebar-accent-foreground: #edecf4;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: #5ec8ec;
+
+  /* glass + mesh (M-dark 고유 토큰) */
+  --glass: rgba(18, 15, 30, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: 24px;
+  --glass-radius: 1rem;
+  --glass-shadow: 0 14px 44px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --faint: #5f5a80;
+  --mesh:
+    radial-gradient(42% 45% at 18% 8%, rgba(94, 200, 236, 0.12), transparent),
+    radial-gradient(40% 42% at 86% 14%, rgba(157, 134, 240, 0.12), transparent),
+    radial-gradient(46% 50% at 60% 100%, rgba(79, 217, 164, 0.07), transparent);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    background-image: var(--mesh);
+    background-attachment: fixed;
+  }
+}
+
+@layer components {
+  /* 공유 글래스 카드 — 3뷰(Dashboard/Board/Canvas) 동일 스펙 */
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--glass-radius);
+    box-shadow: var(--glass-shadow);
+  }
+}

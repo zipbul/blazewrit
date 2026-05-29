@@ -1,0 +1,24 @@
+<div class="shell">
+  <header class="glass bar">
+    <span class="logo">◇ blaze<b>writ</b></span>
+    <nav class="views">
+      <a routerLink="/dashboard" routerLinkActive="on">Dashboard</a>
+      <a routerLink="/board" routerLinkActive="on">Board</a>
+      <a routerLink="/canvas" routerLinkActive="on">Canvas</a>
+    </nav>
+    <span class="live"><span class="dot"></span>3 agents live · ⌘K</span>
+  </header>
+
+  <main class="stage">
+    <router-outlet />
+  </main>
+
+  <footer class="glass status">
+    <span class="s"><span class="b ok"></span>api</span>
+    <span class="s"><span class="b ok"></span>web</span>
+    <span class="s"><span class="b down"></span>infra</span>
+    <span class="s">1,204 events</span>
+    <span class="s warn">⚑ 1 decision pending</span>
+    <span class="cmdk">⌘K</span>
+  </footer>
+</div>

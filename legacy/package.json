@@ -1,0 +1,31 @@
+{
+  "name": "@zipbul/blazewrit",
+  "version": "0.1.0",
+  "description": "Prompt-driven agentic workflow for coding tools",
+  "type": "module",
+  "bin": {
+    "blazewrit": "./dist/bin/blazewrit.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "prompts"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "tsc"
+  },
+  "keywords": [
+    "agentic",
+    "workflow",
+    "blazewrit",
+    "claude",
+    "cursor",
+    "codex"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "typescript": "^5.7.0"
+  }
+}

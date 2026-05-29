@@ -1,0 +1,109 @@
+:host {
+  display: block;
+  height: 100%;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 14px;
+  gap: 12px;
+}
+
+/* top bar */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 20px;
+}
+.logo {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-size: 16px;
+}
+.logo b {
+  color: var(--primary);
+}
+.views {
+  margin-left: 8px;
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px;
+  border-radius: 11px;
+}
+.views a {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  padding: 5px 13px;
+  border-radius: 8px;
+  text-decoration: none;
+  transition: color 0.15s, background 0.15s;
+}
+.views a:hover {
+  color: var(--foreground);
+}
+.views a.on {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--foreground);
+}
+.live {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 10px var(--success);
+}
+
+/* stage */
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* status bar */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 9px 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+.status .s {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.status .b {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.status .b.ok {
+  background: var(--success);
+}
+.status .b.down {
+  background: var(--destructive);
+}
+.status .warn {
+  color: var(--warning);
+}
+.status .cmdk {
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
