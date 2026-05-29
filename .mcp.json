@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "angular-cli": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd /home/revil/projects/zipbul/blazewrit/apps/fe && exec node node_modules/@angular/cli/bin/ng.js mcp --read-only"
+      ]
+    }
+  }
+}
