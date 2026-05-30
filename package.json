@@ -13,5 +13,8 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "scripts": {
+    "schemas:check": "node harness/schemas/validate.mjs"
   }
 }
