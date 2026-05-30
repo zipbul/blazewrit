@@ -1,0 +1,606 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/decide.schema.json",
+  "title": "blazewrit harness — decide step structured_output",
+  "description": "Decide = the OWNER of the decision, sitting on Investigate output (every flow runs Decide, no skip). Output depth is declared via a per-flow MODE: record | plan | design. TARGET RUNTIME: grammar-constrained generation (M1 = SHAPE). This schema models the Decide OUTPUT as a top-level discriminated union on `result`: a normal `decision` (which itself carries the 3-mode record|plan|design sub-union), plus the two prose-mandated control outputs `reclassify_required` (triage_mismatch surfaced) and `request_upstream_deepen` (shallow Ground/Investigate, cap 1). $ref-s ./_defs.schema.json for all shared primitives (M4 single source). IMPORTANT: grammar here enforces SHAPE only. The MODE is FORCED MECHANICALLY by R6 from Investigate schema fields (NOT free-chosen by the LLM) — the orchestrator computes the forced mode and a SIBLING M2 validator_contract (see x-validator-contracts) asserts the emitted `mode` matches that R6 computation. Other truth-bearing fields (R6 mode-force, R16 chain, R20 verify probes in plans, R23 measured counts, R26 provenance, R36 citations, R5 cross-verify on Design) are likewise closed by deterministic code checks listed in x-validator-contracts, NOT by any keyword here.",
+
+  "type": "object",
+  "required": ["result"],
+  "$comment": "NO root-level additionalProperties:false — JSON Schema additionalProperties only sees SIBLING properties, not properties introduced inside the oneOf branches. Closure is enforced per-branch (each oneOf member sets additionalProperties:false + lists its full property set). The root `properties.result` below is advisory (gives `result` a description); the binding discriminant + closure live in each branch.",
+
+  "properties": {
+    "result": {
+      "$comment": "Top-level discriminant. Grammar forces exactly one branch via the oneOf below.",
+      "description": "Which Decide output this is. 'decision' = a real decision was made (carries `mode` sub-union). 'reclassify_required' = Investigate surfaced triage_mismatch; Decide does NOT proceed, signals reclassify (orchestrator re-enters Triage; cap 3/flow). 'request_upstream_deepen' = Ground/Investigate too shallow to decide; Decide signals upstream deepen (cap 1/flow, then Verify is final safety).",
+      "type": "string",
+      "enum": ["decision", "reclassify_required", "request_upstream_deepen"]
+    }
+  },
+
+  "oneOf": [
+    {
+      "$comment": "BRANCH A — a real decision. Carries the 3-mode (record|plan|design) sub-union.",
+      "additionalProperties": false,
+      "required": ["result", "mode", "decision_record", "reason", "based_on", "depth", "declared_next_step", "unverified"],
+      "properties": {
+        "result": { "const": "decision" },
+
+        "mode": {
+          "$comment": "R6 — the forced mode discriminant. Grammar enforces the value is one of the three AND (via the nested oneOf below) that the per-mode required fields are present. TRUTH (that this value == the R6-computed forced mode) is an M2 validator_contract, not a keyword.",
+          "description": "Decide mode = output depth. record (self-evident decision, depth=shallow) | plan (option selection, depth=medium) | design (full design, depth=deep). FORCED MECHANICALLY by R6 from Investigate fields — the orchestrator computes it; the LLM enters with it pre-forced. The nested oneOf on this same `mode` value forces exactly one per-mode payload.",
+          "type": "string",
+          "enum": ["record", "plan", "design"]
+        },
+
+        "decision_record": {
+          "$comment": "Reviewer rule: ALL modes require decision_record + reason. One-line authoritative statement of the decision taken.",
+          "description": "The decision itself, as one authoritative statement. REQUIRED in every mode (decide-reviewer: 'decision_record + reason 필수' for all modes).",
+          "type": "string",
+          "minLength": 1
+        },
+
+        "reason": {
+          "$comment": "ALL modes require reason. The justification, grounded in Ground/Investigate facts.",
+          "description": "Why this decision — grounded in Ground/Investigate FACTS (reviewer: 'ground·investigate 사실에 근거'). REQUIRED in every mode. Carries provenance: source_tool names which Ground/Investigate origin the reason rests on (R26 floor).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["statement", "source_tool"],
+          "properties": {
+            "statement": { "type": "string", "minLength": 1 },
+            "grounded_in": {
+              "description": "RowRefs to the specific Ground/Investigate rows whose facts justify this decision (§5: Postgres row ids, never file paths).",
+              "type": "array",
+              "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+            },
+            "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+          }
+        },
+
+        "based_on": {
+          "$comment": "§5 — based_on = RowRefs (Postgres rows), NEVER file paths. Legacy prose 'based_on: { investigate_ref, ground_ref }' translated to RowRef bundle.",
+          "description": "Upstream rows this decision rests on. EVERY value is a RowRef (Postgres step_runs row id), never a file path. Decide always rests on Investigate and Ground; both are required here.",
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/BasedOn" }],
+          "type": "object",
+          "required": ["investigate_ref", "ground_ref"],
+          "properties": {
+            "investigate_ref": { "$ref": "./_defs.schema.json#/$defs/RowRef" },
+            "ground_ref": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+          }
+        },
+
+        "depth": {
+          "$comment": "Decide mode IS depth (Record=shallow / Plan/Design=deep per _defs.Depth). x-validator: depth must agree with mode.",
+          "description": "Adaptive Step Depth this Decide ran at. Decide maps mode→depth (Record=shallow; Plan/Design=deep). M2 validator asserts depth agrees with `mode`.",
+          "$ref": "./_defs.schema.json#/$defs/Depth"
+        },
+
+        "declared_next_step": {
+          "$comment": "R16 — producer DECLARES, orchestrator INJECTS expected_next_step. Chain match is M2 (folded into R27 validator).",
+          "description": "R16 advisory next step. Decide does NOT free-fill the authoritative successor; the orchestrator injects expected_next_step. M2 validator asserts declared_next_step == expected_next_step (chain divergence check). Carries the shared DeclaredNextStep shape.",
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep" }]
+        },
+
+        "unverified": {
+          "$comment": "R13 floor — KEEP polarity. A Decide claim the step could not itself verify; designed to persist to Verify (the single gate). No 'no unverified remain' forbid.",
+          "description": "R13 UNVERIFIED FLAG (irreducible floor, KEEP polarity). true = some part of this decision could not be verified by Decide and MUST propagate downstream to Verify. Never forbidden true at this intermediate step.",
+          "type": "boolean"
+        },
+
+        "followup_flows": {
+          "$comment": "Record mode (esp. Review audit flow). dedup by (type, scope_hash) is an M2 validator, not a grammar keyword.",
+          "description": "Audit-flow followups (Review Decide.Record surfaces review findings here; orchestrator QUEUEs them, does not auto-run). M2 validator: dedup by (type, scope_hash). scope is a RowRef to the finding row.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "scope_ref", "scope_hash"],
+            "properties": {
+              "type": {
+                "description": "Followup flow kind to queue.",
+                "type": "string",
+                "enum": ["bugfix", "refactor", "feature"]
+              },
+              "scope_ref": {
+                "description": "RowRef to the finding/work row this followup addresses (§5 row id, not a file path).",
+                "$ref": "./_defs.schema.json#/$defs/RowRef"
+              },
+              "scope_hash": {
+                "description": "Stable hash of the followup scope. M2 validator dedups followup_flows by (type, scope_hash).",
+                "$ref": "./_defs.schema.json#/$defs/Sha256"
+              }
+            }
+          }
+        },
+
+        "options_considered": {
+              "description": "The compared options. Reviewer demands N>=2 (an option set of one is not a plan). Each has an id, approach, trade_offs, and est_effort.",
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "approach", "trade_offs", "est_effort"],
+                "properties": {
+                  "id": { "type": "string", "minLength": 1 },
+                  "approach": { "type": "string", "minLength": 1 },
+                  "trade_offs": { "type": "string", "minLength": 1 },
+                  "est_effort": {
+                    "description": "Relative effort estimate for this option.",
+                    "type": "string",
+                    "enum": ["low", "medium", "high"]
+                  },
+                  "verify_probe": {
+                    "$comment": "R20 — optional re-runnable assertion attached to an option. Truth is the RE-EXECUTION (M2), not the shape.",
+                    "description": "Optional R20 probe: a command + expected result that would validate this option's premise. M2 validator RE-EXECUTES and compares — self-assertion is not truth.",
+                    "$ref": "./_defs.schema.json#/$defs/VerifyProbe"
+                  }
+                }
+              }
+            },
+
+            "chosen": {
+              "description": "The selected option + why. option_id MUST reference an id present in options_considered (M2 validator).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["option_id", "rationale"],
+              "properties": {
+                "option_id": { "type": "string", "minLength": 1 },
+                "rationale": { "type": "string", "minLength": 1 }
+              }
+            },
+
+            "sequencing": {
+              "$comment": "Compound sub-flow order / migration cycle order. depends_on values reference step ids within this sequence (M2 acyclicity/existence check).",
+              "description": "Optional priority/dependency ordering (Compound sub-flow order, Migration cycle order). Each entry: a step id + the step ids it depends on. M2 validator: every depends_on id exists and the graph is acyclic.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["step", "depends_on"],
+                "properties": {
+                  "step": { "type": "string", "minLength": 1 },
+                  "depends_on": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            },
+
+            "options_deliberated": {
+              "description": "pyreez deliberation record (option comparison feeding the architecture choice). pyreez is MCP-backed and degradable: when pyreez is unavailable this is the Omitted branch (R22), not an empty array or a fabricated deliberation.",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Measured" }],
+                  "properties": {
+                    "value": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["id", "approach", "trade_offs"],
+                        "properties": {
+                          "id": { "type": "string", "minLength": 1 },
+                          "approach": { "type": "string", "minLength": 1 },
+                          "trade_offs": { "type": "string", "minLength": 1 }
+                        }
+                      }
+                    }
+                  }
+                },
+                { "$ref": "./_defs.schema.json#/$defs/Omitted" }
+              ]
+            },
+
+            "design_document": {
+              "$comment": "Reviewer: design document MUST contain architecture + policy + userflow + req. All four required.",
+              "description": "The design document. Reviewer requires all four sub-parts present: architecture, policy(/policies), userflow(s), requirements.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["architecture", "policies", "user_flows", "requirements"],
+              "properties": {
+                "architecture": {
+                  "description": "The chosen architecture decision (chosen_architecture in legacy prose).",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["summary", "source_tool"],
+                  "properties": {
+                    "summary": { "type": "string", "minLength": 1 },
+                    "components": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    },
+                    "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+                  }
+                },
+                "policies": {
+                  "description": "Policy / business rules: [{ rule, scope, exceptions }].",
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["rule", "scope"],
+                    "properties": {
+                      "rule": { "type": "string", "minLength": 1 },
+                      "scope": { "type": "string", "minLength": 1 },
+                      "exceptions": {
+                        "type": "array",
+                        "items": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  }
+                },
+                "user_flows": {
+                  "description": "User flow descriptions.",
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string", "minLength": 1 }
+                },
+                "requirements": {
+                  "description": "Requirements derived in the design.",
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string", "minLength": 1 }
+                }
+              }
+            },
+
+            "intent_card": {
+              "$comment": "Reviewer: Design must CREATE an emberdeck intent card. emberdeck is MCP-backed and degradable: card creation can fail when ED is unavailable → Omitted branch (R22), not a fake card id.",
+              "description": "The emberdeck intent card produced by this design. emberdeck (ED) is MCP-backed and degradable; when ED is unavailable, this is the Omitted branch (the design still stands but the card was not created), NOT a fabricated card id. Measured.value carries the created card's RowRef-style id.",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Measured" }],
+                  "properties": {
+                    "value": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["card_id"],
+                      "properties": {
+                        "card_id": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  }
+                },
+                { "$ref": "./_defs.schema.json#/$defs/Omitted" }
+              ]
+            },
+
+            "adr": {
+              "$comment": "R34 — Architecture Decision Record is an M1 FIELD (standalone prose rule deleted; shape forced by grammar). Required in Design.",
+              "description": "R34 ARCHITECTURE DECISION RECORD (M1 field — R34 standalone prose rule deleted, the shape is now grammar-forced). Records the architectural decision: title, context, decision, consequences, status, optional considered alternatives.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["title", "context", "decision", "consequences", "status"],
+              "properties": {
+                "title": { "type": "string", "minLength": 1 },
+                "context": { "type": "string", "minLength": 1 },
+                "decision": { "type": "string", "minLength": 1 },
+                "consequences": { "type": "string", "minLength": 1 },
+                "status": {
+                  "description": "ADR lifecycle status.",
+                  "type": "string",
+                  "enum": ["proposed", "accepted", "deprecated", "superseded"]
+                },
+                "alternatives_considered": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 }
+                }
+              }
+            },
+
+            "cross_verify_required": {
+              "$comment": "R5 floor — Design mode is HIGH-STAKES, so the cross-verify trigger is carried here. Mitigation, not elimination.",
+              "description": "R5 CROSS-VERIFY TRIGGER (irreducible-floor mitigation). Design mode is high-stakes, so Decide carries the multi-model/pyreez cross-verification trigger. Mitigates self-asserted-truth / semantic-boundary residuals; does NOT eliminate them.",
+              "type": "boolean"
+            },
+
+            "cross_verify_result": {
+              "description": "Optional R5 outcome once cross-verification ran. 'disagree' is the self-misjudgment signal.",
+              "type": "string",
+              "enum": ["agree", "disagree", "inconclusive", "not_run"]
+            },
+
+            "task_list": {
+              "$comment": "§10 task model — Design MAY decompose into tasks. R19/R33 ParallelMarker: same-file tasks => parallel_marker=false is an M2 cross-task check, not a grammar keyword. affected count is a CountClaim (R23).",
+              "description": "Optional task decomposition for the design (§10 task model). Each task carries R19/R33 parallel_marker (M2 validator: tasks touching the same file MUST both be parallel_marker=false) and an affected_files_count that is a CountClaim (R23 — never a bare integer for a measured count).",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "description", "parallel_marker", "files"],
+                "properties": {
+                  "id": { "type": "string", "minLength": 1 },
+                  "description": { "type": "string", "minLength": 1 },
+                  "parallel_marker": {
+                    "$comment": "R19/R33 — same-file tasks => parallel_marker=false is an M2 cross-task check.",
+                    "description": "R19/R33: may this task run in parallel with siblings. M2 validator: any two tasks sharing a file path MUST both be false (mutual exclusion over file paths).",
+                    "type": "boolean"
+                  },
+                  "files": {
+                    "description": "File paths this task touches (read input paths, not §5 cross-step refs). Drives the same-file parallel_marker M2 check.",
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "depends_on": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "affected_files_count": {
+                    "$comment": "R23 — a count of measured things MUST be a CountClaim, never a bare integer.",
+                    "description": "R23 count-type: number of files this task affects, as a CountClaim {value, source:{command, raw_stdout_sha256}}. M2 validator re-derives value from raw_stdout.",
+                    "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                  }
+                }
+              }
+            },
+
+            "gate_rules": {
+              "$comment": "Compound TOP-LEVEL only. JsonLogic predicate + action enum. Gate executor = orchestrator code (NOT LLM). M2: var paths must exist in sub_flow output structure.",
+              "description": "Compound top-level ONLY (compound-recursion): gate criteria evaluated by the orchestrator (NOT the LLM) BETWEEN sub-flows. Each rule = a JsonLogic condition predicate + an action enum (proceed|pivot|abort|retry). M2 validator: JsonLogic grammar validity + every `var` path exists in the real sub_flow output structure. pivot cap 2/compound, retry cap 1/sub_flow.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["condition", "action"],
+                "properties": {
+                  "condition": {
+                    "$comment": "JsonLogic predicate object (borrowed mini-DSL; no new DSL). Free-form object; M2 validates JsonLogic grammar + var-path existence.",
+                    "description": "A JsonLogic condition predicate ({ operator: [operands...] }). Allowed operators: ==, !=, >, <, >=, <=, and, or, not, in, var. Shape is an open object here; M2 validator checks JsonLogic validity and that every var path resolves in the sub_flow context.",
+                    "type": "object"
+                  },
+                  "action": {
+                    "description": "Gate action taken when condition holds.",
+                    "type": "string",
+                    "enum": ["proceed", "pivot", "abort", "retry"]
+                  }
+                }
+              }
+            },
+
+            "sub_flow_sequence": {
+              "$comment": "Compound TOP-LEVEL only. Decide(Design) defines the sub-flow order (decomposition + ordering). Each entry references a sub-flow by RowRef.",
+              "description": "Compound top-level ONLY (compound-recursion): the ordered list of sub-flows this Compound decomposes into (Decide-Design owns decomposition + ordering; Triage does NOT). Each entry: a sub-flow ref (RowRef), its flow type, and the prior sub-flow refs it depends on. Reviewer: Compound top-level requires gate_rules + sub_flow_sequence both defined.",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sub_flow_ref", "flow_type"],
+                "properties": {
+                  "sub_flow_ref": {
+                    "description": "RowRef to the sub-flow row (§5 row id, never a file path).",
+                    "$ref": "./_defs.schema.json#/$defs/RowRef"
+                  },
+                  "flow_type": { "type": "string", "minLength": 1 },
+                  "depends_on": {
+                    "description": "RowRefs of prior sub-flows this one depends on (ordering).",
+                    "type": "array",
+                    "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+                  }
+                }
+              }
+            }
+          },
+
+          "oneOf": [
+            {
+              "$comment": "MODE = record. Self-evident decision. decision_record + reason carry the 1-pair the reviewer requires; no plan/design payload. All plan/design-only props forbidden (false) so grammar cannot emit a record carrying them.",
+              "required": ["mode"],
+              "properties": {
+                "mode": { "const": "record" },
+                "options_considered": false,
+                "chosen": false,
+                "sequencing": false,
+                "options_deliberated": false,
+                "design_document": false,
+                "intent_card": false,
+                "adr": false,
+                "cross_verify_required": false,
+                "cross_verify_result": false,
+                "task_list": false,
+                "gate_rules": false,
+                "sub_flow_sequence": false
+              }
+            },
+            {
+              "$comment": "MODE = plan. Reviewer: options N>=2 compared + chosen with reason + ordering. Design-only props forbidden.",
+              "required": ["mode", "options_considered", "chosen"],
+              "properties": {
+                "mode": { "const": "plan" },
+                "options_deliberated": false,
+                "design_document": false,
+                "intent_card": false,
+                "adr": false,
+                "cross_verify_required": false,
+                "cross_verify_result": false,
+                "task_list": false,
+                "gate_rules": false,
+                "sub_flow_sequence": false
+              }
+            },
+            {
+              "$comment": "MODE = design. Full design: design_document(architecture+policy+userflow+req) + intent_card + ADR(R34) + cross_verify(R5) required; optional task_list + Compound gate_rules/sub_flow_sequence. Plan/Record-only props forbidden.",
+              "required": ["mode", "design_document", "intent_card", "adr", "cross_verify_required"],
+              "properties": {
+                "mode": { "const": "design" },
+                "options_considered": false,
+                "chosen": false,
+                "sequencing": false
+              }
+            }
+          ]
+        },
+
+    {
+      "$comment": "BRANCH B — reclassify_required. Investigate surfaced triage_mismatch; Decide does NOT proceed. Special output. (Triage reclassify cap 3/flow.)",
+      "additionalProperties": false,
+      "required": ["result", "reclassify", "based_on"],
+      "properties": {
+        "result": { "const": "reclassify_required" },
+        "reclassify": {
+          "description": "Reclassify signal: Investigate surfaced a triage_mismatch. Decide produces this special output and does NOT proceed; orchestrator re-enters Triage as a new flow type (reclassify cap 3/flow). Carries the mismatch reason + provenance.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mismatch_reason", "source_tool"],
+          "properties": {
+            "mismatch_reason": { "type": "string", "minLength": 1 },
+            "suggested_flow_type": {
+              "description": "Optional advisory new flow type for Triage to consider (advisory only; Triage re-decides).",
+              "type": "string",
+              "minLength": 1
+            },
+            "triage_mismatch_ref": {
+              "description": "RowRef to the Investigate row that surfaced the triage_mismatch (§5 row id).",
+              "$ref": "./_defs.schema.json#/$defs/RowRef"
+            },
+            "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+          }
+        },
+        "based_on": {
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/BasedOn" }],
+          "type": "object",
+          "required": ["investigate_ref"],
+          "properties": {
+            "investigate_ref": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+          }
+        }
+      }
+    },
+
+    {
+      "$comment": "BRANCH C — request_upstream_deepen. Ground/Investigate too shallow to decide. Signal; orchestrator re-invokes that step with depth=deep (cap 1/flow). Then Verify is the final safety.",
+      "additionalProperties": false,
+      "required": ["result", "deepen_request", "based_on"],
+      "properties": {
+        "result": { "const": "request_upstream_deepen" },
+        "deepen_request": {
+          "description": "Upstream deepen signal: Decide cannot decide on shallow Ground/Investigate output. Orchestrator re-invokes the named step with depth=deep (cycle cap 1/flow; if still insufficient, Verify is the final safety with failure_origin=ground|investigate). Carries which step + why + provenance.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target_step", "reason", "source_tool"],
+          "properties": {
+            "target_step": {
+              "$comment": "Which upstream step to deepen. Constrained to the two Decide can deepen (Ground / Investigate) — the shared StepName enum is wider, so this is a tightened local enum.",
+              "description": "The upstream step to re-invoke with depth=deep. Only Ground or Investigate (the two Decide rests on).",
+              "type": "string",
+              "enum": ["ground", "investigate"]
+            },
+            "reason": { "type": "string", "minLength": 1 },
+            "missing_evidence": {
+              "description": "What specific evidence/facts are missing such that Decide cannot decide.",
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+          }
+        },
+        "based_on": {
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/BasedOn" }],
+          "type": "object"
+        }
+      }
+    }
+  ],
+
+  "x-validator-contract": [
+    {
+      "rule": "R6",
+      "field": "decision.mode",
+      "check": "M2 REQUIRED: orchestrator computes the FORCED mode from Investigate schema fields (count(compatibility_verdict.issues where severity>=medium)>=2 -> plan; any(risk_surface.severity=high) AND declared=record -> plan; impact_map.affected_files_count>=5 AND declared=record -> plan; architecture_impact.has_architecture_level==true -> design). Assert emitted `mode` == computed forced mode. Mode upgrade triggers evaluated ONLY when compatibility_verdict.result in {proceed, partial_proceed}; otherwise Decide must not have executed at all."
+    },
+    {
+      "rule": "R6/mode-depth",
+      "field": "decision.depth",
+      "check": "M2: assert depth agrees with mode (record->shallow; plan/design->deep)."
+    },
+    {
+      "rule": "R16",
+      "field": "decision.declared_next_step.declared_next_step",
+      "check": "M2 (folded into R27): assert declared_next_step == orchestrator-injected expected_next_step. Mismatch = chain divergence."
+    },
+    {
+      "rule": "reviewer/all-modes",
+      "field": "decision.decision_record + decision.reason",
+      "check": "M2: every mode has decision_record present AND reason grounded in actual Ground/Investigate rows (reason.grounded_in / reason.source_tool resolve to real upstream rows)."
+    },
+    {
+      "rule": "reviewer/plan",
+      "field": "decision.options_considered + decision.chosen",
+      "check": "M2: options_considered.length >= 2 (already grammar-enforced) AND chosen.option_id references an id present in options_considered."
+    },
+    {
+      "rule": "plan/sequencing",
+      "field": "decision.sequencing[].depends_on",
+      "check": "M2: every depends_on id exists among sequencing[].step and the dependency graph is acyclic."
+    },
+    {
+      "rule": "R20",
+      "field": "decision.options_considered[].verify_probe",
+      "check": "M2 REQUIRED where present: re-execute verify_probe.command, compare to expected_result. Self-assertion is not truth."
+    },
+    {
+      "rule": "R5",
+      "field": "decision.cross_verify_required",
+      "check": "M2 (Design high-stakes): if cross_verify_required=true, the cross-verification (pyreez/multi-model) must actually run; cross_verify_result=disagree is the self-misjudgment signal routed to Verify."
+    },
+    {
+      "rule": "R34",
+      "field": "decision.adr",
+      "check": "M1 field (shape grammar-forced). No M2 truth check beyond presence in Design mode; ADR content is design prose."
+    },
+    {
+      "rule": "R23",
+      "field": "decision.task_list[].affected_files_count",
+      "check": "M2 REQUIRED: re-hash CountClaim.source.raw_stdout, confirm raw_stdout_sha256, re-derive value. Bare integer is forbidden by grammar (CountClaim shape)."
+    },
+    {
+      "rule": "R19/R33",
+      "field": "decision.task_list[].parallel_marker",
+      "check": "M2 REQUIRED: any two tasks whose `files` arrays share a path MUST both have parallel_marker=false (mutual exclusion over file paths)."
+    },
+    {
+      "rule": "task/depends_on",
+      "field": "decision.task_list[].depends_on",
+      "check": "M2: every depends_on id exists among task_list[].id and the graph is acyclic."
+    },
+    {
+      "rule": "reviewer/followup-dedup",
+      "field": "decision.followup_flows",
+      "check": "M2: dedup by (type, scope_hash); reject duplicate (type, scope_hash) pairs. Followups are QUEUEd by orchestrator, not auto-run."
+    },
+    {
+      "rule": "compound/gate_rules",
+      "field": "decision.gate_rules[].condition",
+      "check": "M2: JsonLogic grammar validity (operators in {==,!=,>,<,>=,<=,and,or,not,in,var}); every `var` path resolves in the real sub_flow output context. Gate executor is orchestrator code, not the LLM. pivot cap 2/compound, retry cap 1/sub_flow."
+    },
+    {
+      "rule": "reviewer/compound-toplevel",
+      "field": "decision.gate_rules + decision.sub_flow_sequence",
+      "check": "M2: a Compound TOP-LEVEL Design must define BOTH gate_rules and sub_flow_sequence; sub_flow_sequence depends_on refs must resolve and be acyclic."
+    },
+    {
+      "rule": "R26",
+      "field": "reason.source_tool / *.source_tool",
+      "check": "Floor (partly M2): every fact/decision/finding item carries a source_tool; provenance presence is grammar-forced, that the named origin truly produced the value is mitigated by cross-verification, not eliminated."
+    },
+    {
+      "rule": "R13",
+      "field": "decision.unverified",
+      "check": "Floor, KEEP polarity: unverified is designed to persist to Verify (the single gate). NO 'no unverified remain' forbid. Whether unverified:false is honest is self-asserted-truth residual."
+    },
+    {
+      "rule": "control/reclassify-cap",
+      "field": "result=reclassify_required",
+      "check": "M2/governor: Triage reclassify cap 3/flow; Decide does not proceed on this branch."
+    },
+    {
+      "rule": "control/deepen-cap",
+      "field": "result=request_upstream_deepen",
+      "check": "M2/governor: upstream deepen cap 1/flow; after that Verify is the final safety (failure_origin=ground|investigate forces reclassify with depth=deep)."
+    }
+  ]
+}

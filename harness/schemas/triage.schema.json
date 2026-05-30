@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/triage.schema.json",
+  "title": "blazewrit harness — Triage step structured_output (M1 = SHAPE)",
+  "description": "structured_output schema for the TRIAGE step's OUTPUT, enforced at token-generation (grammar-constrained generation; §16). Triage is a STATELESS classification function: (input)->(output), one invocation = one output, no persistence inside the step (the OUTPUT still persists to Postgres step_runs jsonb per §5, but Triage itself reads/writes no disk and holds no flow state). The output is a 4-TYPE EXHAUSTIVE DISCRIMINATED UNION keyed on `result`: proceed | none | ambiguous | error. Grammar forces exactly one branch with that branch's required fields, so the model cannot emit a proceed without a flow_type, an error without a reason enum, etc. There are NO measured counts in this step — complexity_signal is an ENUM (high|medium|low|none), deliberately NOT a CountClaim (Triage does no code analysis, runs no tools, so it has no raw_stdout to hash). There are NO tool-dependent fields, so NO Measured|Omitted degrade union appears here (Triage invokes no degradable tool). matched_rows are signal-table SIGNAL-ROW ids — §5 RowRefs (Postgres row ids), never file paths. M2 validator contracts (TRUTH, not grammar) are listed in x-validator-contract annotations and in the step manifest; grammar gives shape only.",
+
+  "type": "object",
+  "unevaluatedProperties": false,
+  "required": ["result"],
+
+  "properties": {
+    "result": {
+      "description": "DISCRIMINANT for the 4-type exhaustive output union. Exactly one branch is selected by this enum; the matching oneOf branch fixes that branch's required fields.",
+      "type": "string",
+      "enum": ["proceed", "none", "ambiguous", "error"]
+    }
+  },
+
+  "oneOf": [
+    {
+      "$comment": "BRANCH 1 — proceed: a single flow_type was classified (signal-table single row match, or strict superset, P0-over-BugFix, or verb/target>=2 => compound).",
+      "title": "proceed",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["result", "flow_type", "classification_metadata"],
+      "properties": {
+        "result": { "const": "proceed" },
+        "flow_type": {
+          "$ref": "#/$defs/FlowType"
+        },
+        "classification_metadata": {
+          "description": "How the classification was reached. matched_rows are signal-table row refs; confidence + complexity_signal are enums (NOT counts).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["matched_rows", "confidence", "complexity_signal"],
+          "properties": {
+            "matched_rows": {
+              "description": "The signal-table SIGNAL-ROW id(s) this classification matched. §5: these are Postgres RowRefs (signal-table row ids), NEVER file paths. A single-row match (or strict superset) yields confidence=high; compound (verb/target>=2) may list 2+ rows. Empty is not allowed for a proceed — a proceed must cite at least one matched signal row (the basis for the flow_type).",
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+            },
+            "confidence": {
+              "$comment": "Shared Confidence enum (high|medium|low). high = exactly 1 signal row matched (or strict superset). medium = matched but input mildly ambiguous (clarifications used). low = rarely emitted (Triage prefers ambiguous when no dominant row).",
+              "$ref": "./_defs.schema.json#/$defs/Confidence"
+            },
+            "complexity_signal": {
+              "$comment": "Shared ComplexitySignal enum (high|medium|low|none). Inferred task complexity feeding Step Depth Policy's deepen trigger. ENUM by design — NOT a CountClaim: Triage runs no tool and reads no code, so there is no raw_stdout to hash; this is a judgement signal, not a measured count.",
+              "$ref": "./_defs.schema.json#/$defs/ComplexitySignal"
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "BRANCH 2 — none: input is not actionable (no concrete target / discussion / casual). Host LLM continues free conversation; A2A returns INTENT_NOT_ACTIONABLE.",
+      "title": "none",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["result", "reasoning"],
+      "properties": {
+        "result": { "const": "none" },
+        "reasoning": {
+          "description": "Why the input is not actionable (no verb/target extracted, open brainstorming, casual exchange). Free text — channel handlers (user_session free-talk vs A2A INTENT_NOT_ACTIONABLE vs CI trigger-config error) consume it.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    {
+      "$comment": "BRANCH 3 — ambiguous: multiple signal rows matched with no superset, OR reclassify_count>=3 forced escalation. Carries exactly ONE routing-blocking question.",
+      "title": "ambiguous",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["result", "question"],
+      "properties": {
+        "result": { "const": "ambiguous" },
+        "question": {
+          "description": "ONE routing-blocking clarification question (priority: verb > target > urgency > concern_count). When reclassify_count>=3 the input-field cap rule FORCES this branch with the fixed escalation text 'reclassify cap reached, manual intervention required' — orchestrator then halts the flow and escalates (no re-invoke; loop prevention). The cap-forced escalation is an INPUT-driven rule the grammar cannot see (it depends on the injected reclassify_count); it is an M2 validator_contract, not a schema keyword.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    {
+      "$comment": "BRANCH 4 — error: GIBBERISH (parse failure / meaningless input) or INTERNAL (Triage self-failure). reason is a fixed enum.",
+      "title": "error",
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["result", "reason"],
+      "properties": {
+        "result": { "const": "error" },
+        "reason": {
+          "description": "Error cause enum. GIBBERISH = primary_input could not be parsed / is meaningless (Comprehend failed). INTERNAL = Triage itself failed.",
+          "type": "string",
+          "enum": ["GIBBERISH", "INTERNAL"]
+        }
+      }
+    }
+  ],
+
+  "$defs": {
+    "FlowType": {
+      "$comment": "The 16 flow types from the Triage Signal Table (the authoritative source). README declares the proceed value as 'feature | bugfix | ... | compound' (snake_case). DECISIONS §10 flows.flow_type enum is illustrative ('feature','bugfix',...) — the signal table is canonical for the full set. P0 and Unreproducible are DISTINCT Bug Fix variants (separate signal-table rows), not the same flow. 'none'/free-conversation is NOT a flow_type — it is the separate `result:none` branch, so it is intentionally absent from this enum.",
+      "description": "Triage flow_type — one of the 16 first-class flows the Signal Table maps to. Compound = verb/target>=2 (multiple blockers / multi-phase). Used only inside the proceed branch.",
+      "type": "string",
+      "enum": [
+        "feature",
+        "bugfix",
+        "bugfix_p0",
+        "bugfix_unreproducible",
+        "refactor",
+        "performance",
+        "migration",
+        "test",
+        "chore",
+        "plan_standalone",
+        "review",
+        "release",
+        "retro",
+        "spike",
+        "exploration",
+        "compound"
+      ]
+    }
+  },
+
+  "x-validator-contract": [
+    {
+      "field": "classification_metadata.matched_rows[]",
+      "rule": "Each element is a real signal-table row id (RowRef). M2: assert each id resolves to an existing signal-table row; grammar only enforces the string shape, not row existence.",
+      "check": "row_exists"
+    },
+    {
+      "field": "result (ambiguous branch) vs input.reclassify_count",
+      "rule": "R-cap / reclassify cap: when the orchestrator-injected reclassify_count >= 3, the output MUST be result=ambiguous with question == 'reclassify cap reached, manual intervention required' (no classification attempt). reclassify_count is an INPUT the grammar never sees, so this forced-escalation is a deterministic code check on (input, output), NOT a schema keyword.",
+      "check": "reclassify_cap_forces_ambiguous_escalate"
+    },
+    {
+      "field": "flow_type vs classification_metadata.matched_rows[]",
+      "rule": "The emitted flow_type must be consistent with the matched signal rows (the signal->flow mapping in the Signal Table). compound requires verb/target>=2 (>=2 distinct matched signal intents); bugfix_p0 wins over bugfix on strict superset. Grammar fixes the enum value but cannot verify it matches the cited rows — M2 re-derives flow_type from matched_rows.",
+      "check": "flow_type_matches_signal_rows"
+    },
+    {
+      "field": "classification_metadata.confidence vs matched_rows.length",
+      "rule": "confidence=high requires exactly one matched signal row (or a strict superset). If multiple non-superset rows matched, the correct output is the ambiguous branch, not proceed(low). M2 cross-checks confidence against the match cardinality.",
+      "check": "confidence_consistent_with_match_cardinality"
+    }
+  ]
+}

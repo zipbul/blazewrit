@@ -1,0 +1,865 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/verify.schema.json",
+  "title": "blazewrit harness — Verify step structured_output",
+  "description": "Verify = FLOW-LEVEL goal verifier (NOT a step reviewer; no reviewer of its own — internal multi-pass IS the quality gate). Runs in every flow. OUTPUT is a discriminated union on `result`: pass | degraded_pass | fail | blocked | retry_exhausted (HARNESS_FLOW_REVIEW G5 adds degraded_pass|blocked to the README's pass|fail|retry_exhausted for the tool-degrade case). TARGET RUNTIME: grammar-constrained generation — M1 enforces SHAPE/enum/required only. Truth-bearing fields (CountClaim value↔raw_stdout, VerifyProbe re-execution, sha256 re-hash, declared_next_step==expected_next_step, pyreez disagree==self-misjudgment) are closed by SIBLING M2 validator_contracts listed in this step's manifest, NOT by any keyword here. Mechanical-pass tool fields (typecheck/tests/firebat/emberdeck/pyreez) reuse the shared DegradableMeasurement (M3) + CountClaim (R23) because those tools can be ABSENT/FAIL/timeout — absence is a first-class schema BRANCH, never null/placeholder (R22).",
+  "type": "object",
+  "unevaluatedProperties": false,
+  "required": [
+    "result",
+    "based_on",
+    "flow_kind",
+    "internal_passes",
+    "self_misjudgment_check"
+  ],
+  "properties": {
+    "result": {
+      "description": "DISCRIMINANT (top-level oneOf). pass = flow goal achieved, no tool degrade. degraded_pass = goal achieved but one or more mechanical-pass tools (firebat/emberdeck/pyreez/typecheck/test) were ABSENT/FAILED so the verdict rests on a reduced evidence set (G5). fail = a step produced a wrong result; routes via failure_origin. blocked = a mechanical-pass tool the verdict DEPENDS ON is unavailable AND its absence is verdict-blocking (cannot even degrade-pass; G5). retry_exhausted = max iterations hit → flow halt + escalate, Reflect classifies `abandoned` (NO DONE_WITH_CONCERNS type exists).",
+      "type": "string",
+      "enum": [
+        "pass",
+        "degraded_pass",
+        "fail",
+        "blocked",
+        "retry_exhausted"
+      ]
+    },
+    "based_on": {
+      "description": "§5 cross-step refs (Postgres step_runs row ids, NEVER file paths). Verify reads the WHOLE flow chain, so it records the rows it evaluated. spec_ref/test_ref present only on code flows; report_ref present only on non-code flows. triage_ref is the one always-present anchor (every flow starts at Triage).",
+      "type": "object",
+      "allOf": [
+        {
+          "$ref": "./_defs.schema.json#/$defs/BasedOn"
+        }
+      ],
+      "required": [
+        "triage_ref"
+      ],
+      "properties": {
+        "triage_ref": {
+          "description": "Always present — every flow begins at Triage. Other *_ref keys (ground/investigate/decide/spec/test/report) come from the shared BasedOn bundle and are present per the flow chain.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        }
+      }
+    },
+    "flow_kind": {
+      "description": "Which internal multi-pass set Verify ran. 'code' = Mechanical/Goal-backward/Adversarial/pyreez (typecheck+tests+firebat+emberdeck). 'non_code' = Completeness/Goal-backward/Adversarial/pyreez. Drives which internal_passes branch is populated.",
+      "type": "string",
+      "enum": [
+        "code",
+        "non_code"
+      ]
+    },
+    "high_risk_flow": {
+      "description": "Whether this flow is high-risk (triggers pyreez cross-verification on Pass 2-3, R5). Mirrors Triage/Decide risk. Used to decide whether pyreez_cross_verification is expected vs legitimately Omitted(not_applicable).",
+      "type": "boolean"
+    },
+    "internal_passes": {
+      "description": "The internal multi-pass record (Verify's self-verification — there is NO external reviewer). Exactly the four passes for the flow_kind. Pass 1 differs by flow_kind; Passes 2/3/4 are shared in shape. pyreez (Pass 4) and the code-mechanical tools are tool-dependent → DegradableMeasurement.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pass2_goal_backward",
+        "pass3_adversarial",
+        "pass4_pyreez_cross_verification"
+      ],
+      "properties": {
+        "pass1_mechanical": {
+          "description": "CODE-FLOW Pass 1. typecheck + all tests pass + firebat blockers=0 + emberdeck drift=0. EVERY sub-tool is degradable (MCP/CLI can be absent/fail) → DegradableMeasurement, and the counts (tests passed/failed, firebat blockers, emberdeck drift) are CountClaim (R23). Present iff flow_kind='code'.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "typecheck",
+            "tests",
+            "firebat",
+            "emberdeck"
+          ],
+          "properties": {
+            "typecheck": {
+              "description": "Typecheck result. Degradable (no typecheck command in project ⇒ Omitted{skipped}). Measured.value carries pass/fail + the error CountClaim.",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "value",
+                    "source_tool"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "measured"
+                    },
+                    "source_tool": {
+                      "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                    },
+                    "source": {
+                      "$ref": "./_defs.schema.json#/$defs/Measured/properties/source"
+                    },
+                    "value": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "passed",
+                        "errors"
+                      ],
+                      "properties": {
+                        "passed": {
+                          "type": "boolean"
+                        },
+                        "errors": {
+                          "description": "Count of type errors (R23 — measured count, never a bare integer).",
+                          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "$ref": "./_defs.schema.json#/$defs/Omitted"
+                }
+              ]
+            },
+            "tests": {
+              "description": "Test suite result. Degradable (no test runner ⇒ Omitted). Measured.value carries all_pass + passed/failed CountClaims.",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "value",
+                    "source_tool"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "measured"
+                    },
+                    "source_tool": {
+                      "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                    },
+                    "source": {
+                      "$ref": "./_defs.schema.json#/$defs/Measured/properties/source"
+                    },
+                    "value": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "all_pass",
+                        "passed",
+                        "failed"
+                      ],
+                      "properties": {
+                        "all_pass": {
+                          "type": "boolean"
+                        },
+                        "passed": {
+                          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                        },
+                        "failed": {
+                          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "$ref": "./_defs.schema.json#/$defs/Omitted"
+                }
+              ]
+            },
+            "firebat": {
+              "description": "firebat code-quality scan. MCP-backed → degradable (firebat not attached ⇒ Omitted{unavailable}). PASS requires blockers=0; blockers is a CountClaim (R23).",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "value",
+                    "source_tool"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "measured"
+                    },
+                    "source_tool": {
+                      "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                    },
+                    "source": {
+                      "$ref": "./_defs.schema.json#/$defs/Measured/properties/source"
+                    },
+                    "value": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "blockers"
+                      ],
+                      "properties": {
+                        "blockers": {
+                          "description": "firebat blocker count — PASS iff 0 (R23 CountClaim).",
+                          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "$ref": "./_defs.schema.json#/$defs/Omitted"
+                }
+              ]
+            },
+            "emberdeck": {
+              "description": "emberdeck (ED) intent↔code drift check. MCP graph-backed → degradable (ED unavailable/stale ⇒ Omitted). PASS requires drift=0; drift is a CountClaim (R23).",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "value",
+                    "source_tool"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "measured"
+                    },
+                    "source_tool": {
+                      "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                    },
+                    "source": {
+                      "$ref": "./_defs.schema.json#/$defs/Measured/properties/source"
+                    },
+                    "value": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "drift"
+                      ],
+                      "properties": {
+                        "drift": {
+                          "description": "emberdeck intent↔code drift count — PASS iff 0 (R23 CountClaim).",
+                          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "$ref": "./_defs.schema.json#/$defs/Omitted"
+                }
+              ]
+            }
+          }
+        },
+        "pass1_completeness": {
+          "description": "NON-CODE-FLOW Pass 1. required items present + evidence cited + measurements exist. Present iff flow_kind='non_code'.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "required_items_present",
+            "evidence_cited",
+            "measurements_present"
+          ],
+          "properties": {
+            "required_items_present": {
+              "type": "boolean"
+            },
+            "evidence_cited": {
+              "type": "boolean"
+            },
+            "measurements_present": {
+              "type": "boolean"
+            },
+            "missing_items": {
+              "description": "Required items the output lacks (each sourced). Empty ⇒ complete.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "item",
+                  "source_tool"
+                ],
+                "properties": {
+                  "item": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source_tool": {
+                    "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "pass2_goal_backward": {
+          "description": "Pass 2 (both flow_kinds). Traces original request → plan → tests → code (code) / request → output (non-code): 'what must be TRUE'. Each traced assertion is a finding carrying its provenance + an optional re-runnable VerifyProbe (R20 — TRUTH is the re-execution, an M2 validator_contract).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "goal_satisfied",
+            "traced_assertions"
+          ],
+          "properties": {
+            "goal_satisfied": {
+              "type": "boolean"
+            },
+            "traced_assertions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "assertion",
+                  "holds",
+                  "source_tool"
+                ],
+                "properties": {
+                  "assertion": {
+                    "description": "A 'what must be TRUE' statement derived from the original request.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "holds": {
+                    "type": "boolean"
+                  },
+                  "evidence_ref": {
+                    "description": "Optional file:line or artifact pointer backing this assertion. A RowRef when it points at an upstream step output (§5); plain string for a code file:line citation.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "verify_probe": {
+                    "description": "Optional re-runnable proof (R20). SHAPE here; re-execution vs expected_result is an M2 validator_contract.",
+                    "$ref": "./_defs.schema.json#/$defs/VerifyProbe"
+                  },
+                  "source_tool": {
+                    "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "pass3_adversarial": {
+          "description": "Pass 3 (both flow_kinds). 'How could this still fail? What did I miss?' / 'this conclusion could be wrong because...'. Surfaces residual failure modes; if any has the weight to OVERTURN Pass 1 mechanical, that is a self-misjudgment signal (see self_misjudgment_check).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "residual_failure_modes",
+            "overturns_pass1"
+          ],
+          "properties": {
+            "overturns_pass1": {
+              "description": "true = an adversarial finding here is strong enough to REVERSE the Pass 1 mechanical verdict → a self-misjudgment trigger (R2).",
+              "type": "boolean"
+            },
+            "residual_failure_modes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "failure_mode",
+                  "likelihood",
+                  "severity",
+                  "source_tool"
+                ],
+                "properties": {
+                  "failure_mode": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "likelihood": {
+                    "$ref": "./_defs.schema.json#/$defs/Probability"
+                  },
+                  "severity": {
+                    "$ref": "./_defs.schema.json#/$defs/Severity"
+                  },
+                  "source_tool": {
+                    "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "pass4_pyreez_cross_verification": {
+          "description": "Pass 4 (both flow_kinds, R5). pyreez multi-model cross-verification for high-risk flows. TOOL-DEPENDENT (pyreez can be absent) → DegradableMeasurement: Omitted{unavailable} when pyreez not attached, Omitted{not_applicable} on a non-high-risk flow. Measured.value carries the CrossVerifyFlag result; cross_verify_result='disagree' (opposite verdict) is the self-misjudgment trigger (R2/R5) → failure_origin=verify.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "value",
+                "source_tool"
+              ],
+              "properties": {
+                "status": {
+                  "const": "measured"
+                },
+                "source_tool": {
+                  "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                },
+                "source": {
+                  "$ref": "./_defs.schema.json#/$defs/Measured/properties/source"
+                },
+                "value": {
+                  "description": "pyreez cross-verification outcome (R5 CrossVerifyFlag). cross_verify_required=true on high-risk; cross_verify_result='disagree' = opposite verdict from primary passes = self-misjudgment.",
+                  "type": "object",
+                  "allOf": [
+                    {
+                      "$ref": "./_defs.schema.json#/$defs/CrossVerifyFlag"
+                    }
+                  ],
+                  "required": [
+                    "cross_verify_required",
+                    "cross_verify_result"
+                  ],
+                  "properties": {
+                    "cross_verify_required": {
+                      "description": "R5 trigger (from shared CrossVerifyFlag). true on a high-risk flow.",
+                      "type": "boolean"
+                    },
+                    "cross_verify_result": {
+                      "description": "pyreez verdict vs primary passes. 'disagree' = opposite verdict = self-misjudgment signal (R2) → fail{failure_origin:verify}. From shared CrossVerifyFlag.",
+                      "type": "string",
+                      "enum": [
+                        "agree",
+                        "disagree",
+                        "inconclusive",
+                        "not_run"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            }
+          ]
+        }
+      }
+    },
+    "self_misjudgment_check": {
+      "description": "R2 self-misjudgment detector. Verify suspects its OWN verdict when: (a) pyreez cross-verify gives the OPPOSITE verdict; (b) a Pass 3 adversarial finding overturns Pass 1 mechanical; (c) a post-hoc external signal (user reject / downstream failure). If suspected ⇒ the result MUST be `fail` with failure_origin='verify' (handled in the fail branch's escalate=true / no auto-reinvoke). This object records WHY (auditable), not the routing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "suspected"
+      ],
+      "properties": {
+        "suspected": {
+          "description": "true ⇒ Verify distrusts its own verdict; the fail branch MUST carry failure_origin='verify' and escalate (NEEDS_CONTEXT, no auto-reinvoke — prevents infinite self-route).",
+          "type": "boolean"
+        },
+        "triggers": {
+          "description": "Which R2 conditions fired (only present when suspected=true).",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pyreez_opposite_verdict",
+              "adversarial_overturns_mechanical",
+              "post_hoc_external_signal"
+            ]
+          }
+        }
+      }
+    },
+    "declared_next_step": {
+      "description": "R16 ADVISORY successor declaration. Verify does NOT free-fill the authoritative next step — the orchestrator INJECTS expected_next_step and reads `result`/`failure_origin` to route. declared_next_step==expected_next_step is an M2 validator_contract, not enforced here.",
+      "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep"
+    }
+  },
+  "oneOf": [
+    {
+      "title": "PASS",
+      "properties": {
+        "result": {
+          "const": "pass"
+        }
+      }
+    },
+    {
+      "title": "DEGRADED_PASS",
+      "properties": {
+        "result": {
+          "const": "degraded_pass"
+        }
+      }
+    },
+    {
+      "title": "FAIL",
+      "properties": {
+        "result": {
+          "const": "fail"
+        }
+      }
+    },
+    {
+      "title": "BLOCKED",
+      "properties": {
+        "result": {
+          "const": "blocked"
+        }
+      }
+    },
+    {
+      "title": "RETRY_EXHAUSTED",
+      "properties": {
+        "result": {
+          "const": "retry_exhausted"
+        }
+      }
+    }
+  ],
+  "$comment": "DISCRIMINATED UNION on `result`. The top-level oneOf above guarantees EXACTLY ONE `result` const is chosen (grammar enforces a single valid branch). Each branch's PAYLOAD property schema AND its per-branch `required` are co-located in the allOf if/then block below (so a required property is always defined in the same schema object — satisfies strict validators). When an if matches, its then-properties count as evaluated and unevaluatedProperties:false does not reject them; payloads from the WRONG branch are unevaluated and therefore rejected.",
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "fail"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "failure": {
+            "description": "FAIL payload. Routing record the orchestrator reads.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "failure_origin",
+              "reason",
+              "evidence",
+              "escalate"
+            ],
+            "properties": {
+              "failure_origin": {
+                "description": "WHICH step the failure is attributed to (shared FailureOrigin enum). Drives the produce⇄review re-entry table. 'verify' = self-misjudgment (no auto-reinvoke). 'cap_exceeded' = global flow_caps blown (immediate halt). 'multiple' = several bad steps (route earliest first). 'report' valid only on non-code flows.",
+                "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+              },
+              "reason": {
+                "description": "Specific issue description (the routing reason).",
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "description": "file:line or artifact reference backing the failure. RowRef when pointing at an upstream step output (§5); plain string for a code file:line.",
+                "type": "string",
+                "minLength": 1
+              },
+              "escalate": {
+                "description": "true ⇒ NEEDS_CONTEXT escalation, NO auto-reinvoke. MUST be true when failure_origin∈{verify, cap_exceeded} (R2 anti-infinite-self-route + cap halt). An M2 validator_contract asserts this coupling.",
+                "type": "boolean"
+              },
+              "earliest_step": {
+                "description": "When failure_origin='multiple', the earliest problematic step to route to first (shared StepName enum). Required by the M2 validator when failure_origin='multiple'.",
+                "$ref": "./_defs.schema.json#/$defs/StepName"
+              },
+              "reclassify_count": {
+                "description": "When failure_origin='triage', how many reclassify cycles have occurred (cap 3). R23 measured count.",
+                "$ref": "./_defs.schema.json#/$defs/CountClaim"
+              }
+            }
+          }
+        },
+        "required": [
+          "failure"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "degraded_pass"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "verdict_summary": {
+            "description": "Human-readable statement of WHAT was verified true.",
+            "type": "string",
+            "minLength": 1
+          },
+          "degraded_tools": {
+            "description": "G5. Which mechanical-pass tools were Omitted, so the reduced-confidence verdict is auditable. Each entry names the tool and the Omitted reason. MUST be non-empty (degraded_pass means at least one tool degraded).",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "tool",
+                "omission"
+              ],
+              "properties": {
+                "tool": {
+                  "type": "string",
+                  "enum": [
+                    "typecheck",
+                    "tests",
+                    "firebat",
+                    "emberdeck",
+                    "pyreez"
+                  ]
+                },
+                "omission": {
+                  "$ref": "./_defs.schema.json#/$defs/Omitted"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "verdict_summary",
+          "degraded_tools"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "pass"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "verdict_summary": {
+            "description": "Human-readable statement of WHAT was verified true.",
+            "type": "string",
+            "minLength": 1
+          },
+          "p0_post_stabilization": {
+            "description": "P0 (bugfix-p0) only. On PASS, auto-queue a follow-up flow when complexity_signal was high or a god_node was detected. Records the auto-queued follow-up.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "queue_followup"
+            ],
+            "properties": {
+              "queue_followup": {
+                "type": "boolean"
+              },
+              "followup_kind": {
+                "type": "string",
+                "enum": [
+                  "bugfix_normal_deep",
+                  "retro"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "verdict_summary"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "blocked"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "blocked_on": {
+            "description": "G5. The verdict-blocking tool(s) and why their absence cannot be degraded around.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "tool",
+                "omission",
+                "why_verdict_blocking"
+              ],
+              "properties": {
+                "tool": {
+                  "type": "string",
+                  "enum": [
+                    "typecheck",
+                    "tests",
+                    "firebat",
+                    "emberdeck",
+                    "pyreez"
+                  ]
+                },
+                "omission": {
+                  "$ref": "./_defs.schema.json#/$defs/Omitted"
+                },
+                "why_verdict_blocking": {
+                  "description": "Why a degraded_pass is NOT acceptable without this tool (the verdict structurally depends on it).",
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "blocked_on"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "retry_exhausted"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exhaustion": {
+            "description": "RETRY_EXHAUSTED payload → flow halt + escalate, Reflect → `abandoned`. NO DONE_WITH_CONCERNS.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "iterations",
+              "last_failure_origin",
+              "escalate",
+              "reflect_classification"
+            ],
+            "properties": {
+              "iterations": {
+                "description": "How many produce⇄review iterations were attempted before exhaustion (R23 measured count).",
+                "$ref": "./_defs.schema.json#/$defs/CountClaim"
+              },
+              "last_failure_origin": {
+                "description": "The failure_origin of the final failed iteration.",
+                "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+              },
+              "escalate": {
+                "description": "MUST be true — retry_exhausted always halts + escalates; silent proceed is forbidden.",
+                "type": "boolean",
+                "const": true
+              },
+              "reflect_classification": {
+                "description": "MUST be 'abandoned' — the only Reflect classification for an exhausted flow (no DONE_WITH_CONCERNS).",
+                "type": "string",
+                "const": "abandoned"
+              }
+            }
+          }
+        },
+        "required": [
+          "exhaustion"
+        ]
+      }
+    },
+    {
+      "$comment": "flow_kind ⇒ which Pass-1 variant is required (grammar-enforced). code ⇒ pass1_mechanical; non_code ⇒ pass1_completeness. The OTHER variant stays absent (additionalProperties:false on internal_passes already forbids unknown keys, and the unused variant being absent is correct).",
+      "if": {
+        "required": [
+          "flow_kind"
+        ],
+        "properties": {
+          "flow_kind": {
+            "const": "code"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "internal_passes": {
+            "type": "object",
+            "required": [
+              "pass1_mechanical"
+            ],
+            "properties": {
+              "pass1_mechanical": {
+                "type": "object"
+              },
+              "pass1_completeness": false
+            }
+          }
+        }
+      },
+      "else": {
+        "if": {
+          "required": [
+            "flow_kind"
+          ],
+          "properties": {
+            "flow_kind": {
+              "const": "non_code"
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "internal_passes": {
+              "type": "object",
+              "required": [
+                "pass1_completeness"
+              ],
+              "properties": {
+                "pass1_completeness": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "flow_kind"
+        ],
+        "properties": {
+          "flow_kind": {
+            "const": "non_code"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "internal_passes": {
+            "type": "object",
+            "required": [
+              "pass1_completeness"
+            ],
+            "properties": {
+              "pass1_mechanical": false,
+              "pass1_completeness": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

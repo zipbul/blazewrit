@@ -1,0 +1,379 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/_defs.schema.json",
+  "title": "blazewrit harness — shared $defs (M4 single-source primitives)",
+  "description": "Canonical reusable JSON Schema primitives for the 10 step schemas. SINGLE SOURCE — the 10 per-step schemas $ref these via $id (e.g. {\"$ref\": \"./_defs.schema.json#/$defs/CountClaim\"}) so no step re-invents a primitive (avoids the M4 drift the R-rule cleanup warned about). TARGET RUNTIME: grammar-constrained generation (M1 = SHAPE; the model literally cannot emit a wrong shape/enum/missing-required field at token-generation time — §16's real enforcement layer). IMPORTANT: grammar (M1) enforces SHAPE only. Fields that need TRUTH (value↔raw_stdout consistency, re-executed verify_probe, re-hashed sha256, pid_run1≠pid_run2, every cited line in source, declared_next_step==orchestrator's expected_next_step) are closed by a SIBLING deterministic code check listed as a `validator_contract` in each step's manifest — NOT by any keyword here. The $defs below carry a `x-validator-contract` annotation naming that code check where one is required; it is documentation, not enforcement.",
+
+  "$defs": {
+
+    "RowRef": {
+      "$comment": "§5 Postgres storage law. Realizes: cross-step references are Postgres row ids, NOT file paths.",
+      "description": "§5 STORAGE LAW. A Postgres row id (step_runs.id / flows.id / etc.). EVERY cross-step reference — based_on, investigate_ref, ground_ref, decide_ref, spec_ref, test_ref, input_refs, *_ref, follow_up_ref, unknown_ref — is a RowRef, never a file path. Legacy prose says '.blazewrit/grounds/**', 'flow-history/<id>.json'; that is PRE-§5 and MUST be translated to a row ref. THE ONLY file-path exception in the whole harness is Reflect Tier 2 '.claude/rules/<topic>.md' (a Claude Code INPUT) — see RulesFilePath. Step outputs persist to Postgres step_runs jsonb; refs point at rows.",
+      "type": "string",
+      "minLength": 1,
+      "examples": ["b3b9c0e2-7e4a-4c1d-8a2f-2c9b6f0a1d34", "step_run:01J9Z8K7Q3"]
+    },
+
+    "RulesFilePath": {
+      "$comment": "§5 SOLE file-path exception. Reflect Tier 2 .claude/rules/<topic>.md is a Claude Code INPUT file, not a workflow artifact.",
+      "description": "§5 EXCEPTION (the only one). A real on-disk path under '.claude/rules/' — Reflect Tier 2 curated-knowledge file. This is the single workflow output that stays a FILE (Claude Code reads it as context; Postgres cannot inject it). Tier 1 raw Reflect output is a RowRef (Postgres), NOT this. Everything else in the harness is a RowRef.",
+      "type": "string",
+      "pattern": "^\\.claude/rules/[^/]+\\.md$"
+    },
+
+    "Sha256": {
+      "description": "Lowercase hex SHA-256 digest. Realizes the provenance hashing used by CountClaim.source, ToolCall, VerificationProof, SourceManifest, ExecMeta. SHAPE only — that the hash MATCHES the named artifact is an M2 validator_contract (re-hash and compare).",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+
+    "Iso8601": {
+      "description": "ISO-8601 timestamp string (captured_at / checked_at / attempted_at / mtime-as-iso). SHAPE only.",
+      "type": "string",
+      "format": "date-time"
+    },
+
+    "SourceTool": {
+      "$comment": "Provenance fragment. Required wherever a fact/unknown/conflict/finding/risk item lives. Floor field (irreducible).",
+      "description": "PROVENANCE FRAGMENT (irreducible floor, R26). The tool/origin that produced a fact, unknown, conflict, finding, or risk item. REQUIRED on every such item — a fact without a source_tool is unsourced and rejected by the step schema's `required`. This is the single name a step embeds; richer proof goes in VerificationProof / ToolCall. SHAPE enforces presence; that the named tool actually produced the value is partly an M2 validator_contract (re-execute/re-read) and partly the irreducible self-asserted-truth floor (cross-verification mitigates, does not eliminate).",
+      "type": "string",
+      "minLength": 1
+    },
+
+    "CountClaim": {
+      "$comment": "R23 — the absorbing count TYPE. A bare integer for a measured count is the exact hallucination R23 kills.",
+      "description": "R23 COUNT-TYPE (M1 absorbing type). The ONLY allowed shape for any field that is 'a count of measured things': test counts (passed/failed), affected_files_count, warnings, errors, new_commits_count, blockers, drift, findings.length, issues.length, etc. A bare integer for a measured count is forbidden — it is the precise hallucination R23 eliminates: the model cannot fabricate a number disconnected from the command that produced it, because the schema forces it to also emit the command + the sha256 of that command's raw stdout. x-validator-contract (M2, REQUIRED — not optional): the orchestrator re-parses source.raw_stdout (by re-hash / re-read of the captured stdout) and asserts `value` is DERIVABLE from it. Grammar gives the shape; only the code check makes the count trustworthy.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source"],
+      "properties": {
+        "value": {
+          "description": "The counted integer. Meaningless without `source` — never emit this field alone.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "raw_stdout_sha256"],
+          "properties": {
+            "command": {
+              "description": "The exact command whose stdout was counted (e.g. 'bun test', 'git rev-list --count HEAD ^origin/main').",
+              "type": "string",
+              "minLength": 1
+            },
+            "raw_stdout_sha256": {
+              "description": "SHA-256 of the captured raw stdout. M2 validator re-hashes the stored stdout and re-derives `value` from it.",
+              "$ref": "#/$defs/Sha256"
+            }
+          }
+        }
+      },
+      "x-validator-contract": "M2 REQUIRED: re-parse source.raw_stdout (re-hash to confirm raw_stdout_sha256, then re-count) → assert `value` is derivable. Without this, the count is self-asserted (R23 residual)."
+    },
+
+    "Measured": {
+      "$comment": "M3 — the present/success branch of a degradable measurement. Steps specialize `value`.",
+      "description": "M3 DEGRADE — the MEASURED branch (status:'measured'). The success/present arm of DegradableMeasurement. A step specializes the `value` sub-schema for its concrete measurement (e.g. perf_baseline numbers, typecheck status, dependency_audit rows) by $allOf-ing this $def and tightening `value`. Carries provenance (source_tool + optional source command/hash). Pair with Omitted under a oneOf discriminated by `status`.",
+      "type": "object",
+      "required": ["status", "value", "source_tool"],
+      "properties": {
+        "status": { "const": "measured" },
+        "value": {
+          "description": "The measured payload. Steps OVERRIDE this with a concrete sub-schema (object/number/array). Left open here on purpose so each step specializes the measured branch without re-declaring the union envelope.",
+          "$comment": "Intentionally unconstrained in the shared def; step schemas tighten it."
+        },
+        "source_tool": { "$ref": "#/$defs/SourceTool" },
+        "source": {
+          "$comment": "Optional richer provenance when the measurement is a counted/hashed tool output.",
+          "type": "object",
+          "properties": {
+            "command": { "type": "string", "minLength": 1 },
+            "raw_stdout_sha256": { "$ref": "#/$defs/Sha256" },
+            "captured_at": { "$ref": "#/$defs/Iso8601" },
+            "duration_ms": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+
+    "Omitted": {
+      "$comment": "R22 — the absence branch. Absence is a first-class schema BRANCH, NOT nullable, NOT a '# OMITTED' placeholder string.",
+      "description": "M3 DEGRADE — the OMITTED branch (status:'omitted'). The first-class ABSENCE arm of DegradableMeasurement, realizing R22. When a tool is absent / fails / times out (Ground volatile typecheck|test|lint, perf_baseline, MCP/ED graph query, observability, pyreez), the model MUST emit THIS branch — it CANNOT emit a null, a sentinel integer, or a '# OMITTED' placeholder string (R22 forbids all three), and it CANNOT over-type the absence into a fake measured value. `reason` and `source_tool` are REQUIRED so absence is auditable. This converts R22's prose into grammar: the only legal way to express 'no value' is a structurally complete Omitted object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "source_tool"],
+      "properties": {
+        "status": { "const": "omitted" },
+        "reason": {
+          "description": "Why the value is absent: enumerated absence cause. 'skipped' = command not defined for this project (Ground 'skipped-with-reason'); 'unavailable' = MCP/tool not attached (M2 capability probe).",
+          "type": "string",
+          "enum": ["tool_absent", "tool_failed", "timeout", "unavailable", "skipped", "not_applicable"]
+        },
+        "detail": {
+          "description": "Optional human-readable elaboration of the reason (e.g. exit code, error excerpt).",
+          "type": "string"
+        },
+        "source_tool": { "$ref": "#/$defs/SourceTool" }
+      }
+    },
+
+    "DegradableMeasurement": {
+      "$comment": "M3 reusable discriminated union. status discriminant; per-branch required. Specialize the measured branch per step.",
+      "description": "M3 DEGRADE — the reusable discriminated union. ANY field whose value comes from a tool that can be ABSENT/FAIL/timeout MUST use this shape (or a per-step specialization of it): Ground volatile typecheck|tests|lint, perf_baseline, dependency_audit, observability, release_state; Investigate ed_queries; Verify Pass1 firebat/emberdeck and Pass4 pyreez; any MCP-backed fact. NOT nullable, NOT a placeholder string (R22), NOT over-typed. Grammar enforces EXACTLY ONE branch via oneOf on the `status` discriminant with per-branch required, so the model cannot half-fill. HOW TO SPECIALIZE: a step $ref-s this for the envelope, or (to tighten the measured payload) writes its own oneOf of [ {allOf:[Measured]} with a concrete `value`, Omitted ]. Reusing the same `status` discriminant keeps M4 single-source.",
+      "type": "object",
+      "required": ["status"],
+      "oneOf": [
+        { "$ref": "#/$defs/Measured" },
+        { "$ref": "#/$defs/Omitted" }
+      ]
+    },
+
+    "VerifyProbe": {
+      "$comment": "R20 — verify_probe shape {command, expected_result}. Truth is the RE-EXECUTION, not the shape.",
+      "description": "R20 VERIFY-PROBE. A re-runnable assertion attached to a finding/AC/task: a command plus its expected result. SHAPE only here. x-validator-contract (M2, REQUIRED): the orchestrator RE-EXECUTES `command` and compares against `expected_result` — a self-asserted 'it passes' is NOT truth (R20's whole point). Used by report findings, spec acceptance_criteria measurements, decide plans.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "expected_result"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "expected_result": {
+          "description": "What re-execution must yield (e.g. \"stdout ends with 'OK', exit 0\", \"exactly 1 match\", \"0\").",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "x-validator-contract": "M2 REQUIRED: re-execute command, compare to expected_result. Self-assertion is not truth."
+    },
+
+    "ToolCall": {
+      "$comment": "Building block of VerificationProof. Hashes are SHAPE; that they match is an M2 re-hash.",
+      "description": "A single tool invocation record (building block of VerificationProof and Ground.verification_proof.tool_calls). Realizes the provenance the R-rule cleanup keeps as M1-field + M2-validator SPLIT: shape here, hash-match by code. args_sha256 / output_sha256 let the orchestrator replay and re-hash (M2). Legacy prose names these 'args_hash'/'output_hash' — canonicalized to *_sha256.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "args_sha256", "output_sha256", "exit_code"],
+      "properties": {
+        "tool": { "type": "string", "minLength": 1 },
+        "args_sha256": { "$ref": "#/$defs/Sha256" },
+        "output_sha256": { "$ref": "#/$defs/Sha256" },
+        "exit_code": { "type": "integer" }
+      },
+      "x-validator-contract": "M2: re-hash recorded args/output and compare; optionally replay tool."
+    },
+
+    "ReadFile": {
+      "description": "A read-with-provenance record: which file, its content hash, its mtime. Building block of VerificationProof.read_files. NOTE: this is a READ INPUT path (a real file the agent read), distinct from §5 RowRef cross-step references — reading a file is allowed; STORING workflow outputs as files is not.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "mtime"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/Sha256" },
+        "mtime": {
+          "description": "File mtime — ISO-8601 string or epoch ms.",
+          "type": ["string", "integer"]
+        }
+      }
+    },
+
+    "EdQuery": {
+      "description": "An emberdeck (ED) graph query record with a result hash. Building block of VerificationProof.ed_queries. ED is MCP-backed and degradable — when ED is unavailable the field carrying ED facts uses DegradableMeasurement(Omitted), not an empty EdQuery.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query", "result_hash"],
+      "properties": {
+        "query": { "type": "string", "minLength": 1 },
+        "result_hash": { "$ref": "#/$defs/Sha256" }
+      }
+    },
+
+    "VerificationProof": {
+      "$comment": "Provenance container used by Ground/Investigate. SHAPE here; hash-match + replay are M2.",
+      "description": "PROVENANCE CONTAINER (R36-adjacent, used by Ground/Investigate verification_proof). Bundles the tool_calls, read_files, and optional ed_queries that back a step's facts. SHAPE enforced by grammar; x-validator-contract (M2): re-hash every recorded hash and (where replayable) re-execute. ed_queries is optional because non-ED flows have none — its absence is normal, not an Omitted branch.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_calls", "read_files"],
+      "properties": {
+        "tool_calls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ToolCall" }
+        },
+        "read_files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ReadFile" }
+        },
+        "ed_queries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EdQuery" }
+        }
+      },
+      "x-validator-contract": "M2: re-hash all *_sha256/result_hash; re-read read_files; replay replayable tool_calls."
+    },
+
+    "SourceManifest": {
+      "$comment": "R36 — every cited file:line must exist in the source. The citation CHECK is M2.",
+      "description": "R36 SOURCE-MANIFEST. Declares the files a step cited and the exact lines it cited from each. SHAPE here (entries with path + sha256 + line_count + cited_lines). x-validator-contract (M2, REQUIRED): for EVERY entry, re-read the file, confirm sha256, and assert every integer in `cited_lines` is ≤ line_count and actually exists in the source — a cited line that does not exist is a hallucinated citation (the exact failure R36 kills). Grammar cannot check line existence; only the code check can.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256", "line_count", "cited_lines"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "sha256": { "$ref": "#/$defs/Sha256" },
+              "line_count": { "type": "integer", "minimum": 0 },
+              "cited_lines": {
+                "description": "1-based line numbers cited from this file. M2 asserts each ≤ line_count and present in source.",
+                "type": "array",
+                "items": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      },
+      "x-validator-contract": "M2 REQUIRED: per entry re-read file, confirm sha256, assert every cited line ≤ line_count and exists. Non-existent cited line = hallucinated citation (R36)."
+    },
+
+    "ExecMeta": {
+      "$comment": "R29 — double-run replay metadata. pid_run1 != pid_run2 is an M2 cross-run check, not a keyword.",
+      "description": "R29 EXEC-META. Per-execution metadata captured for double-run replay (R25/R29). SHAPE here. x-validator-contract (M2): the orchestrator runs the producer TWICE and asserts pid(run1) != pid(run2) (proves a real fresh process, not a replayed/cached transcript) while the deterministic output matches; timestamp_ms must advance. A single ExecMeta cannot self-prove freshness — the proof is the PAIR of ExecMeta from two runs compared by code.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "timestamp_ms", "exit_code", "duration_ms"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "timestamp_ms": { "type": "integer", "minimum": 0 },
+        "exit_code": { "type": "integer" },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      },
+      "x-validator-contract": "M2: compare ExecMeta of run1 vs run2 — pid_run1 != pid_run2, deterministic output identical, timestamp advances."
+    },
+
+    "UnverifiedFlag": {
+      "$comment": "R13 floor field. KEEP polarity — DESIGNED to persist down the chain. Verify is the single gate. Do NOT add a 'no unverified remain' forbid.",
+      "description": "R13 UNVERIFIED FLAG (irreducible floor, KEEP polarity). `unverified:true` marks a claim the producing step could not itself verify. CRITICAL POLARITY: this flag is DESIGNED TO PERSIST down the chain — it propagates, it is NOT to be eliminated by intermediate steps. Per enforcement.md L41 (authoritative), '[UNVERIFIED] is designed to persist'. Therefore NO step schema may add a 'no unverified remain' forbid, and the legacy test.md L40 'No [UNVERIFIED] remain' rule is DELETED. VERIFY IS THE SINGLE GATE that resolves unverified claims. Grammar enforces the flag's presence/shape; the residual — whether `unverified:false` is HONEST — is self-asserted truth (the irreducible floor), mitigated by cross-verification, not eliminated.",
+      "type": "object",
+      "required": ["unverified"],
+      "properties": {
+        "unverified": {
+          "description": "true = this claim was not verified by the producing step and MUST propagate downstream until Verify gates it. Never forbid true at an intermediate step.",
+          "type": "boolean"
+        }
+      }
+    },
+
+    "CrossVerifyFlag": {
+      "$comment": "R5 — trigger flag on high-stakes outputs (Decide Design, Verify high-risk). Mitigation, not elimination.",
+      "description": "R5 CROSS-VERIFY TRIGGER (irreducible-floor mitigation). A boolean trigger requesting multi-model / pyreez cross-verification on a HIGH-STAKES output (Decide Design mode, Verify high-risk flow). It MITIGATES the self-asserted-truth and semantic-boundary-prose residuals — it does NOT eliminate them. Not present on routine outputs; carried only where the step contract marks high stakes.",
+      "type": "object",
+      "required": ["cross_verify_required"],
+      "properties": {
+        "cross_verify_required": { "type": "boolean" },
+        "cross_verify_result": {
+          "description": "Optional: outcome once cross-verification ran. 'disagree' is the self-misjudgment signal (Verify failure_origin=verify).",
+          "type": "string",
+          "enum": ["agree", "disagree", "inconclusive", "not_run"]
+        }
+      }
+    },
+
+    "DeclaredNextStep": {
+      "$comment": "R16 — producer may DECLARE next step, but orchestrator INJECTS expected_next_step; chain check is M2.",
+      "description": "R16 DECLARED-NEXT-STEP. A producer that names its successor does NOT free-fill the authoritative value: the orchestrator INJECTS `expected_next_step`. The schema may carry this DECLARED value, but it is advisory. x-validator-contract (M2): assert declared_next_step == orchestrator's expected_next_step (the chain check, folded into R27's validator body). Mismatch = chain divergence (the dual-SoT gap R16 exists to catch).",
+      "type": "object",
+      "required": ["declared_next_step"],
+      "properties": {
+        "declared_next_step": {
+          "$ref": "#/$defs/StepName"
+        }
+      },
+      "x-validator-contract": "M2: declared_next_step == orchestrator-injected expected_next_step."
+    },
+
+    "ParallelMarker": {
+      "$comment": "R19/R33 — task parallelism. same-file tasks => parallel_marker=false is an M2 cross-task check.",
+      "description": "R19/R33 PARALLEL MARKER. On a task/work-unit, whether it may run in parallel with siblings. SHAPE here. x-validator-contract (M2, REQUIRED): tasks that touch the SAME FILE are mutually exclusive — if two tasks share a file path, both MUST have parallel_marker=false. Grammar cannot see the cross-task file overlap; the code check enforces it.",
+      "type": "object",
+      "required": ["parallel_marker"],
+      "properties": {
+        "parallel_marker": { "type": "boolean" }
+      },
+      "x-validator-contract": "M2 REQUIRED: same-file tasks => parallel_marker=false (mutual exclusion over file paths)."
+    },
+
+    "Severity": {
+      "description": "Shared severity enum for risk_surface / findings / compatibility issues. NOTE two scales coexist in the prose: risk_surface uses low|med|high|critical; compatibility issues use fatal|high|medium|low. This $def is the RISK scale (low|med|high|critical). Use SeverityIssue for the compatibility-issue scale. Do NOT collapse them — the cleanup forbids inventing a merged scale.",
+      "type": "string",
+      "enum": ["low", "med", "high", "critical"]
+    },
+
+    "SeverityIssue": {
+      "description": "Shared severity enum for compatibility_verdict.issues (Investigate). Distinct from Severity (risk scale): the issue scale is fatal|high|medium|low. Kept separate to match the legacy V1-V13 contract exactly (no invented merge).",
+      "type": "string",
+      "enum": ["fatal", "high", "medium", "low"]
+    },
+
+    "Probability": {
+      "description": "Shared probability enum for risk_surface items (likelihood of a failure mode).",
+      "type": "string",
+      "enum": ["likely", "possible", "unlikely"]
+    },
+
+    "Confidence": {
+      "description": "Shared confidence enum (Triage classification_metadata.confidence, and any step's self-rated confidence).",
+      "type": "string",
+      "enum": ["high", "medium", "low"]
+    },
+
+    "ComplexitySignal": {
+      "description": "Triage complexity_signal — Step Depth Policy deepen-trigger input. 'none' = no complexity inferred.",
+      "type": "string",
+      "enum": ["high", "medium", "low", "none"]
+    },
+
+    "Depth": {
+      "description": "Adaptive Step Depth — a step ran shallow or deep (Decide maps mode→depth separately).",
+      "type": "string",
+      "enum": ["shallow", "deep"]
+    },
+
+    "StepName": {
+      "description": "The 10 harness step names. Shared enum so DeclaredNextStep / failure_origin / role fields never re-spell step names (M4 single-source).",
+      "type": "string",
+      "enum": ["triage", "ground", "investigate", "decide", "spec", "test", "implement", "report", "verify", "reflect"]
+    },
+
+    "FailureOrigin": {
+      "$comment": "Verify routing target. Includes non-step control values (verify self, cap, multiple).",
+      "description": "Verify FAIL routing enum (failure-routing). Which step the failure is attributed to, plus control values: 'verify' = Verify self-misjudgment (NO auto-reinvoke, escalate to avoid infinite self-route); 'cap_exceeded' = global flow caps blown (halt+escalate); 'multiple' = several problematic steps (route earliest first).",
+      "type": "string",
+      "enum": ["triage", "ground", "investigate", "decide", "spec", "test", "implement", "report", "verify", "cap_exceeded", "multiple"]
+    },
+
+    "Channel": {
+      "description": "Input channel shared by Triage/Ground. conversation_context exists only for user_session.",
+      "type": "string",
+      "enum": ["user_session", "a2a", "ci"]
+    },
+
+    "BasedOn": {
+      "$comment": "§5 — the standard cross-step reference bundle. All values are RowRef (Postgres rows), NEVER file paths.",
+      "description": "§5 BASED-ON bundle. The standard cluster of upstream references a step records (legacy 'based_on: { investigate_ref, ground_ref }', etc.). EVERY value is a RowRef (Postgres step_runs row id) — NEVER a file path. A step includes only the keys its chain provides (all optional here; each step schema makes the ones it requires `required`). Realizes the §5 translation of legacy file-path refs into row refs.",
+      "type": "object",
+      "properties": {
+        "triage_ref": { "$ref": "#/$defs/RowRef" },
+        "ground_ref": { "$ref": "#/$defs/RowRef" },
+        "investigate_ref": { "$ref": "#/$defs/RowRef" },
+        "decide_ref": { "$ref": "#/$defs/RowRef" },
+        "spec_ref": { "$ref": "#/$defs/RowRef" },
+        "test_ref": { "$ref": "#/$defs/RowRef" },
+        "report_ref": { "$ref": "#/$defs/RowRef" }
+      }
+    }
+  }
+}

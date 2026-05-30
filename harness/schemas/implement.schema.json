@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/implement.schema.json",
+  "title": "Implement step — structured_output (M1 SHAPE, grammar-constrained)",
+  "description": "Implement turns Test's RED into GREEN: writes code per Spec architecture (or per Decide record/plan/design on Decide-only chains), runs firebat after each change, runs emberdeck validate_code_links to detect card↔code drift, and produces atomic commits. TARGET RUNTIME: grammar-constrained generation — this schema is enforced at TOKEN GENERATION (M1 = SHAPE; the model cannot emit a wrong shape/enum/missing-required field). Truth-bearing fields (firebat counts ↔ raw_stdout, emberdeck_drift==0, atomic-commit one-logical-change, declared_next_step chain) are closed by SIBLING M2 validator_contracts listed in x-validator-contracts, NOT by grammar. §5 STORAGE LAW: cross-step refs in based_on are Postgres RowRefs, never file paths. Two file-path kinds survive here and are NOT RowRefs: (a) changes[].file_path and commits[].files[] are git-versioned CODE paths (DECISIONS §5 L66: code lives in git files, not Postgres rows); (b) there is no .blazewrit/* artifact path — the legacy file-first model is dead. firebat and emberdeck are MCP-backed, optional + graceful-degrade (DECISIONS §8), so firebat_results and emberdeck_drift are M3 degradable measurements (Measured | Omitted), never bare values. R23: every measured count (firebat blockers/warnings, emberdeck drift, new_commits_count, changed_files_count) is a CountClaim, never a bare integer. P0 emergency mode (flow_type=bugfix-p0): the Test bypass is a FLAG (emergency_mode), not a dropped field — Implement still emits the full shape; emergency_mode.test_bypass records that Test was deferred to post-Verify retroactive queueing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "changes",
+    "commits",
+    "firebat_results",
+    "emberdeck_drift",
+    "new_commits_count",
+    "changed_files_count",
+    "emergency_mode",
+    "based_on",
+    "depth",
+    "unverified",
+    "declared_next_step"
+  ],
+  "properties": {
+    "changes": {
+      "description": "Every file the implementation touched, with the kind of change. file_path is a git-versioned CODE path (DECISIONS §5 L66 — code stays a file, NOT a Postgres RowRef and NOT a .blazewrit/* artifact). change_type is a closed enum (grammar-enforced). This array is the ground truth the emberdeck card↔code drift check and the firebat scan run against.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file_path",
+          "change_type"
+        ],
+        "properties": {
+          "file_path": {
+            "description": "Repository-relative path of the changed code file (git-versioned, NOT a RowRef).",
+            "type": "string",
+            "minLength": 1
+          },
+          "change_type": {
+            "description": "create = new file, modify = edited existing file, delete = removed file. Closed enum so the model cannot invent a fourth verb.",
+            "type": "string",
+            "enum": [
+              "create",
+              "modify",
+              "delete"
+            ]
+          }
+        }
+      }
+    },
+    "commits": {
+      "description": "Atomic commits produced — one commit = one logical change (implement-reviewer asserts atomicity). sha is the git commit hash; files[] are git-versioned CODE paths (NOT RowRefs). x-validator-contract (M2): re-resolve each sha in the repo; assert commits[].files == git-recorded files of that commit; assert atomic-commit policy (one logical change per commit) — grammar cannot judge 'logical'.",
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sha",
+          "message",
+          "files"
+        ],
+        "properties": {
+          "sha": {
+            "description": "Git commit hash (full or abbreviated). M2 re-resolves it in the repo — a sha that does not exist is a fabricated commit.",
+            "type": "string",
+            "minLength": 4
+          },
+          "message": {
+            "description": "Commit message for this logical unit.",
+            "type": "string",
+            "minLength": 1
+          },
+          "files": {
+            "description": "Code files included in this commit (git-versioned paths, NOT RowRefs). M2 asserts these match git's recorded file list for the sha.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "firebat_results": {
+      "description": "Result of the firebat code-quality scan run after the changes. firebat is MCP-backed and optional + graceful-degrade (DECISIONS §8) — so this is an M3 DegradableMeasurement, NOT a bare object. MEASURED branch: value carries blockers and warnings, EACH a CountClaim (R23 — a bare integer for a measured count is the exact hallucination R23 kills; M2 re-parses raw_stdout and re-derives the count). OMITTED branch (R22): firebat absent/failed/timed out — first-class absence, never null, never a '# OMITTED' string, never over-typed to fake-zero blockers. implement-reviewer requires firebat blockers=0; when firebat is Omitted, that gate is delegated to Verify Pass1 (which has its own firebat degrade policy).",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "value",
+            "source_tool"
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "source_tool": {
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "blockers",
+                "warnings"
+              ],
+              "properties": {
+                "blockers": {
+                  "description": "Count of firebat blocker findings (R23 CountClaim). implement-reviewer requires this == 0 (M2 asserts value==0 from re-parsed raw_stdout).",
+                  "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                },
+                "warnings": {
+                  "description": "Count of firebat warning findings (R23 CountClaim). Non-blocking; M2 re-derives value from raw_stdout.",
+                  "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "emberdeck_drift": {
+      "description": "emberdeck validate_code_links result: card↔code drift count. Prose FORCES this to 0 ('emberdeck_drift: 0  # 강제') — but the contract is enforced by an M2 VALIDATOR, not by a schema const, because emberdeck is MCP-backed and degradable (DECISIONS §8). MEASURED branch: value is a CountClaim whose count M2 re-parses and asserts == 0 (drift != 0 fails implement-reviewer). OMITTED branch (R22): emberdeck unavailable/failed — first-class absence; the drift gate is then delegated to Verify Pass1. Modeling the forced-0 as const would make absence inexpressible and force an R22 placeholder; the degradable union + M2 ==0 check is the faithful translation.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "value",
+            "source_tool"
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "source_tool": {
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
+            },
+            "value": {
+              "description": "card↔code drift count (R23 CountClaim). M2 forces value==0 — drift != 0 = implement-reviewer FAIL.",
+              "$ref": "./_defs.schema.json#/$defs/CountClaim"
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "new_commits_count": {
+      "description": "Number of new commits this Implement run created (R23 CountClaim — a measured count, never a bare integer). M2 re-parses source.raw_stdout (e.g. 'git rev-list --count HEAD ^<base>') and asserts value is derivable AND value == commits.length.",
+      "$ref": "./_defs.schema.json#/$defs/CountClaim"
+    },
+    "changed_files_count": {
+      "description": "Number of files the changes[] array touched (R23 CountClaim — measured, never bare). M2 re-parses source.raw_stdout (e.g. 'git diff --name-only <base>..HEAD | wc -l') and asserts value is derivable AND value == changes.length.",
+      "$ref": "./_defs.schema.json#/$defs/CountClaim"
+    },
+    "emergency_mode": {
+      "description": "P0 emergency-mode FLAG (README §P0). When flow_type=bugfix-p0, Implement runs emergency mode: Test bypassed (Test runs Verify-retroactively), shallow forced, fast fix prioritized, post-stabilization follow-up auto-queued after Verify PASS. CRITICAL: the Test bypass is a FLAG here, NOT a dropped field — Implement still emits the full output shape; emergency_mode records that the bypass happened so it is auditable and so the orchestrator can queue the retroactive Test follow-up. On all non-P0 flows, active=false. x-validator-contract (M2): active=true => orchestrator's flow_type=='bugfix-p0' AND depth=='shallow' AND retroactive_test_followup_queued is honored after Verify PASS.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active"
+      ],
+      "properties": {
+        "active": {
+          "description": "true only on flow_type=bugfix-p0. Marks this run as emergency mode.",
+          "type": "boolean"
+        },
+        "test_bypass": {
+          "description": "true = Test step was bypassed (deferred to Verify-retroactive). Only meaningful when active=true. M2: active=true => this records the Test deferral; orchestrator queues retroactive Test after Verify PASS.",
+          "type": "boolean"
+        },
+        "retroactive_test_followup_queued": {
+          "description": "true = the post-stabilization follow-up (add Test + normal Bug Fix flow) was queued. Set after Verify PASS path. Only meaningful when active=true.",
+          "type": "boolean"
+        }
+      }
+    },
+    "based_on": {
+      "description": "§5 cross-step references — ALL RowRefs (Postgres step_runs row ids), NEVER file paths. INPUT CONTRACT (README L18): minimum 1 of (spec_ref | decide_ref) — exactly one required upstream producer; Spec on Spec-chains, Decide on Decide-only chains (Bug Fix / Chore / Release / Spike / P0). test_ref required only when the flow chain names a Test step (M2/reviewer checks per chain). investigate_ref and ground_ref are always-present enrichment when those steps ran. The anyOf below makes grammar enforce 'at least Spec OR Decide is present'. (anyOf = at-least-one, so a Decide-then-Spec chain carrying BOTH refs is valid; oneOf would wrongly reject it.)",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spec_ref": {
+          "description": "RowRef to the Spec step_run (acceptance_criteria, code_architecture, tasks). Present on Spec-chains.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "decide_ref": {
+          "description": "RowRef to the Decide step_run (decision_record / option_selection / design_document). Present on Decide-only chains.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "test_ref": {
+          "description": "RowRef to the Test step_run (failing RED tests). Required only when the flow chain names a Test step (Bug Fix Test, Refactor with coverage gap, etc.).",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "investigate_ref": {
+          "description": "RowRef to the Investigate step_run (constraints, risk_surface) — always-present enrichment when Investigate ran.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "ground_ref": {
+          "description": "RowRef to the Ground step_run (volatile_state, task_subgraph) — always-present enrichment when Ground ran.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "spec_ref"
+          ]
+        },
+        {
+          "required": [
+            "decide_ref"
+          ]
+        }
+      ]
+    },
+    "depth": {
+      "description": "Adaptive Step Depth the run executed at (README Step Depth Policy). shallow = minimal patch (single concern); deep = full implementation + setup + multiple commits. Deepen triggers: flow_type ∈ {Feature, Migration, Performance, Compound} | Spec.tasks.length ≥ 3 | Spec.code_architecture.files.length ≥ 5. P0 emergency mode forces shallow (M2: emergency_mode.active=true => depth=='shallow').",
+      "$ref": "./_defs.schema.json#/$defs/Depth"
+    },
+    "unverified": {
+      "description": "R13 floor field (KEEP polarity — DESIGNED to persist; Verify is the single gate). Set true when Implement cannot itself verify GREEN — which is the COMMON case (HARNESS_FLOW_REVIEW L61: Implement self-validation claims 'all tests pass GREEN' but has NO mechanical execution means → that proof is delegated to Verify; and on Decide-only chains with no Test, the GREEN basis is weak). NO 'no unverified remain' forbid is added here. Whether unverified:false is honest is the irreducible self-asserted-truth floor.",
+      "type": "boolean"
+    },
+    "declared_next_step": {
+      "description": "R16 advisory declaration of the successor step (typically verify). The producer does NOT free-fill the authoritative value — the orchestrator INJECTS expected_next_step. x-validator-contract (M2, folded into R27): assert declared_next_step == orchestrator's expected_next_step; mismatch = chain divergence.",
+      "$ref": "./_defs.schema.json#/$defs/StepName"
+    }
+  },
+  "x-validator-contracts": [
+    {
+      "field": "firebat_results.value.blockers",
+      "rule": "R23 count↔stdout consistency + reviewer gate",
+      "check": "M2 REQUIRED: re-hash firebat_results.value.blockers.source.raw_stdout to confirm raw_stdout_sha256, re-parse it, assert blockers.value is derivable. implement-reviewer additionally requires blockers.value == 0 (firebat blockers=0). Grammar gives shape; only code makes the count trustworthy."
+    },
+    {
+      "field": "firebat_results.value.warnings",
+      "rule": "R23 count↔stdout consistency",
+      "check": "M2 REQUIRED: re-hash + re-parse firebat_results.value.warnings.source.raw_stdout, assert warnings.value is derivable. Self-asserted count is the R23 residual."
+    },
+    {
+      "field": "emberdeck_drift.value",
+      "rule": "R23 count↔stdout + prose forced-0 gate",
+      "check": "M2 REQUIRED: re-hash + re-parse emberdeck_drift.value.source.raw_stdout, assert value is derivable, AND assert value == 0 (README 'emberdeck_drift: 0  # 강제'). drift != 0 = implement-reviewer FAIL. Modeled as Measured|Omitted (not const 0) because emberdeck is degradable; the ==0 contract lives in this code check, not in grammar. When Omitted, the drift gate is delegated to Verify Pass1."
+    },
+    {
+      "field": "new_commits_count",
+      "rule": "R23 count↔stdout + array consistency",
+      "check": "M2 REQUIRED: re-hash + re-parse new_commits_count.source.raw_stdout (e.g. git rev-list --count), assert value derivable AND value == commits.length."
+    },
+    {
+      "field": "changed_files_count",
+      "rule": "R23 count↔stdout + array consistency",
+      "check": "M2 REQUIRED: re-hash + re-parse changed_files_count.source.raw_stdout (e.g. git diff --name-only | wc -l), assert value derivable AND value == changes.length (deduped by file_path)."
+    },
+    {
+      "field": "commits[]",
+      "rule": "atomic-commit truth + sha existence (R26/R17 provenance)",
+      "check": "M2: for each commit, re-resolve sha in the repo (fabricated sha = reject); assert commits[].files == git's recorded file list for that sha; assert atomic-commit policy (one logical change per commit) — grammar cannot judge 'logical', the reviewer/validator does."
+    },
+    {
+      "field": "changes[]",
+      "rule": "changes↔git diff consistency",
+      "check": "M2: assert every changes[].file_path with its change_type matches git's actual diff status against the base (create/modify/delete) — a claimed change with no diff is hallucinated."
+    },
+    {
+      "field": "based_on.spec_ref|decide_ref|test_ref",
+      "rule": "R16/input-contract + §5 row existence",
+      "check": "M2: assert min 1 of (spec_ref|decide_ref) present (grammar's oneOf gives shape; code resolves the rows). Each RowRef must resolve to an existing step_runs row of the right step_name. test_ref required iff the flow chain names a Test step (reviewer per chain)."
+    },
+    {
+      "field": "emergency_mode",
+      "rule": "P0 mode coherence",
+      "check": "M2: emergency_mode.active=true => orchestrator flow_type=='bugfix-p0' AND depth=='shallow' AND test_bypass=true; retroactive_test_followup_queued honored only after Verify PASS. active=false on all non-P0 flows."
+    },
+    {
+      "field": "declared_next_step",
+      "rule": "R16 chain check (folded into R27)",
+      "check": "M2: declared_next_step == orchestrator-injected expected_next_step; mismatch = chain divergence (dual-SoT gap)."
+    },
+    {
+      "field": "unverified",
+      "rule": "R13 floor — KEEP polarity",
+      "check": "NO forbid. unverified is designed to persist down the chain (enforcement.md L41); Verify is the single gate that resolves it. Whether unverified:false is honest is the irreducible self-asserted-truth floor — mitigated by Verify re-execution, not eliminated."
+    }
+  ]
+}

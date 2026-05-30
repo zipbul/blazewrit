@@ -1,0 +1,1237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/investigate.schema.json",
+  "title": "blazewrit harness — investigate step structured_output",
+  "description": "STEP 3 INVESTIGATE structured_output schema (M1 = SHAPE, grammar-constrained). Investigate interprets Ground FACTS into a designable problem definition: impact_map, constraints, risk_surface, architecture_impact (R6 force INPUTS Decide reads), a 5-state compatibility_verdict, and the 7-disposition ground_unknowns_addressed matrix. It does NOT generate options or make decisions (Decide) and does NOT capture new project-internal facts (Ground). TARGET RUNTIME: grammar-constrained generation — the model cannot emit a wrong shape/enum/missing-required field. Fields needing TRUTH (counts↔raw_stdout, every cited line exists, derivation consistency, declared_next_step==expected_next_step) are closed by SIBLING M2 validator_contracts listed in `x-validator-manifest` below — NOT by any keyword here. §5: every cross-step ref is a Postgres RowRef, never a file path (legacy '.blazewrit/grounds/**' / 'flow-history/<id>.json' is PRE-§5 and translated). M3: ED/MCP-backed and external-research-backed fields that can be ABSENT/FAIL/timeout use DegradableMeasurement (Measured|Omitted), never null/sentinel/placeholder-string. R23: every measured count is CountClaim. R26: every fact/risk/issue/disposition item carries source_tool provenance. R13: unverified flags KEEP-persist (no 'no unverified remain' forbid).",
+  "x-validator-manifest": {
+    "$comment": "M2 deterministic code checks the orchestrator MUST run AFTER grammar produces a shape-valid object. These are NOT schema keywords — grammar cannot enforce truth/cross-field/cross-run consistency. Listed here as the SIBLING contracts for this step's truth-bearing fields.",
+    "validator_contracts": [
+      {
+        "id": "INV-M2-1-affected_files_count",
+        "rule": "R23/R32 — impact_map.affected_files_count.value MUST equal impact_map.affected_files.length (mechanical derive, dedup'd). Also re-hash affected_files_count.source.raw_stdout_sha256 and re-derive value.",
+        "fields": [
+          "impact_map.affected_files",
+          "impact_map.affected_files_count"
+        ],
+        "check": "assert affected_files_count.value == dedup(affected_files).length AND value derivable from re-hashed source.raw_stdout"
+      },
+      {
+        "id": "INV-M2-2-derivation_consistency",
+        "rule": "Derivation rule (README L77-81) — affected_files = union(Ground.task_subgraph.entry_nodes file paths, impact_map.ripple file-type nodes), dedup'd. If entry_nodes unchanged but an affected file is missing, FAIL (investigate-reviewer parity).",
+        "fields": [
+          "impact_map.affected_files",
+          "impact_map.primary_areas",
+          "impact_map.ripple"
+        ],
+        "check": "re-derive affected_files from based_on_ground row's task_subgraph.entry_nodes + ripple; assert equality (set)"
+      },
+      {
+        "id": "INV-M2-3-architecture_impact_derive",
+        "rule": "R6 force-trigger derive — has_architecture_level == (new_modules.length>0) OR (public_api_changes.length>0); orchestrator computes it (Investigate does not free-fill). public_api_changes == external_surface[].contract where breaking==true.",
+        "fields": [
+          "architecture_impact.has_architecture_level",
+          "architecture_impact.new_modules",
+          "architecture_impact.public_api_changes",
+          "impact_map.external_surface"
+        ],
+        "check": "assert has_architecture_level == (new_modules.length>0 || public_api_changes.length>0) AND public_api_changes == {c.contract : c in external_surface, c.breaking==true}"
+      },
+      {
+        "id": "INV-M2-4-verdict-V1-V13",
+        "rule": "compatibility-verdict.md V1-V13 — V1 empty issues=>proceed; V2 any blocks_flow=>blocked; V3 (no V2) any requires_user=>needs_clarification; V4 else proceed; V5 dedup (root_cause hash+scope hash, max severity); V6 issues<=50 else issues_overflow; V7 type=other=>custom_type; V8 blocked=>blockers nonempty; V9 needs_clarification=>open_questions nonempty; V10 every issue has evidence; V11 no_op=>no_op_details complete; V12 result enum valid; V13 partial_proceed=>partial_scope_handling.",
+        "fields": [
+          "compatibility_verdict"
+        ],
+        "check": "run V1..V13 over compatibility_verdict.issues and result branch; reject on any violation grammar cannot see (e.g. V2/V3 result implied by issue flags)"
+      },
+      {
+        "id": "INV-M2-5-evidence-rowrefs",
+        "rule": "R26 provenance — every issue.evidence, no_op_details.evidence, risk item evidence, follow_up_ref, unknown_ref, based_on_ground, and based_on.* MUST resolve to an existing Postgres step_runs / sub-row id (RowRef), not a dangling/file ref.",
+        "fields": [
+          "compatibility_verdict.issues[].evidence",
+          "ground_unknowns_addressed[].follow_up_ref",
+          "ground_unknowns_addressed[].unknown_ref",
+          "based_on_ground",
+          "based_on"
+        ],
+        "check": "resolve each RowRef against step_runs; assert row exists and references the expected upstream step"
+      },
+      {
+        "id": "INV-M2-6-clarification-autolink",
+        "rule": "unknown-disposition.md — a ground_unknowns_addressed item with disposition='clarification' MUST auto-link to a compatibility issue: its follow_up_ref points at an issue whose requires_user=true, and that issue forces verdict.result=needs_clarification (unless a blocks_flow issue forces blocked first).",
+        "fields": [
+          "ground_unknowns_addressed[].disposition",
+          "ground_unknowns_addressed[].follow_up_ref",
+          "compatibility_verdict.issues"
+        ],
+        "check": "for each clarification disposition: assert follow_up_ref -> issue with requires_user=true; assert verdict.result consistent with V2/V3"
+      },
+      {
+        "id": "INV-M2-7-escalate-autolink",
+        "rule": "unknown-disposition.md — disposition='escalate' MUST link to a blocker issue (blocks_flow=true) forcing verdict.result=blocked; disposition='risk'=>follow_up_ref in risk_surface; disposition='constraint'=>follow_up_ref in constraints; disposition='defer'=>deferred_decisions entry.",
+        "fields": [
+          "ground_unknowns_addressed[].disposition",
+          "ground_unknowns_addressed[].follow_up_ref",
+          "risk_surface",
+          "constraints",
+          "deferred_decisions"
+        ],
+        "check": "assert follow_up_ref target collection matches disposition mapping (risk->risk_surface, constraint->constraints, defer->deferred_decisions, escalate/clarification->issues)"
+      },
+      {
+        "id": "INV-M2-8-matrix-default",
+        "rule": "unknown-disposition.md — matrix_default=false (deviated from recommended disposition) REQUIRES strengthened rationale (non-trivial length / explicit justification). Reviewer parity.",
+        "fields": [
+          "ground_unknowns_addressed[].matrix_default",
+          "ground_unknowns_addressed[].rationale"
+        ],
+        "check": "if matrix_default==false assert rationale length/specificity threshold met"
+      },
+      {
+        "id": "INV-M2-9-no-silent-unknown",
+        "rule": "Reviewer (README L122) — every Ground unknown is addressed (silent 미처리 0). The set of unknown_ref in ground_unknowns_addressed MUST cover every unknown id in the based_on_ground row.",
+        "fields": [
+          "ground_unknowns_addressed[].unknown_ref",
+          "based_on_ground"
+        ],
+        "check": "assert {unknown_ref} ⊇ {Ground.unknowns[].id}"
+      },
+      {
+        "id": "INV-M2-10-stale-source_version",
+        "rule": "compatibility-verdict.md Stale — Decide/Verify compare compatibility_verdict.source_version.ed_snapshot_version against current ED snapshot; mismatch => re-invoke Investigate (cycle cap=1: original + 1 re-invoke = 2 attempts). source_version.ed_snapshot_version MUST equal based_on_ground row's task_subgraph.ed_snapshot_version.",
+        "fields": [
+          "compatibility_verdict.source_version.ed_snapshot_version",
+          "based_on_ground"
+        ],
+        "check": "assert source_version.ed_snapshot_version == Ground.task_subgraph.ed_snapshot_version; on later stale, enforce cycle cap"
+      },
+      {
+        "id": "INV-M2-11-declared-next-step",
+        "rule": "R16 — declared_next_step (advisory) == orchestrator-injected expected_next_step. Folded into R27 validator body. Mismatch = chain divergence.",
+        "fields": [
+          "declared_next_step"
+        ],
+        "check": "assert declared_next_step == expected_next_step (injected by orchestrator)"
+      },
+      {
+        "id": "INV-M2-12-verification_proof-rehash",
+        "rule": "R36/provenance — re-hash every sha256/result_hash in verification_proof and source_manifest; re-read source_manifest entries and assert every cited_line <= line_count and exists. ed_queries result_hash re-hashed.",
+        "fields": [
+          "verification_proof",
+          "source_manifest"
+        ],
+        "check": "re-hash all *_sha256/result_hash; re-read read_files; assert every source_manifest cited line exists"
+      },
+      {
+        "id": "INV-M2-13-countclaim-rehash",
+        "rule": "R23 — every CountClaim.source.raw_stdout_sha256 re-hashed and value re-derived (affected_files_count, issues_overflow.total_found if measured, any count field).",
+        "fields": [
+          "impact_map.affected_files_count",
+          "compatibility_verdict.issues_overflow.total_found"
+        ],
+        "check": "re-parse source.raw_stdout, re-hash, re-derive value"
+      }
+    ]
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "flow_id",
+    "based_on",
+    "based_on_ground",
+    "depth",
+    "impact_map",
+    "constraints",
+    "risk_surface",
+    "architecture_impact",
+    "compatibility_verdict",
+    "ground_unknowns_addressed",
+    "verification_proof"
+  ],
+  "properties": {
+    "flow_id": {
+      "description": "The flow this investigation belongs to. §5 RowRef (flows.id), never a path.",
+      "$ref": "./_defs.schema.json#/$defs/RowRef"
+    },
+    "based_on": {
+      "description": "§5 BASED-ON bundle — upstream rows this investigation consumes (Ground + Triage). All values RowRef. Investigate REQUIRES ground_ref + triage_ref (its two declared inputs). The shared BasedOn $def is the single source for every key→RowRef mapping (M4); the two required keys are re-stated locally only to pin `required` (RowRef type unchanged).",
+      "allOf": [
+        {
+          "$ref": "./_defs.schema.json#/$defs/BasedOn"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "ground_ref",
+        "triage_ref"
+      ],
+      "properties": {
+        "ground_ref": {
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "triage_ref": {
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        }
+      }
+    },
+    "based_on_ground": {
+      "description": "The specific Ground step_run row this investigation derives from (legacy 'based_on_ground: <ground 산출물 hash>' translated to §5 RowRef). M2 resolves it to re-derive affected_files, validate unknown coverage, and check ed_snapshot_version freshness.",
+      "$ref": "./_defs.schema.json#/$defs/RowRef"
+    },
+    "depth": {
+      "description": "Adaptive Step Depth this Investigate ran at (shallow=compatibility+unknown_disposition only; deep=full 6 activities). Deepen triggers in README L132-137.",
+      "$ref": "./_defs.schema.json#/$defs/Depth"
+    },
+    "impact_map": {
+      "description": "Impact tracing from Ground entry_nodes (ED traversal — callers/callees/data flow). R6 INPUT for Decide. affected_files / affected_files_count are mechanically derived (M2 INV-M2-1/2).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary_areas",
+        "ripple",
+        "external_surface",
+        "affected_files",
+        "affected_files_count"
+      ],
+      "properties": {
+        "primary_areas": {
+          "description": "Directly-impacted nodes. source is the ED traversal that produced each (provenance).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "node",
+              "change_kind",
+              "source"
+            ],
+            "properties": {
+              "node": {
+                "type": "string",
+                "minLength": 1
+              },
+              "change_kind": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "description": "How this primary area was identified — legacy 'source: ed_traversal'. Provenance (SourceTool).",
+                "$ref": "./_defs.schema.json#/$defs/SourceTool"
+              }
+            }
+          }
+        },
+        "ripple": {
+          "description": "Indirect/transitive impact — nodes reached at a graph distance from primary areas, with reason.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "node",
+              "distance",
+              "why",
+              "source"
+            ],
+            "properties": {
+              "node": {
+                "type": "string",
+                "minLength": 1
+              },
+              "distance": {
+                "description": "Graph hop distance from primary area. A small bounded traversal-depth integer (NOT a measured count of tool output) — not a CountClaim.",
+                "type": "integer",
+                "minimum": 1
+              },
+              "why": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "$ref": "./_defs.schema.json#/$defs/SourceTool"
+              }
+            }
+          }
+        },
+        "external_surface": {
+          "description": "Public contracts crossing the change boundary. breaking=true entries feed architecture_impact.public_api_changes (M2 INV-M2-3).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "contract",
+              "consumers",
+              "breaking",
+              "source"
+            ],
+            "properties": {
+              "contract": {
+                "description": "The public symbol/contract crossing the boundary.",
+                "type": "string",
+                "minLength": 1
+              },
+              "consumers": {
+                "description": "Known consumers of this contract (identifiers/nodes).",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "breaking": {
+                "description": "Whether the change to this contract is breaking. true => contributes to public_api_changes + has_architecture_level (M2 derived).",
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "./_defs.schema.json#/$defs/SourceTool"
+              }
+            }
+          }
+        },
+        "affected_files": {
+          "description": "Mechanically derived union of Ground.task_subgraph.entry_nodes file paths + ripple file-type node paths, dedup'd (README L77). These are READ-INPUT path strings (real repo files the impact touches), NOT §5 cross-step refs — file paths are correct here.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "affected_files_count": {
+          "description": "R23 — count of affected files = affected_files.length (R6 mechanical-eval cache). MUST be CountClaim (M2 INV-M2-1 re-derives value == dedup(affected_files).length); a bare integer here is the exact R23 hallucination.",
+          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+        }
+      }
+    },
+    "constraints": {
+      "description": "Constraints derived from policy/contract/security posture/domain. blocking=true marks flow-blocking constraints. Each carries source_tool provenance (R26).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "description",
+          "source_tool"
+        ],
+        "properties": {
+          "source": {
+            "description": "Constraint origin category (legacy 'source: rule|contract|security|domain').",
+            "type": "string",
+            "enum": [
+              "rule",
+              "contract",
+              "security",
+              "domain"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blocking": {
+            "description": "Optional — whether absence/violation of this constraint blocks the flow.",
+            "type": "boolean"
+          },
+          "constraint_id": {
+            "description": "Optional invocation-scoped id so a ground_unknowns_addressed disposition='constraint' can target it via follow_up_ref.",
+            "type": "string",
+            "minLength": 1
+          },
+          "source_tool": {
+            "description": "R26 provenance — what produced this constraint (rule file read, contract surface, security probe).",
+            "$ref": "./_defs.schema.json#/$defs/SourceTool"
+          }
+        }
+      }
+    },
+    "risk_surface": {
+      "description": "Failure modes = impact × Ground concerns. Each item: area + severity (RISK scale low|med|high|critical) + probability + evidence + source_tool. Reviewer requires one per god_node_in_scope.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "area",
+          "severity",
+          "probability",
+          "evidence",
+          "source_tool"
+        ],
+        "properties": {
+          "area": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "description": "RISK scale (low|med|high|critical) — distinct from the compatibility-issue scale (fatal|high|medium|low). Do not collapse.",
+            "$ref": "./_defs.schema.json#/$defs/Severity"
+          },
+          "probability": {
+            "$ref": "./_defs.schema.json#/$defs/Probability"
+          },
+          "evidence": {
+            "description": "Evidence backing this risk. Free-text justification of the failure mode.",
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence_ref": {
+            "description": "Optional §5 RowRef to the Ground/Investigate fact row that grounds this risk (provenance pointer).",
+            "$ref": "./_defs.schema.json#/$defs/RowRef"
+          },
+          "risk_id": {
+            "description": "Optional invocation-scoped id so a ground_unknowns_addressed disposition='risk' can target it via follow_up_ref.",
+            "type": "string",
+            "minLength": 1
+          },
+          "source_tool": {
+            "description": "R26 provenance — what surfaced this risk.",
+            "$ref": "./_defs.schema.json#/$defs/SourceTool"
+          }
+        }
+      }
+    },
+    "architecture_impact": {
+      "description": "R6 force INPUT (Decide reads). Investigate identifies AFFECTED new modules / changed public API during impact analysis — it does NOT generate or select options (Decide). has_architecture_level is orchestrator-DERIVED (M2 INV-M2-3), not free-filled here, but carried for the grammar shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "new_modules",
+        "public_api_changes",
+        "has_architecture_level"
+      ],
+      "properties": {
+        "new_modules": {
+          "description": "New directory paths / module symbols surfaced by ED traversal + ripple (impact identification only, NOT option generation). Path/symbol strings.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "public_api_changes": {
+          "description": "Public symbols/contracts changed = external_surface[] entries with breaking==true (M2 INV-M2-3 re-derives).",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "has_architecture_level": {
+          "description": "R6 force-trigger = (new_modules.length>0) OR (public_api_changes.length>0). Orchestrator-derived (README L80); carried in the shape, validated by M2 INV-M2-3.",
+          "type": "boolean"
+        }
+      }
+    },
+    "compatibility_verdict": {
+      "description": "The 5-state verdict (compatibility-verdict.md). DISCRIMINATED UNION on `result`: proceed | blocked | needs_clarification | no_op | partial_proceed. Per-branch required fields enforce V8/V9/V11/V13 SHAPE at grammar level; the value-truth of V1-V7/V10/V12 is M2 (INV-M2-4). source_version freshness is M2 (INV-M2-10).",
+      "type": "object",
+      "required": [
+        "result",
+        "schema_version",
+        "checked_at",
+        "source_version",
+        "issues",
+        "reason"
+      ],
+      "properties": {
+        "result": {
+          "description": "5-state compatibility result. Discriminant for the oneOf below.",
+          "type": "string",
+          "enum": [
+            "proceed",
+            "blocked",
+            "needs_clarification",
+            "no_op",
+            "partial_proceed"
+          ]
+        },
+        "schema_version": {
+          "description": "compatibility_verdict schema version (legacy schema_version: 1).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "checked_at": {
+          "description": "When this verdict was computed (freshness; Verify race-detects against current time).",
+          "$ref": "./_defs.schema.json#/$defs/Iso8601"
+        },
+        "source_version": {
+          "description": "Freshness anchors. ed_snapshot_version MUST equal based_on_ground row's task_subgraph.ed_snapshot_version (M2 INV-M2-10 stale detection, cycle cap=1).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ed_snapshot_version"
+          ],
+          "properties": {
+            "ed_snapshot_version": {
+              "$ref": "./_defs.schema.json#/$defs/Sha256"
+            },
+            "rules_version": {
+              "$ref": "./_defs.schema.json#/$defs/Sha256"
+            },
+            "contracts_version": {
+              "$ref": "./_defs.schema.json#/$defs/Sha256"
+            }
+          }
+        },
+        "issues": {
+          "description": "Scoped compatibility issues. cap 50 (V6 — over-cap requires issues_overflow), dedup most-severe-wins (V5). Each issue's flags drive the result (V2 blocks_flow=>blocked, V3 requires_user=>needs_clarification) — that derivation is M2 (INV-M2-4).",
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/CompatibilityIssue"
+          }
+        },
+        "reason": {
+          "description": "Why this result was reached (V-rule narrative).",
+          "type": "string",
+          "minLength": 1
+        },
+        "sub_flow_verdicts": {
+          "description": "Compound only — per-sub-flow verdict. issue_refs are issue ids within this verdict.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "sub_flow_id",
+              "result",
+              "issue_refs"
+            ],
+            "properties": {
+              "sub_flow_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "proceed",
+                  "blocked",
+                  "needs_clarification",
+                  "no_op",
+                  "partial_proceed"
+                ]
+              },
+              "issue_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "issues_overflow": {
+          "description": "V6 — present iff total_found > 50. total_found is a measured count (R23 CountClaim if it comes from a tool enumeration; here the issue set is enumerated so total_found is CountClaim).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "total_found",
+            "captured",
+            "summary"
+          ],
+          "properties": {
+            "total_found": {
+              "description": "R23 — total issues found before the 50-cap. CountClaim (measured count of an enumeration).",
+              "$ref": "./_defs.schema.json#/$defs/CountClaim"
+            },
+            "captured": {
+              "description": "Number captured (always 50 at overflow). Fixed cap constant, not a measured-from-tool count.",
+              "type": "integer",
+              "const": 50
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "$comment": "V1/V4 — empty issues OR no blocking/clarification flags => proceed. blockers/open_questions/no_op_details/partial_scope_handling MUST be absent.",
+          "type": "object",
+          "properties": {
+            "result": {
+              "const": "proceed"
+            },
+            "blockers": false,
+            "open_questions": false,
+            "no_op_details": false,
+            "partial_scope_handling": false
+          },
+          "required": [
+            "result"
+          ]
+        },
+        {
+          "$comment": "V2/V8 — any issue.blocks_flow=true => blocked. blockers (issue ids) REQUIRED non-empty.",
+          "type": "object",
+          "properties": {
+            "result": {
+              "const": "blocked"
+            },
+            "blockers": {
+              "description": "V8 — issue ids that block the flow. REQUIRED non-empty when result=blocked.",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "no_op_details": false,
+            "partial_scope_handling": false
+          },
+          "required": [
+            "result",
+            "blockers"
+          ]
+        },
+        {
+          "$comment": "V3/V9 — (no blocks_flow) any issue.requires_user=true => needs_clarification. open_questions (issue ids) REQUIRED non-empty.",
+          "type": "object",
+          "properties": {
+            "result": {
+              "const": "needs_clarification"
+            },
+            "open_questions": {
+              "description": "V9 — issue ids requiring user/caller answer. REQUIRED non-empty when result=needs_clarification.",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "no_op_details": false,
+            "partial_scope_handling": false
+          },
+          "required": [
+            "result",
+            "open_questions"
+          ]
+        },
+        {
+          "$comment": "V11 — no_op => no_op_details REQUIRED complete (reason+evidence+current_state+target_state+suggested_action).",
+          "type": "object",
+          "properties": {
+            "result": {
+              "const": "no_op"
+            },
+            "no_op_details": {
+              "description": "V11 — required no-op justification. evidence is a §5 RowRef to the Ground/Investigate fact comparison.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "reason",
+                "evidence",
+                "current_state",
+                "target_state",
+                "suggested_action"
+              ],
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence": {
+                  "$ref": "./_defs.schema.json#/$defs/RowRef"
+                },
+                "current_state": {
+                  "description": "Captured current fact (baseline/version/coverage).",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "target_state": {
+                  "description": "Triage-intended target extracted from the request.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "suggested_action": {
+                  "type": "string",
+                  "enum": [
+                    "abandon",
+                    "wait_for_change",
+                    "reframe_request"
+                  ]
+                }
+              }
+            },
+            "blockers": false,
+            "open_questions": false,
+            "partial_scope_handling": false
+          },
+          "required": [
+            "result",
+            "no_op_details"
+          ]
+        },
+        {
+          "$comment": "V13 — partial_proceed => partial_scope_handling REQUIRED (proceed_set/blocked_set/followup_required).",
+          "type": "object",
+          "properties": {
+            "result": {
+              "const": "partial_proceed"
+            },
+            "partial_scope_handling": {
+              "description": "V13 — scope split. proceed_set/blocked_set are scope refs (issue ids / scope identifiers); blocked_set is queued as followup_flows by Decide.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "proceed_set",
+                "blocked_set",
+                "followup_required"
+              ],
+              "properties": {
+                "proceed_set": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "blocked_set": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "followup_required": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "no_op_details": false
+          },
+          "required": [
+            "result",
+            "partial_scope_handling"
+          ]
+        }
+      ]
+    },
+    "ground_unknowns_addressed": {
+      "description": "The 7-disposition matrix (unknown-disposition.md). EVERY Ground unknown MUST appear exactly once (silent 미처리 0 — M2 INV-M2-9 coverage). disposition enum + rationale REQUIRED on each; follow_up_ref + matrix_default + sub_dispositions per disposition (M2 auto-link checks INV-M2-6/7/8).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UnknownDisposition"
+      }
+    },
+    "deferred_decisions": {
+      "description": "Records for disposition='defer' items — what is punted to a later step. follow_up_ref of a deferred unknown targets a deferred_decision_id here (M2 INV-M2-7).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deferred_decision_id",
+          "defer_to",
+          "description"
+        ],
+        "properties": {
+          "deferred_decision_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "defer_to": {
+            "description": "Which later step resolves this (defer_to: decide | spec | test | implement).",
+            "type": "string",
+            "enum": [
+              "decide",
+              "spec",
+              "test",
+              "implement"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "sub_flow_identification": {
+      "description": "Compound only — identifies sub-flows (flow_type + scope + rationale). IDENTIFICATION only; decomposition/ordering is Decide (boundary). source_tool provenance per item.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "flow_type",
+          "scope",
+          "rationale",
+          "source_tool"
+        ],
+        "properties": {
+          "flow_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_tool": {
+            "$ref": "./_defs.schema.json#/$defs/SourceTool"
+          }
+        }
+      }
+    },
+    "triage_mismatch": {
+      "description": "Optional — surfaced only when Triage misclassification is suspected (reclassify trigger). suspected_flow_type + evidence. source_tool provenance.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "suspected_flow_type",
+        "evidence",
+        "source_tool"
+      ],
+      "properties": {
+        "suspected_flow_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_tool": {
+          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        }
+      }
+    },
+    "request_upstream_deepen": {
+      "description": "Optional M3-adjacent boundary signal — Investigate may NOT read project-internal code; if Ground detail is insufficient it requests a Ground deep re-invoke instead of reaching in (README L114). Carries the reason + the Ground row to deepen.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ground_ref",
+        "reason"
+      ],
+      "properties": {
+        "ground_ref": {
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "external_research": {
+      "description": "Optional — external-research.md findings (WebFetch/WebSearch/Context7) used as INTERPRETATION AID (not project-internal capture). Each finding is DEGRADABLE: an external source can be inaccessible/rate-limited/paywalled/auth-required — those are Omitted branches (R22), not nulls. claim_class drives provenance depth.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExternalFinding"
+      }
+    },
+    "verification_proof": {
+      "description": "Provenance container backing this investigation's facts: tool_calls + read_files + optional ed_queries (ED is MCP-backed; when ED is unavailable the ED-derived field uses Omitted, not an empty ed_queries). M2 INV-M2-12 re-hashes all.",
+      "$ref": "./_defs.schema.json#/$defs/VerificationProof"
+    },
+    "source_manifest": {
+      "description": "Optional R36 — files cited (CLAUDE.md/AGENTS.md/.claude/rules/** etc.) with exact cited_lines. M2 INV-M2-12 asserts every cited line exists.",
+      "$ref": "./_defs.schema.json#/$defs/SourceManifest"
+    },
+    "ed_availability": {
+      "description": "M3 — overall ED/MCP graph availability for this run. ED traversal (Activity 1) is the core measured surface and can be ABSENT/timeout; this is the first-class degrade branch. Measured.value carries the snapshot version queried; Omitted carries why ED was unusable (=> impact_map traversal degrades, unknowns lean to escalate per matrix).",
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ed_snapshot_version"
+              ],
+              "properties": {
+                "ed_snapshot_version": {
+                  "$ref": "./_defs.schema.json#/$defs/Sha256"
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "declared_next_step": {
+      "description": "R16 — advisory declared successor. Orchestrator INJECTS the authoritative expected_next_step; M2 INV-M2-11 asserts equality. For a proceed/partial_proceed verdict the chain typically continues to 'decide'.",
+      "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep"
+    },
+    "unverified": {
+      "description": "R13 floor field — KEEP polarity. Marks investigation claims the step could not itself verify; DESIGNED to persist downstream until Verify (the single gate). NO 'no unverified remain' forbid exists.",
+      "$ref": "./_defs.schema.json#/$defs/UnverifiedFlag"
+    }
+  },
+  "$defs": {
+    "CompatibilityIssue": {
+      "$comment": "compatibility-verdict.md issue schema. type enum (15 + other), severity=SeverityIssue (fatal|high|medium|low — NOT the risk scale), evidence REQUIRED (V10 provenance RowRef), flags drive V2/V3 result (M2).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "severity",
+        "description",
+        "evidence",
+        "source_tool"
+      ],
+      "properties": {
+        "id": {
+          "description": "Invocation-scoped unique issue id (referenced by blockers/open_questions/proceed_set/blocked_set/sub_flow_verdicts.issue_refs and unknown follow_up_ref).",
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "description": "Issue type enum. type='other' REQUIRES custom_type (V7).",
+          "type": "string",
+          "enum": [
+            "missing_referent",
+            "policy_violation",
+            "stack_incompatibility",
+            "breaking_change",
+            "deprecated_usage",
+            "resource_constraint",
+            "security_violation",
+            "compliance_violation",
+            "license_conflict",
+            "contract_violation",
+            "environment_mismatch",
+            "timing_constraint",
+            "circular_dependency",
+            "platform_unsupported",
+            "other"
+          ]
+        },
+        "custom_type": {
+          "description": "REQUIRED when type='other' (V7 — enforced by the if/then below).",
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "description": "COMPATIBILITY-ISSUE scale fatal|high|medium|low (SeverityIssue) — distinct from risk_surface Severity (low|med|high|critical). Do not collapse.",
+          "$ref": "./_defs.schema.json#/$defs/SeverityIssue"
+        },
+        "scope": {
+          "description": "All sub-fields optional; all-empty = project-wide. target_set is bounded (top N + summary).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "component": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tenant": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dependency": {
+              "description": "package@version.",
+              "type": "string",
+              "minLength": 1
+            },
+            "platform": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sub_flow": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target_set": {
+              "description": "Bounded set of affected consumer ids (top N + summary).",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "description": "V10 — REQUIRED provenance. §5 RowRef to the Ground/Investigate fact backing this issue (legacy '<ground/investigate ref>'). M2 resolves the row.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "requires_user": {
+          "description": "true => contributes to needs_clarification (V3). M2 INV-M2-4 derives the result.",
+          "type": "boolean"
+        },
+        "blocks_flow": {
+          "description": "true => contributes to blocked (V2). M2 INV-M2-4 derives the result.",
+          "type": "boolean"
+        },
+        "suggested_followup": {
+          "description": "Optional remediation hint.",
+          "type": "string",
+          "minLength": 1
+        },
+        "source_tool": {
+          "description": "R26 provenance — what tool/origin surfaced this issue (in addition to the evidence RowRef).",
+          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        }
+      },
+      "if": {
+        "properties": {
+          "type": {
+            "const": "other"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "custom_type"
+        ]
+      }
+    },
+    "UnknownDisposition": {
+      "$comment": "unknown-disposition.md — one Ground unknown -> exactly one of 7 dispositions. disposition+rationale REQUIRED. partially_resolved REQUIRES sub_dispositions (if/then). source_tool provenance on the disposition item.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unknown_ref",
+        "unknown_type",
+        "disposition",
+        "rationale",
+        "source_tool"
+      ],
+      "properties": {
+        "unknown_ref": {
+          "description": "§5 RowRef (or sub-row id) of the Ground unknown being disposed. M2 INV-M2-9 asserts coverage of every Ground unknown.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "unknown_type": {
+          "description": "Ground unknown type for matrix matching (capture_failed:timeout, capture_failed:tool_error, inaccessible:permission_denied, tool_unavailable, referent_unresolved, ed_ambiguous, ed_inferred, ed_drift, external_unknown, contradiction, racing_changes, ...). Kept as a constrained-but-open string to stay faithful to the matrix without inventing a closed enum beyond the prose.",
+          "type": "string",
+          "minLength": 1
+        },
+        "disposition": {
+          "description": "One of the 7 dispositions. clarification auto-links to a requires_user issue (M2 INV-M2-6); escalate to a blocks_flow issue (M2 INV-M2-7); risk->risk_surface; constraint->constraints; defer->deferred_decisions.",
+          "type": "string",
+          "enum": [
+            "resolved",
+            "partially_resolved",
+            "risk",
+            "constraint",
+            "clarification",
+            "defer",
+            "escalate"
+          ]
+        },
+        "rationale": {
+          "description": "Why this disposition. matrix_default=false REQUIRES strengthened rationale (M2 INV-M2-8).",
+          "type": "string",
+          "minLength": 1
+        },
+        "matrix_default": {
+          "description": "Optional — true if this followed the matrix-recommended disposition. false => rationale must be strengthened (M2 INV-M2-8).",
+          "type": "boolean"
+        },
+        "follow_up_ref": {
+          "description": "Optional §5 RowRef to the artifact this disposition produced (risk_id | constraint_id | compat_issue_id | deferred_decision_id | blocker_id). REQUIRED in practice for risk/constraint/clarification/defer/escalate (M2 enforces the disposition->collection mapping; resolved/partially_resolved-fully may omit).",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "sub_dispositions": {
+          "description": "REQUIRED when disposition='partially_resolved' (if/then) — each residual part gets its own disposition + follow_up_ref.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "part",
+              "disposition"
+            ],
+            "properties": {
+              "part": {
+                "type": "string",
+                "minLength": 1
+              },
+              "disposition": {
+                "type": "string",
+                "enum": [
+                  "resolved",
+                  "risk",
+                  "constraint",
+                  "clarification",
+                  "defer",
+                  "escalate"
+                ]
+              },
+              "follow_up_ref": {
+                "$ref": "./_defs.schema.json#/$defs/RowRef"
+              }
+            }
+          }
+        },
+        "source_tool": {
+          "description": "R26 provenance — how this unknown was investigated/disposed (e.g. WebFetch for resolved, ED query, matrix-default).",
+          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        }
+      },
+      "if": {
+        "properties": {
+          "disposition": {
+            "const": "partially_resolved"
+          }
+        },
+        "required": [
+          "disposition"
+        ]
+      },
+      "then": {
+        "required": [
+          "sub_dispositions"
+        ]
+      }
+    },
+    "ExternalFinding": {
+      "$comment": "external-research.md — a single external claim resolution. DEGRADABLE: resolved at a trust grade (Measured) OR inaccessible/rate-limited/paywall/auth/no-results (Omitted, R22). claim_class drives provenance depth.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim",
+        "claim_class",
+        "result"
+      ],
+      "properties": {
+        "claim": {
+          "description": "The external claim investigated.",
+          "type": "string",
+          "minLength": 1
+        },
+        "claim_class": {
+          "description": "external-research.md provenance-depth driver. decision_critical/version_sensitive/conflict_with_internal => full provenance; background_context => aggregated.",
+          "type": "string",
+          "enum": [
+            "decision_critical",
+            "version_sensitive",
+            "conflict_with_internal",
+            "background_context",
+            "feasibility_critical"
+          ]
+        },
+        "no_results_handling": {
+          "description": "Optional sibling of `result` (only meaningful when result is Omitted) — external-research.md no-results disposition by claim importance: decision_critical=>compat issue; version_sensitive=>risk; background=>defer; feasibility_critical=>negative-signal fact. Lifted out of the Omitted branch because the shared Omitted $def is additionalProperties:false (cannot be extended in place).",
+          "type": "string",
+          "enum": [
+            "compat_issue",
+            "risk_surface",
+            "defer",
+            "negative_signal"
+          ]
+        },
+        "result": {
+          "description": "M3 DEGRADE — Measured (claim verified at a trust grade) | Omitted (external source inaccessible / rate-limited / paywall / auth-required / no-results). Absence is a first-class branch (R22), never null. The shared Omitted $def is used as-is (no in-place extension).",
+          "oneOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "./_defs.schema.json#/$defs/Measured"
+                }
+              ],
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "finding",
+                    "trust"
+                  ],
+                  "properties": {
+                    "finding": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "trust": {
+                      "description": "Source trust grade (external-research.md). generated_seo is never authoritative.",
+                      "type": "string",
+                      "enum": [
+                        "high",
+                        "medium",
+                        "low"
+                      ]
+                    },
+                    "provenance": {
+                      "description": "Provenance depth scales with claim_class. decision_critical/version_sensitive/conflict => full (url+accessed_at+content_hash+source_type+version_snapshot); background => aggregated (sources_consulted+primary).",
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "accessed_at": {
+                          "$ref": "./_defs.schema.json#/$defs/Iso8601"
+                        },
+                        "content_hash": {
+                          "$ref": "./_defs.schema.json#/$defs/Sha256"
+                        },
+                        "source_type": {
+                          "type": "string",
+                          "enum": [
+                            "official_current",
+                            "standards_body",
+                            "source_code",
+                            "security_advisory",
+                            "official_stale",
+                            "vendor_changelog",
+                            "package_registry",
+                            "community",
+                            "cached_archive"
+                          ]
+                        },
+                        "version_snapshot": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sources_consulted": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "primary": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

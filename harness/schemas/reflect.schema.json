@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/reflect.schema.json",
+  "title": "blazewrit harness — Reflect step structured_output",
+  "description": "STEP 10 REFLECT — post-flow learning extraction (README legacy/steps/reflect). Runs ONLY on classification completed|abandoned; suspended => Reflect NOT executed, so this schema is never emitted for a suspended flow. M1 SHAPE (grammar-constrained generation): the 4 required substantive sections (what_worked / what_failed / unexpected / patterns_discovered) are forced present; minLength is the SCHEMA-SIDE substance FLOOR (the legacy 'Reflect structure check hook'), but the irreducible 'is it actually substantive / non-filler' judgment is NOT closable by grammar — it is an M2/floor concern (G6 review). §5 STORAGE LAW: Tier 1 raw Reflect output persists to Postgres step_runs jsonb (a RowRef self-id, NOT a flow-history file — legacy '.blazewrit/flow-history/<id>.json' is PRE-§5 and translated to a row ref). Tier 2 promotion is the SOLE legit file output: '.claude/rules/<topic>.md' (RulesFilePath, a Claude Code INPUT). based_on / prior-run refs = RowRefs. Reflect has NO reviewer and NO next-step (terminal): no DeclaredNextStep. Boundary: Reflect learns only — it does NOT change decisions (Decide), code (Implement), or write CLAUDE.md (User/Tier 3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "step",
+    "self_ref",
+    "classification",
+    "based_on",
+    "what_worked",
+    "what_failed",
+    "unexpected",
+    "patterns_discovered",
+    "prior_learning_comparison",
+    "tier2_promotions",
+    "iterations"
+  ],
+  "properties": {
+    "step": {
+      "description": "Step discriminant. Always 'reflect' for this schema.",
+      "const": "reflect"
+    },
+
+    "self_ref": {
+      "$comment": "§5 Tier 1 RAW = Postgres. The Postgres step_runs row id this Reflect output persists to — NOT a '.blazewrit/flow-history/<id>.json' file (legacy prose, PRE-§5).",
+      "description": "§5 STORAGE LAW. Postgres step_runs row id under which this Reflect output (Tier 1 RAW) persists. Replaces the legacy '.blazewrit/flow-history/<id>.json' archive path — Tier 1 raw is a ROW, not a file. Auto-archived (kept) on flow completion/abandonment via Postgres retention, not a filesystem write.",
+      "$ref": "./_defs.schema.json#/$defs/RowRef"
+    },
+
+    "classification": {
+      "$comment": "README 'Reflect 분류'. Only completed|abandoned reach Reflect; suspended => Reflect NOT executed (no output), so it is NOT a valid value here.",
+      "description": "README Reflect-classification. The terminal classification of the reflected flow. ONLY 'completed' (all steps normal) or 'abandoned' (blocked / no_op / user abandonment / RETRY_EXHAUSTED) run Reflect. 'suspended' (NEEDS_CONTEXT or active-flow preempted) does NOT execute Reflect and is therefore EXCLUDED from this enum — grammar makes it impossible to emit a Reflect output for a suspended flow.",
+      "type": "string",
+      "enum": ["completed", "abandoned"]
+    },
+
+    "based_on": {
+      "$comment": "§5 — references to the whole flow's step_runs (Triage..Verify). All RowRefs, never file paths.",
+      "description": "§5 BASED-ON. RowRefs to the flow's upstream step_runs that this learning was extracted from (Triage → … → Verify, plus the Verify result). Every value is a Postgres row id (RowRef), never a file path. flow_ref points at the flows row; step_refs lists the individual step_runs rows reflected over.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flow_ref", "step_refs"],
+      "properties": {
+        "flow_ref": {
+          "description": "RowRef to the flows row being reflected on.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "step_refs": {
+          "description": "RowRefs to the flow's step_runs rows (Triage..Verify) the learning draws on. At least one.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+        },
+        "verify_result": {
+          "description": "The flow's Verify outcome that conditioned this reflection.",
+          "type": "string",
+          "enum": ["PASS", "FAIL", "RETRY_EXHAUSTED"]
+        }
+      }
+    },
+
+    "what_worked": {
+      "$comment": "Required substantive section #1. minLength = SCHEMA-SIDE substance floor (structure-check hook). 'is it substantive / non-filler' is the irreducible G6 judgment, NOT grammar-closable.",
+      "description": "REQUIRED SECTION 1/4 (README structure check). Techniques, tools, approaches that SUCCEEDED. Each finding carries a source_tool provenance (R26 floor) so the learning is attributable to where it was observed in the flow. minItems + per-finding minLength is the schema-side substance floor; whether the text is genuinely substantive vs filler is the irreducible floor (G6).",
+      "$ref": "#/$defs/ReflectionSection"
+    },
+
+    "what_failed": {
+      "$comment": "Required substantive section #2.",
+      "description": "REQUIRED SECTION 2/4. What did NOT work and WHY. Same provenance + substance-floor contract as what_worked.",
+      "$ref": "#/$defs/ReflectionSection"
+    },
+
+    "unexpected": {
+      "$comment": "Required substantive section #3.",
+      "description": "REQUIRED SECTION 3/4. Surprises, edge cases, assumptions proven wrong. Same contract.",
+      "$ref": "#/$defs/ReflectionSection"
+    },
+
+    "patterns_discovered": {
+      "$comment": "Required substantive section #4. Each pattern carries occurrence_count (CountClaim, R23) — observed N times; 3+ across flows triggers Tier 2 promotion.",
+      "description": "REQUIRED SECTION 4/4. Recurring observations worth tracking. Each pattern additionally carries an occurrence_count (CountClaim, R23) — how many times the pattern has been observed across flows, MEASURED from the prior-run comparison, not a fabricated integer — because '3+ times' is the Tier 2 promotion trigger and that threshold must be backed by a counted command (e.g. a query over prior step_runs). promotion_eligible is the model's SHAPE-level signal that the threshold was met; the actual promotion act is recorded in tier2_promotions.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/DiscoveredPattern" }
+    },
+
+    "prior_learning_comparison": {
+      "$comment": "M3 DEGRADE — reads prior runs (legacy '.blazewrit/flow-history/', now Postgres rows). On the FIRST flow there are no priors => Omitted branch, NOT an empty/over-typed value (R22).",
+      "description": "M3 DEGRADE (Measured | Omitted). Pass 3 prior-learning comparison: reads PRIOR flow runs (legacy '.blazewrit/flow-history/' → §5 Postgres step_runs rows) and compares this flow's learning against them. This is tool/data-dependent and can be ABSENT — e.g. the first flow has no prior runs, or the prior-run query fails/times out — so absence is a first-class Omitted branch (reason tool_absent/timeout/not_applicable), never a null or an empty array masquerading as 'compared to nothing'. The measured branch carries the prior rows consulted (RowRefs) and the deltas found.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value", "source_tool"],
+          "properties": {
+            "status": { "const": "measured" },
+            "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["prior_run_refs", "deltas"],
+              "properties": {
+                "prior_run_refs": {
+                  "description": "RowRefs to the prior step_runs/flows rows consulted (the §5 translation of reading flow-history files).",
+                  "type": "array",
+                  "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+                },
+                "deltas": {
+                  "description": "How this flow's learning differs from / confirms prior learning. Each delta is provenance-bearing.",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["observation", "kind", "source_tool"],
+                    "properties": {
+                      "observation": { "type": "string", "minLength": 24 },
+                      "kind": {
+                        "description": "Relationship to prior learning: a new finding, a confirmation (recurrence — feeds occurrence_count), or a contradiction (Tier 2 prune trigger).",
+                        "type": "string",
+                        "enum": ["new", "confirms_prior", "contradicts_prior"]
+                      },
+                      "prior_ref": {
+                        "description": "Optional RowRef to the specific prior step_runs row this delta relates to.",
+                        "$ref": "./_defs.schema.json#/$defs/RowRef"
+                      },
+                      "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        { "$ref": "./_defs.schema.json#/$defs/Omitted" }
+      ]
+    },
+
+    "tier2_promotions": {
+      "$comment": "The SOLE legit file output: .claude/rules/<topic>.md (RulesFilePath). Dedup: found=>append, not-found=>create. Append-only, never rewrite.",
+      "description": "3-Tier distillation Tier 2 (Curated). Records each pattern promoted to '.claude/rules/<topic>.md' — the ONE workflow output that stays a FILE (RulesFilePath, a Claude Code INPUT; Postgres cannot inject it). May be empty (no pattern hit the 3+ threshold this flow). DEDUP RULE (README): before writing, Reflect searches existing rule files for the same pattern → found ⇒ write_mode 'append' (append evidence to the existing file) / not-found ⇒ write_mode 'create' (new file). Append-only — never rewrite. Each promotion's pattern_ref ties back to the patterns_discovered entry that justified it.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rules_file", "write_mode", "topic", "pattern_ref", "occurrence_count", "deduped_against"],
+        "properties": {
+          "rules_file": {
+            "$comment": "§5 SOLE file-path exception — a real on-disk .claude/rules/<topic>.md path.",
+            "description": "The Tier 2 file written. RulesFilePath ('.claude/rules/<topic>.md') — the single file output in the whole harness.",
+            "$ref": "./_defs.schema.json#/$defs/RulesFilePath"
+          },
+          "write_mode": {
+            "description": "Dedup outcome: 'append' = identical pattern already had a rule file, evidence appended (append-only); 'create' = no existing rule matched, new file created.",
+            "type": "string",
+            "enum": ["append", "create"]
+          },
+          "topic": {
+            "description": "The <topic> slug of the rule file (matches the rules_file path stem).",
+            "type": "string",
+            "minLength": 1
+          },
+          "pattern_ref": {
+            "description": "Index into patterns_discovered identifying which discovered pattern was promoted.",
+            "type": "integer",
+            "minimum": 0
+          },
+          "occurrence_count": {
+            "$comment": "R23 — the '3+ times across flows' promotion threshold is a MEASURED count, never a bare integer. value MUST be >= 3 for a legitimate promotion (validator-enforced).",
+            "description": "R23 CountClaim. Times the pattern was observed across flows — the measured backing for the '3+' promotion threshold. Must be derived from the prior-run query stdout, not fabricated. M2 validator asserts value >= 3 (promotion threshold) AND value is derivable from source.raw_stdout.",
+            "$ref": "./_defs.schema.json#/$defs/CountClaim"
+          },
+          "deduped_against": {
+            "$comment": "Dedup audit: which existing rule files were searched before writing. Never create a duplicate rule.",
+            "description": "The existing '.claude/rules/' files searched during dedup (README Dedup Rule). Empty when no rule files existed yet. M2 validator: if write_mode='create', assert no entry here matched the same pattern (no duplicate rule created).",
+            "type": "array",
+            "items": { "$ref": "./_defs.schema.json#/$defs/RulesFilePath" }
+          }
+        }
+      }
+    },
+
+    "iterations": {
+      "$comment": "Internal multi-pass: max 3 iterations until 4 sections substantive. This is a COUNT of executed passes => CountClaim is overkill (not a tool-stdout count); it is a self-reported control integer bounded 1..3.",
+      "description": "Internal multi-pass control. Number of refinement iterations run (Pass 1 fact collection → Pass 2 pattern extraction → Pass 3 prior comparison, looped up to max 3 until the 4 required sections are substantive). Bounded 1..3. This is an internal control integer (how many self-passes the agent ran), NOT a measurement of an external tool's stdout, so it is a plain bounded integer rather than a CountClaim.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
+    },
+
+    "unverified": {
+      "$comment": "R13 floor — KEEP polarity. Reflect may carry unverified learnings; the flag propagates. NO 'no unverified remain' forbid.",
+      "description": "R13 UNVERIFIED FLAG (floor, KEEP polarity). Optional: whether some of this reflection's learnings are themselves unverified. Designed to PERSIST — NEVER forbidden true. Reflect is terminal and is NOT the unverified gate (Verify is); Reflect merely records.",
+      "$ref": "./_defs.schema.json#/$defs/UnverifiedFlag"
+    }
+  },
+
+  "$defs": {
+
+    "Finding": {
+      "$comment": "One substantive learning item. R26 floor: source_tool REQUIRED. minLength on text = schema-side substance floor.",
+      "description": "A single learning finding inside a required section. text is the observation (minLength substance floor — the structure-check hook's machine-checkable part). source_tool (R26 irreducible floor) names where in the flow this was observed/which tool surfaced it — REQUIRED so no learning is unsourced. step_ref optionally pins the finding to the specific step_runs row it came from.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "source_tool"],
+      "properties": {
+        "text": {
+          "description": "The substantive observation. minLength 24 is the schema-side substance FLOOR; non-filler is the irreducible G6 judgment.",
+          "type": "string",
+          "minLength": 24
+        },
+        "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" },
+        "step_ref": {
+          "description": "Optional RowRef to the step_runs row this finding was observed in.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        }
+      }
+    },
+
+    "ReflectionSection": {
+      "$comment": "Wrapper for the 3 narrative sections (what_worked/what_failed/unexpected). minItems 1 = at least one finding; empty section = non-substantive (structure-check hook).",
+      "description": "A required substantive section = a non-empty list of provenance-bearing findings. minItems 1 is the schema-side substance floor (an empty section fails the structure check). Each finding's minLength text is the per-item substance floor.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/Finding" }
+    },
+
+    "DiscoveredPattern": {
+      "$comment": "patterns_discovered item. occurrence_count = CountClaim (R23): measured times-observed backing the 3+ promotion threshold.",
+      "description": "A recurring pattern worth tracking. text is the pattern statement (substance floor). occurrence_count (R23 CountClaim) is the MEASURED number of times the pattern has been observed across flows — the count that drives Tier 2 promotion; it must be derived from the prior-run query stdout, not invented. promotion_eligible is the SHAPE-level signal (occurrence_count.value >= 3); the actual promotion is in tier2_promotions. source_tool (R26) required.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "occurrence_count", "promotion_eligible", "source_tool"],
+      "properties": {
+        "text": {
+          "description": "The pattern statement. minLength 24 substance floor.",
+          "type": "string",
+          "minLength": 24
+        },
+        "occurrence_count": {
+          "description": "R23 CountClaim — times observed across flows (the 3+ promotion threshold backing). Measured from the prior-run query, M2-validated as derivable from raw_stdout.",
+          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+        },
+        "promotion_eligible": {
+          "description": "true if occurrence_count.value >= 3 (Tier 2 promotion threshold met). M2 validator asserts this boolean is consistent with occurrence_count.value.",
+          "type": "boolean"
+        },
+        "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+      }
+    }
+  }
+}

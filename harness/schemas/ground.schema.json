@@ -1,0 +1,941 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/ground.schema.json",
+  "title": "Ground step — structured_output (M1 SHAPE) for the Evidence Boundary step",
+  "description": "Ground converts a Triaged intent into bounded·sourced·current facts + explicit uncertainty. It does NOT interpret impact, decide actions, judge risk, or change code (Boundary). TARGET RUNTIME: grammar-constrained generation (M1 = SHAPE — the model cannot emit a wrong shape/enum/missing-required field at token generation). This schema enforces SHAPE ONLY. Truth-bearing fields (CountClaim value↔raw_stdout, racing_changes vs head_start≠head_end, ED AMBIGUOUS/INFERRED edges all mapped to unknowns/conflicts, reviewer rule entry_nodes≥1 OR referent_unresolved, provenance source_tool actually produced the value) are closed by SIBLING deterministic code checks listed in x-validator-contracts below — NOT by any keyword here. §5: input_refs are Postgres RowRefs, never file paths (legacy '.blazewrit/grounds/**' / 'flow-history/<id>.json' are PRE-§5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "flow_id",
+    "captured_at",
+    "schema_version",
+    "input_refs",
+    "channel",
+    "flow_type",
+    "depth",
+    "task_subgraph",
+    "volatile_state",
+    "unknowns",
+    "conflicts",
+    "freshness",
+    "verification_proof"
+  ],
+  "properties": {
+    "flow_id": {
+      "$comment": "§5: the owning flow row id (Postgres flows.id), not a file path.",
+      "description": "The flow this Ground run belongs to. §5 RowRef (Postgres flows.id) — legacy prose 'flow_id: <id>' is a row ref, never a file.",
+      "$ref": "./_defs.schema.json#/$defs/RowRef"
+    },
+    "captured_at": {
+      "description": "When this Ground output was produced (prose 'captured_at: ISO8601').",
+      "$ref": "./_defs.schema.json#/$defs/Iso8601"
+    },
+    "schema_version": {
+      "description": "Output schema version (prose 'schema_version: 1').",
+      "type": "integer",
+      "minimum": 1
+    },
+    "input_refs": {
+      "$comment": "§5: legacy 'input_refs: { triage_output, request_text, conversation_context, scope_hint }' — triage_output becomes a RowRef; the rest are inline literals (raw input, not cross-step rows).",
+      "description": "References to the inputs this Ground run consumed. §5: triage_ref is a RowRef (Postgres step_runs row id of the Triage output) — NOT a file path. request_text / conversation_context_digest / scope_hint are inline literals (the raw caller input, not cross-step rows).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "triage_ref",
+        "request_text"
+      ],
+      "properties": {
+        "triage_ref": {
+          "description": "RowRef to the Triage step_runs row that produced flow_type/classification_metadata/clarifications.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "request_text": {
+          "description": "Original caller request text (inline literal, not a row ref).",
+          "type": "string",
+          "minLength": 1
+        },
+        "conversation_context_digest": {
+          "description": "Digest of None-state conversation turns. Present only for channel=user_session (a2a/ci have none). Inline literal.",
+          "type": "string"
+        },
+        "scope_hint": {
+          "description": "Monorepo package/path scope limiter extracted by Triage or supplied by caller (optional). Inline literal.",
+          "type": "string"
+        }
+      }
+    },
+    "channel": {
+      "description": "Input channel. Ground is channel-agnostic; conversation_context_digest exists only for user_session.",
+      "$ref": "./_defs.schema.json#/$defs/Channel"
+    },
+    "flow_type": {
+      "description": "Triage-classified flow type. Drives which conditional volatile_state.* fields are present (Volatile Profile by Flow Type) and the deepen triggers. Free string because the flow set is the M4 flow-definition source, not this schema's concern; the orchestrator validates it against the flow definitions.",
+      "type": "string",
+      "minLength": 1
+    },
+    "depth": {
+      "$comment": "Adaptive Step Depth Policy. P0 override: bugfix-p0 forces shallow regardless of deepen triggers.",
+      "description": "Adaptive depth this Ground run executed at (shallow default; deep on a deepen trigger). P0 override (flow_type=bugfix-p0) forces shallow.",
+      "$ref": "./_defs.schema.json#/$defs/Depth"
+    },
+    "active_flow_note": {
+      "$comment": "Active Flow Conflict priority. active:<something> on entry is a MECHANICAL ERROR (orchestrator bug) — Ground escalates; that escalation is an orchestrator-level outcome, not a value Ground self-reports as a normal field. Here Ground records only the post-resolution residue it was ASKED to be aware of (suspended-similar hint, preempted prior for post-stabilization follow-up).",
+      "description": "Awareness of post-resolution active-flow residue (Ground does NOT resolve conflicts — orchestrator resolves BEFORE Ground entry). Optional. Records a suspended-similar-area hint and/or a preempted prior id for post-stabilization follow-up. NOTE: active:<something> on entry = mechanical error → Ground escalates (an orchestrator outcome), not represented here.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "suspended_similar_hint": {
+          "description": "Free-text hint surfaced into unknowns when a suspended prior is in a similar area (similarity check). Boundary: a hint, not a judgment.",
+          "type": "string"
+        },
+        "preempted_prior_ref": {
+          "description": "RowRef of a prior flow preempted by a P0 (recorded for post-stabilization follow-up). §5 RowRef, not a file.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        }
+      }
+    },
+    "task_subgraph": {
+      "$comment": "M3 DEGRADE: ED MCP can be ABSENT/fail/timeout → the whole subgraph is an Omitted branch. R18: god_nodes_in_scope is omitted when ED is absent. Specializes Measured.value with the concrete bounded-subgraph shape; reuses shared Omitted. Reviewer rule (M2): entry_nodes≥1 OR unknowns contains a referent_unresolved item.",
+      "description": "M3 DEGRADE union. The bounded ED subgraph (entry nodes + neighbors + god nodes in scope). ED MCP is degradable: when ED is ABSENT/fails/times out the model MUST emit the Omitted branch (R22 — not null, not a placeholder) and surface the gap in unknowns/conflicts; R18 god_nodes_in_scope only exist in the measured branch. Grammar forces exactly one branch via the 'status' discriminant. x-validator-contract (M2): reviewer rule — entry_nodes length ≥ 1 OR unknowns contains an item with dim='referent' reason='unresolved' (referent_unresolved). Also: every ED AMBIGUOUS/INFERRED edge is mapped into unknowns or conflicts (silent-gap forbidden).",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "entry_nodes",
+                "neighbors",
+                "god_nodes_in_scope",
+                "bounded_at",
+                "ed_snapshot_version"
+              ],
+              "properties": {
+                "entry_nodes": {
+                  "description": "Entry nodes resolved from request_text + clarifications + scope_hint. Reviewer rule (M2): length ≥ 1 OR a referent_unresolved unknown exists. Each node carries source + freshness (provenance floor).",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/SubgraphNode"
+                  }
+                },
+                "neighbors": {
+                  "description": "Neighbor nodes within the bounded expansion of the entry nodes.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/SubgraphNode"
+                  }
+                },
+                "god_nodes_in_scope": {
+                  "$comment": "R18: present only in the measured branch (ED available). When ED is absent the whole subgraph is Omitted, so this field cannot exist (grammar-enforced).",
+                  "description": "High-degree 'god nodes' inside the scoped subgraph (capped by god-node expansion limit). Exists only when ED is available (measured branch). R18: omit when ED absent — realized structurally by the Omitted branch having no value.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/SubgraphNode"
+                  }
+                },
+                "bounded_at": {
+                  "$comment": "R23: a token-budget cutoff measured from the ED query — modeled as CountClaim, not a bare integer.",
+                  "description": "The token count at which the subgraph expansion was bounded (token-budget / god-node cap). R23 CountClaim — a measured count, never a bare integer; source.command is the ED query whose token tally produced it.",
+                  "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                },
+                "ed_snapshot_version": {
+                  "description": "ED graph snapshot version/hash the subgraph was read at (mirrored into freshness.ed_snapshot_version).",
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "volatile_state": {
+      "$comment": "Each tool field is a DegradableMeasurement (M3). Universal: typecheck/tests/lint/git. Conditional (present-or-absent by flow_type): perf_baseline/dependency_audit/observability/release_state. 'skipped-with-reason' in prose = Omitted(reason:skipped). git is non-degradable factual state (always present). tests.passed + tests.failed-count + lint.warnings/errors + release_state.new_commits_count = CountClaim (R23).",
+      "description": "Volatile capture per the declared profile for this flow_type. Universal fields (typecheck, tests, lint, git) are ALWAYS keys; tool-dependent ones are M3 DegradableMeasurement (measured | omitted-with-reason — prose 'skipped-with-reason' = Omitted(reason='skipped'); 'timeout'/'fail' map to Omitted(reason='timeout'|'tool_failed') or a measured-with-failure status per field). Conditional fields (perf_baseline / dependency_audit / observability / release_state) are PRESENT-OR-ABSENT by flow_type — Ground does NOT judge which measurement matters; the flow definition declares the profile. x-validator-contract (M2): each profile-required command has an explicit status; every capture failure/timeout is mapped into unknowns/conflicts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "typecheck",
+        "tests",
+        "lint",
+        "git"
+      ],
+      "properties": {
+        "typecheck": {
+          "description": "M3 DegradableMeasurement. Measured branch carries an explicit pass/fail status + provenance; Omitted carries reason (skipped-with-reason / timeout / tool_failed).",
+          "$ref": "#/$defs/VolatileCheck"
+        },
+        "tests": {
+          "description": "M3 DegradableMeasurement. Measured value carries pass/fail status, passed (CountClaim), failed-list, failed_count (CountClaim), optional coverage. Omitted when no test command (skipped) / timeout / fail-to-run.",
+          "$ref": "#/$defs/VolatileTests"
+        },
+        "lint": {
+          "description": "M3 DegradableMeasurement. Measured value carries warnings (CountClaim) + errors (CountClaim). Omitted when no lint command / timeout / fail.",
+          "$ref": "#/$defs/VolatileLint"
+        },
+        "git": {
+          "$comment": "git is local non-degradable factual state — always measured, never Omitted (a repo with no commits still has a head_start of the empty tree / unborn-branch sentinel). Not a DegradableMeasurement.",
+          "description": "Git working-tree + log state (branch, dirty, head_start, head_end, recent_commits). Non-degradable: git is always present locally. recent_commits each carry sha + provenance.",
+          "$ref": "#/$defs/VolatileGit"
+        },
+        "perf_baseline": {
+          "$comment": "Conditional (Performance flow). Present-or-absent by flow_type. When present, still M3 (the perf command can fail/timeout).",
+          "description": "CONDITIONAL (Performance flow). M3 DegradableMeasurement. Measured value = { p50, p95, p99, throughput, command }. Absent for non-Performance flows; Omitted when the perf command fails/times out within a Performance flow.",
+          "$ref": "#/$defs/VolatilePerfBaseline"
+        },
+        "dependency_audit": {
+          "$comment": "Conditional (Migration flow).",
+          "description": "CONDITIONAL (Migration flow). M3 DegradableMeasurement. Measured value = { packages:[{name,current,latest,breaking}], lockfile_hash }. Absent for non-Migration flows.",
+          "$ref": "#/$defs/VolatileDependencyAudit"
+        },
+        "observability": {
+          "$comment": "Conditional (Bug Fix Unreproducible flow).",
+          "description": "CONDITIONAL (Bug Fix Unreproducible flow). M3 DegradableMeasurement. Measured value = { logs_query, metrics_query, traces_query, results }. Absent for other flows; Omitted when the observability backend is unavailable.",
+          "$ref": "#/$defs/VolatileObservability"
+        },
+        "release_state": {
+          "$comment": "Conditional (Release flow). new_commits_count is a measured count → CountClaim (R23).",
+          "description": "CONDITIONAL (Release flow). M3 DegradableMeasurement. Measured value = { last_version, new_commits_count (CountClaim), changelog_entries }. Absent for non-Release flows.",
+          "$ref": "#/$defs/VolatileReleaseState"
+        }
+      }
+    },
+    "unknowns": {
+      "$comment": "Provenance floor: every item REQUIRES source_tool. R18/silent-gap: ED AMBIGUOUS/INFERRED edges + capture failures map here. referent_unresolved is the reviewer-rule escape hatch (dim='referent', reason='unresolved').",
+      "description": "Explicit unknowns surfaced (silent gaps forbidden — every model/uncertainty stated). Each item carries dim, reason, source_tool (provenance floor, REQUIRED), attempted_at. ED AMBIGUOUS/INFERRED edges, capture failures/timeouts, and an unresolved request referent (dim='referent', reason='unresolved' — the referent_unresolved case) all land here. x-validator-contract (M2): every ED AMBIGUOUS/INFERRED edge and every capture failure is present here or in conflicts.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Unknown"
+      }
+    },
+    "conflicts": {
+      "$comment": "Provenance floor: source_tool REQUIRED. Boundary (R18 semantic residual): 'description' must STATE the conflict, not interpret/compare/derive — that residual is not grammar-closable (irreducible floor).",
+      "description": "Surfaced conflicts between sources (tool|file outputs that disagree). Each item carries sources[], description, source_tool (provenance floor, REQUIRED). Boundary: description STATES the conflict; it must not interpret, rank, or derive (R18 semantic-boundary residual — irreducible floor, mitigated not eliminated; no grammar keyword can forbid an interpretive sentence inside a string).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Conflict"
+      }
+    },
+    "freshness": {
+      "$comment": "racing_changes is a bool the model SETS; the M2 validator asserts it == (git_head_start != git_head_end after the 1 retry). head_start/head_end mirror volatile_state.git.",
+      "description": "Freshness/racing-changes metadata. ed_snapshot_version + git_head_start are reviewer-required. racing_changes is set true when head_start ≠ head_end after the single capture retry. x-validator-contract (M2): racing_changes == (git_head_start != git_head_end); ed_snapshot_version matches task_subgraph.value.ed_snapshot_version when the subgraph is measured.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "git_head_start",
+        "git_head_end",
+        "racing_changes"
+      ],
+      "properties": {
+        "ed_snapshot_version": {
+          "$comment": "Reviewer-required factual provenance. When ED is Omitted, this is absent (the subgraph carries no version) — so it is optional at this level and asserted-present by the reviewer only when ED was queried.",
+          "description": "ED snapshot version/hash recorded for freshness. Optional here because an ED-Omitted run has no snapshot; reviewer requires it when ED was queried.",
+          "type": "string",
+          "minLength": 1
+        },
+        "git_head_start": {
+          "description": "git HEAD at capture START (reviewer-required). Compared to git_head_end to detect racing changes.",
+          "type": "string",
+          "minLength": 1
+        },
+        "git_head_end": {
+          "description": "git HEAD at capture END.",
+          "type": "string",
+          "minLength": 1
+        },
+        "racing_changes": {
+          "$comment": "Set true only if head_start ≠ head_end AFTER the single retry (prose: 'capture 시작·종료 git HEAD 비교 → 변동 시 racing_changes 1회 재시도', reviewer: '재시도 1회 후도 변동 시 표시').",
+          "description": "true if git HEAD changed between capture start and end and was still different after the one retry. x-validator-contract (M2): racing_changes == (git_head_start != git_head_end).",
+          "type": "boolean"
+        }
+      }
+    },
+    "verification_proof": {
+      "$comment": "Shared container. Hashes are SHAPE; re-hash + replay + re-read are M2.",
+      "description": "Provenance container backing every fact (tool_calls, read_files, optional ed_queries). SHAPE here; x-validator-contract (M2): re-hash every *_sha256/result_hash, re-read read_files, replay replayable tool_calls. Prose 'verification_proof 해시만으론 부족' — that is exactly why per-item source_tool is ALSO required on unknowns/conflicts/nodes (provenance floor).",
+      "$ref": "./_defs.schema.json#/$defs/VerificationProof"
+    },
+    "source_manifest": {
+      "$ref": "./_defs.schema.json#/$defs/SourceManifest",
+      "description": "R36. Machine-readable manifest of every file Ground cited (path+sha256+line_count+cited_lines). Ground is the canonical fact-citation step (reads CLAUDE.md/AGENTS.md/.claude/rules). x-m2-validator-contract: every file:line reference emitted anywhere in this output MUST exist in source_manifest.cited_lines, and each sha256 must re-hash equal at Verify (M2 code check; grammar enforces only the SHAPE)."
+    }
+  },
+  "$defs": {
+    "SubgraphNode": {
+      "$comment": "Provenance floor: every fact node carries source + freshness. source is fixed to 'ed_query' (the only producer of subgraph nodes); freshness is per-node last_updated.",
+      "description": "A node in the bounded ED subgraph (entry / neighbor / god node). Provenance floor: id + source (the ED query origin) + freshness (per-node last_updated, prose 'per-node: freshness metadata (last_updated, source)').",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source",
+        "freshness"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stable node identifier within the ED graph.",
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "$comment": "Provenance floor (source_tool). Subgraph nodes come only from ED query.",
+          "description": "Provenance: how this node was obtained. SourceTool — for subgraph nodes this is the ED query origin (prose 'source: ed_query').",
+          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        },
+        "freshness": {
+          "description": "Per-node freshness (last_updated) from ED metadata.",
+          "$ref": "./_defs.schema.json#/$defs/Iso8601"
+        }
+      }
+    },
+    "VolatileCheck": {
+      "$comment": "typecheck — M3 union. Measured value carries a pass/fail STATUS (run succeeded but result may be fail) + provenance hash; Omitted = not-run/timeout/tool-absent.",
+      "description": "M3 DegradableMeasurement for typecheck. Measured = the command RAN (status success|fail of the type-check itself) with output_hash + source command provenance. Omitted = command not defined (skipped-with-reason) / timeout / tool_failed. NOTE: a failing type-check is a MEASURED branch (it ran and reported fail); only inability-to-run is Omitted.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "result",
+                "source_command",
+                "output_hash",
+                "captured_at",
+                "duration_ms"
+              ],
+              "properties": {
+                "result": {
+                  "description": "Outcome of the type-check run itself (the command executed). 'success' / 'fail'. Boundary: a raw outcome, not an interpretation.",
+                  "type": "string",
+                  "enum": [
+                    "success",
+                    "fail"
+                  ]
+                },
+                "source_command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "output_hash": {
+                  "$ref": "./_defs.schema.json#/$defs/Sha256"
+                },
+                "captured_at": {
+                  "$ref": "./_defs.schema.json#/$defs/Iso8601"
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "VolatileTests": {
+      "$comment": "tests — M3 union. passed + failed_count are CountClaim (R23). failed is the list of failing test ids. coverage optional.",
+      "description": "M3 DegradableMeasurement for tests. Measured value carries result (success|fail of the suite run), passed (CountClaim — R23), failed_count (CountClaim — R23, length of failed list), failed (list of failing test identifiers, each with source_tool), optional coverage, source_command, output_hash, captured_at, duration_ms. Omitted when no test command (skipped) / timeout / suite failed to run.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "result",
+                "passed",
+                "failed",
+                "failed_count",
+                "source_command",
+                "output_hash",
+                "captured_at",
+                "duration_ms"
+              ],
+              "properties": {
+                "result": {
+                  "description": "Suite-run outcome (the command executed). 'success' = all passed, 'fail' = at least one failed. Raw outcome, not a judgment.",
+                  "type": "string",
+                  "enum": [
+                    "success",
+                    "fail"
+                  ]
+                },
+                "passed": {
+                  "$comment": "R23 CountClaim — measured count, never a bare integer.",
+                  "description": "Number of passing tests. R23 CountClaim; source.command is the test command, raw_stdout_sha256 backs the count.",
+                  "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                },
+                "failed": {
+                  "description": "Identifiers of failing tests. Each item carries source_tool (provenance floor).",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "source_tool"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_tool": {
+                        "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                      }
+                    }
+                  }
+                },
+                "failed_count": {
+                  "$comment": "R23 CountClaim. M2: equals failed.length AND derivable from raw_stdout.",
+                  "description": "Number of failing tests. R23 CountClaim. x-validator-contract (M2): value == failed array length AND derivable from source.raw_stdout.",
+                  "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                },
+                "coverage": {
+                  "description": "Optional coverage figure (percentage 0-100). Present only if the test command emits coverage.",
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "source_command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "output_hash": {
+                  "$ref": "./_defs.schema.json#/$defs/Sha256"
+                },
+                "captured_at": {
+                  "$ref": "./_defs.schema.json#/$defs/Iso8601"
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "VolatileLint": {
+      "$comment": "lint — M3 union. warnings + errors are CountClaim (R23).",
+      "description": "M3 DegradableMeasurement for lint. Measured value carries warnings (CountClaim — R23), errors (CountClaim — R23), source_command, output_hash, captured_at, duration_ms. Omitted when no lint command (skipped) / timeout / fail-to-run.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "warnings",
+                "errors",
+                "source_command",
+                "output_hash",
+                "captured_at",
+                "duration_ms"
+              ],
+              "properties": {
+                "warnings": {
+                  "$comment": "R23 CountClaim.",
+                  "description": "Lint warning count. R23 CountClaim — never a bare integer.",
+                  "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                },
+                "errors": {
+                  "$comment": "R23 CountClaim.",
+                  "description": "Lint error count. R23 CountClaim — never a bare integer.",
+                  "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                },
+                "source_command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "output_hash": {
+                  "$ref": "./_defs.schema.json#/$defs/Sha256"
+                },
+                "captured_at": {
+                  "$ref": "./_defs.schema.json#/$defs/Iso8601"
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "VolatileGit": {
+      "$comment": "git — NON-degradable factual state (always present). recent_commits each carry sha + source_tool provenance. new commit COUNT (if surfaced) would be a CountClaim, but the prose lists recent_commits as a list, not a count, so no CountClaim here.",
+      "description": "Git working-tree + log state. branch, dirty(bool), head_start, head_end, recent_commits (each with sha + provenance source_tool). Not a DegradableMeasurement — git is always available locally.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "branch",
+        "dirty",
+        "head_start",
+        "head_end",
+        "recent_commits",
+        "source_tool"
+      ],
+      "properties": {
+        "branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dirty": {
+          "description": "Working-tree dirty flag (uncommitted changes present).",
+          "type": "boolean"
+        },
+        "head_start": {
+          "type": "string",
+          "minLength": 1
+        },
+        "head_end": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recent_commits": {
+          "description": "Recent commits from git log. Each carries sha + provenance.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "sha",
+              "source_tool"
+            ],
+            "properties": {
+              "sha": {
+                "type": "string",
+                "minLength": 1
+              },
+              "subject": {
+                "type": "string"
+              },
+              "source_tool": {
+                "$ref": "./_defs.schema.json#/$defs/SourceTool"
+              }
+            }
+          }
+        },
+        "source_tool": {
+          "$comment": "Provenance floor for the git facts as a whole.",
+          "description": "Provenance for the git capture (e.g. 'git status'/'git log' command).",
+          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        }
+      }
+    },
+    "VolatilePerfBaseline": {
+      "$comment": "Conditional (Performance). M3 union. p50/p95/p99/throughput are measured timings, not COUNTS — left as numbers (CountClaim is for counts-of-things, these are latency/throughput measurements). Modeled as Measured with provenance.",
+      "description": "CONDITIONAL (Performance flow) M3 DegradableMeasurement. Measured value = { p50, p95, p99, throughput, command, captured_at }. Latency/throughput are measurements (numbers with a command + hash provenance), not counts — so NOT CountClaim. Omitted when the perf harness fails/times out.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "p50",
+                "p95",
+                "p99",
+                "throughput",
+                "command",
+                "captured_at",
+                "output_hash"
+              ],
+              "properties": {
+                "p50": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "p95": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "p99": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "throughput": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "command": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "captured_at": {
+                  "$ref": "./_defs.schema.json#/$defs/Iso8601"
+                },
+                "output_hash": {
+                  "$ref": "./_defs.schema.json#/$defs/Sha256"
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "VolatileDependencyAudit": {
+      "$comment": "Conditional (Migration). M3 union. packages list; breaking is a per-package bool. lockfile_hash provenance.",
+      "description": "CONDITIONAL (Migration flow) M3 DegradableMeasurement. Measured value = { packages:[{name,current,latest,breaking}], lockfile_hash }. Omitted when the dependency tool is unavailable.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "packages",
+                "lockfile_hash",
+                "source_command"
+              ],
+              "properties": {
+                "packages": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "name",
+                      "current",
+                      "latest",
+                      "breaking"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "current": {
+                        "type": "string"
+                      },
+                      "latest": {
+                        "type": "string"
+                      },
+                      "breaking": {
+                        "description": "Whether the latest is a breaking-change bump (factual flag from the audit tool, not Ground's judgment).",
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "lockfile_hash": {
+                  "$ref": "./_defs.schema.json#/$defs/Sha256"
+                },
+                "source_command": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "VolatileObservability": {
+      "$comment": "Conditional (Bug Fix Unreproducible). M3 union. queries + raw results. results kept as opaque strings (no interpretation — boundary).",
+      "description": "CONDITIONAL (Bug Fix Unreproducible flow) M3 DegradableMeasurement. Measured value = { logs_query, metrics_query, traces_query, results }. results are raw captured payloads (no interpretation — Boundary). Omitted when the observability backend is unavailable.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "logs_query",
+                "metrics_query",
+                "traces_query",
+                "results",
+                "source_tool"
+              ],
+              "properties": {
+                "logs_query": {
+                  "type": "string"
+                },
+                "metrics_query": {
+                  "type": "string"
+                },
+                "traces_query": {
+                  "type": "string"
+                },
+                "results": {
+                  "description": "Raw captured results for the queries (opaque payload — Ground does not interpret).",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "query_kind",
+                      "raw",
+                      "source_tool"
+                    ],
+                    "properties": {
+                      "query_kind": {
+                        "type": "string",
+                        "enum": [
+                          "logs",
+                          "metrics",
+                          "traces"
+                        ]
+                      },
+                      "raw": {
+                        "type": "string"
+                      },
+                      "source_tool": {
+                        "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                      }
+                    }
+                  }
+                },
+                "source_tool": {
+                  "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "VolatileReleaseState": {
+      "$comment": "Conditional (Release). M3 union. new_commits_count = CountClaim (R23 — measured count). changelog_entries list.",
+      "description": "CONDITIONAL (Release flow) M3 DegradableMeasurement. Measured value = { last_version, new_commits_count (CountClaim — R23), changelog_entries }. Omitted when version/changelog tooling is unavailable.",
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Measured"
+            }
+          ],
+          "properties": {
+            "status": {
+              "const": "measured"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "last_version",
+                "new_commits_count",
+                "changelog_entries"
+              ],
+              "properties": {
+                "last_version": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "new_commits_count": {
+                  "$comment": "R23 CountClaim — measured count (e.g. 'git rev-list --count <last_tag>..HEAD'), never a bare integer.",
+                  "description": "Commits since the last release. R23 CountClaim; source.command is the rev-list count, raw_stdout_sha256 backs it.",
+                  "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                },
+                "changelog_entries": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "./_defs.schema.json#/$defs/Omitted"
+        }
+      ]
+    },
+    "Unknown": {
+      "$comment": "Provenance floor: source_tool REQUIRED. dim/reason are enumerated where the prose names them (referent/unresolved) but kept open-ish via string for tool/capture-derived dims. The referent_unresolved case is dim='referent' + reason='unresolved'.",
+      "description": "An explicit unknown item. Provenance floor: source_tool REQUIRED. dim names the dimension of the unknown; reason states why. The reviewer-rule escape hatch is dim='referent' with reason='unresolved' (referent_unresolved → the alternative to entry_nodes≥1).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dim",
+        "reason",
+        "source_tool",
+        "attempted_at"
+      ],
+      "properties": {
+        "dim": {
+          "$comment": "'referent' is the one named dimension (prose 'unknowns[{dim: referent, reason: unresolved}]'); others are free (e.g. ed_ambiguous, ed_inferred, capture_failure, suspended_similar).",
+          "description": "Dimension of the unknown. 'referent' carries the referent_unresolved case; other values name the source (ed_ambiguous / ed_inferred / capture_failure / timeout / suspended_similar / ...).",
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "description": "Why this is unknown (e.g. 'unresolved' for an absent request referent, 'timeout', 'tool_absent', 'ambiguous_edge').",
+          "type": "string",
+          "minLength": 1
+        },
+        "source_tool": {
+          "description": "Provenance floor (REQUIRED): the tool/origin that surfaced this unknown.",
+          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        },
+        "attempted_at": {
+          "description": "When resolution was attempted (prose 'attempted_at').",
+          "$ref": "./_defs.schema.json#/$defs/Iso8601"
+        }
+      }
+    },
+    "Conflict": {
+      "$comment": "Provenance floor: source_tool REQUIRED. sources[] are the disagreeing tool|file origins. description STATES the conflict; the no-interpretation rule (R18 semantic residual) is the irreducible floor — grammar cannot forbid an interpretive sentence in a string.",
+      "description": "An explicit conflict between sources. Provenance floor: source_tool REQUIRED. sources[] lists the disagreeing tool|file origins. description STATES the conflict (Boundary: no comparison/derivation/judgment — irreducible semantic floor, mitigated not eliminated).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sources",
+        "description",
+        "source_tool"
+      ],
+      "properties": {
+        "sources": {
+          "description": "The disagreeing origins (tool|file). Minimum 2 to be a conflict.",
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "ref"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "tool",
+                  "file"
+                ]
+              },
+              "ref": {
+                "description": "The origin reference: a tool name, or a READ file path (a read input, not a §5 cross-step row ref).",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "description": {
+          "description": "Statement of the conflict. Boundary: states what disagrees; does NOT interpret/rank/derive (R18 residual — irreducible floor).",
+          "type": "string",
+          "minLength": 1
+        },
+        "source_tool": {
+          "description": "Provenance floor (REQUIRED): the tool/origin that surfaced this conflict.",
+          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        }
+      }
+    }
+  }
+}

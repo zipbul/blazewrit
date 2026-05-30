@@ -1,0 +1,595 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/report.schema.json",
+  "title": "blazewrit harness — Report step structured_output",
+  "description": "Report = deliverable synthesis. The TERMINAL artifact of a NON-CODE flow (Review, Retro, Exploration, Spike, plan-standalone, Compound top-level summary). Synthesizes Investigate/Decide/Ground outputs into severity-tagged findings + action items, with an evidence trail. CODE flows (Feature/Bug/Refactor/Perf/Migration/Test/Chore/Release) have NO report step (README L60-62: failure_origin=report is invalid in code flows; Verify rejects). TARGET RUNTIME: grammar-constrained generation — M1 enforces SHAPE/enum/required/oneOf-branch at token-generation time; the model literally cannot emit a wrong shape. Fields needing TRUTH (evidence re-read, verify_probe re-execution, chain match, same-file parallel mutual-exclusion, count↔stdout derivation) are closed by SIBLING deterministic code checks listed in `x-m2-validator-contracts`, NOT by any keyword here. STORAGE §5: this output persists to Postgres step_runs jsonb; legacy '.blazewrit/reports/{id}.md' / '.blazewrit/plans/{id}-plan.md' paths are PRE-§5 and are DROPPED — there is no artifact_path field; cross-step refs are RowRefs.",
+  "type": "object",
+  "required": [
+    "report_type",
+    "summary",
+    "findings",
+    "action_items",
+    "based_on",
+    "declared_next_step"
+  ],
+  "$comment": "report_type is the DISCRIMINANT. Common fields (summary/findings/action_items/based_on/declared_next_step) are required for every branch; the oneOf below tightens per-flow obligations (spike => verdict; plan_standalone => task_list; exploration relaxes the action-item floor; compound => sub_flow_summaries). based_on, declared_next_step, findings[].evidence_ref, findings[].verify_probe carry M2 validator contracts (truth, not shape).",
+  "properties": {
+    "report_type": {
+      "description": "DISCRIMINANT (README L26). Which non-code flow this report terminates. Drives the per-branch required obligations in the top-level oneOf. plan_standalone is the snake_case of legacy 'plan-standalone'.",
+      "type": "string",
+      "enum": [
+        "review",
+        "retro",
+        "exploration",
+        "spike",
+        "plan_standalone",
+        "compound"
+      ]
+    },
+    "summary": {
+      "description": "One-paragraph narrative synthesis: what was investigated/reviewed and the key conclusion (agent.md L21 'Summary'; README Activity 1 Synthesize). The deliverable's lede.",
+      "type": "string",
+      "minLength": 1
+    },
+    "findings": {
+      "description": "Severity-tagged findings synthesized from Investigate/Review/Retro (README 'findings: [id, statement, severity, evidence_ref]'; agent.md L22-26 adds impact + verify_probe). Each finding carries: evidence_ref (SHAPE present here; 'claim verified'/evidence-traceable is the IRREDUCIBLE floor + M2 trace), source_tool provenance (R26 floor, REQUIRED), verify_probe (R20, re-executed by M2), and an unverified flag (R13 KEEP polarity — NOT forbidden). Empty array allowed (e.g. a clean review with no issues), but the reviewer spot-checks 2-3 against source.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Finding"
+      }
+    },
+    "action_items": {
+      "description": "Concrete next steps (README 'action_items: [description, priority, owner?, followup_flow_ref?]'; agent.md L27). README/agent require >=1 action item for every flow EXCEPT exploration (reviewer criterion 2 'except Exploration'). That per-flow floor is encoded in the top-level oneOf (exploration => minItems 0; all others => minItems 1). followup_flow_ref links a queued follow-up flow ROW (§5 RowRef, never a path) — realizes README Activity 3 'Action items — followup_flows 추출 (Decide.followup_flows 연결)'.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ActionItem"
+      }
+    },
+    "based_on": {
+      "description": "§5 upstream RowRefs the report synthesized from. README 'based_on: { investigate_ref, decide_ref, ground_ref }'. EVERY value is a Postgres step_runs row id, NEVER a file path (legacy '.blazewrit/grounds/**' is PRE-§5). All three keys required here because Report's inputs (README Inputs) are Investigate + Decide + Ground outputs; a report not grounded in those three rows is unsourced. x-m2-validator: each ref must resolve to an existing step_run row of the expected step in this flow.",
+      "allOf": [
+        {
+          "$ref": "./_defs.schema.json#/$defs/BasedOn"
+        }
+      ],
+      "required": [
+        "investigate_ref",
+        "decide_ref",
+        "ground_ref"
+      ]
+    },
+    "declared_next_step": {
+      "$comment": "R16 — producer DECLARES but does not free-fill the authoritative next step; orchestrator injects expected_next_step; chain match is M2.",
+      "description": "R16 (agent.md L28/L31-33; reviewer criterion 6 CRITICAL). Report's declared successor — for a terminal non-code flow this is typically 'verify' (plan-standalone: Decide→Report→Verify). ADVISORY: the schema carries the declared value; the authoritative value is orchestrator-injected. x-m2-validator: declared_next_step == orchestrator's expected_next_step (chain-divergence check). Mismatch = reviewer FAIL 'R16 chain violation'.",
+      "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep"
+    }
+  },
+  "oneOf": [
+    {
+      "$comment": "REVIEW — Pass1 critical / Pass2 informational (agent.md L39). Findings-driven; action items required (>=1).",
+      "title": "report_type=review",
+      "additionalProperties": true,
+      "properties": {
+        "report_type": {
+          "const": "review"
+        },
+        "action_items": {
+          "minItems": 1
+        }
+      },
+      "required": [
+        "report_type"
+      ]
+    },
+    {
+      "$comment": "RETRO — process observations; reviewer criterion 5 requires >=1 action item.",
+      "title": "report_type=retro",
+      "additionalProperties": true,
+      "properties": {
+        "report_type": {
+          "const": "retro"
+        },
+        "action_items": {
+          "minItems": 1
+        }
+      },
+      "required": [
+        "report_type"
+      ]
+    },
+    {
+      "$comment": "EXPLORATION — 'content over form' (agent.md L41). The SOLE flow where action items are NOT required (reviewer criterion 2 'except Exploration'). minItems 0.",
+      "title": "report_type=exploration",
+      "additionalProperties": true,
+      "properties": {
+        "report_type": {
+          "const": "exploration"
+        },
+        "action_items": {
+          "minItems": 0
+        }
+      },
+      "required": [
+        "report_type"
+      ]
+    },
+    {
+      "$comment": "SPIKE — feasibility assessment; MUST end with a GO/NO-GO/CONDITIONAL verdict (agent.md L42, reviewer criterion 4). verdict required only on this branch.",
+      "title": "report_type=spike",
+      "additionalProperties": true,
+      "properties": {
+        "report_type": {
+          "const": "spike"
+        },
+        "action_items": {
+          "minItems": 1
+        },
+        "spike_verdict": {
+          "$ref": "#/$defs/SpikeVerdict"
+        }
+      },
+      "required": [
+        "report_type",
+        "spike_verdict"
+      ]
+    },
+    {
+      "$comment": "PLAN_STANDALONE — Decide(Design)→Report→Verify terminal Design doc. task_list (R19) carried VERBATIM/refined from Decide, consumed directly by no downstream code step (terminal); deferral forbidden (reviewer criterion 9). task_list required only on this branch.",
+      "title": "report_type=plan_standalone",
+      "additionalProperties": true,
+      "properties": {
+        "report_type": {
+          "const": "plan_standalone"
+        },
+        "action_items": {
+          "minItems": 1
+        },
+        "task_list": {
+          "$ref": "#/$defs/TaskList"
+        }
+      },
+      "required": [
+        "report_type",
+        "task_list"
+      ]
+    },
+    {
+      "$comment": "COMPOUND — top-level summary aggregating sub-flow results (README L7 'Compound (top-level summary)'; Inputs L14). sub_flow_summaries required only on this branch.",
+      "title": "report_type=compound",
+      "additionalProperties": true,
+      "properties": {
+        "report_type": {
+          "const": "compound"
+        },
+        "action_items": {
+          "minItems": 1
+        },
+        "sub_flow_summaries": {
+          "$ref": "#/$defs/SubFlowSummaries"
+        }
+      },
+      "required": [
+        "report_type",
+        "sub_flow_summaries"
+      ]
+    }
+  ],
+  "$defs": {
+    "ReportSeverity": {
+      "$comment": "Report-specific severity scale — distinct from shared Severity (low|med|high|critical) and SeverityIssue (fatal|high|medium|low). The cleanup FORBIDS collapsing scales; this scale (agent.md L23 'CRITICAL / HIGH / MEDIUM / LOW / INFO') has an INFO level neither shared scale has, so it is defined locally here, not $ref-ed.",
+      "description": "Finding severity for reports (agent.md L23). INFO = advisory/style (Review Pass2). Lowercased to match harness style; INFO is the report-only extra level.",
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
+    },
+    "Finding": {
+      "description": "One severity-tagged finding (README 'findings: [id, statement, severity, evidence_ref]' + agent.md L22-26 impact/verify_probe). evidence_ref present = SHAPE; evidence-traceable / 'claim verified' = irreducible floor closed by M2 (re-read the cited source) + the unverified KEEP-polarity flag. source_tool is the REQUIRED R26 provenance floor on every finding item.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "statement",
+        "severity",
+        "evidence_ref",
+        "verify_probe",
+        "source_tool",
+        "unverified"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stable finding id (e.g. 'F1') for action_item/cross-reference linkage.",
+          "type": "string",
+          "minLength": 1
+        },
+        "statement": {
+          "description": "The finding itself — what was observed/concluded.",
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "$ref": "#/$defs/ReportSeverity"
+        },
+        "evidence_ref": {
+          "$comment": "SHAPE present here; 'evidence_ref 추적 가능' / 'claim verified' is the irreducible/M2 trace, NOT closeable by grammar.",
+          "description": "Evidence backing the finding (README 'evidence_ref'; agent.md L24 'file:line reference, data, or reproduction steps'). Either an upstream RowRef (a Ground fact row / Investigate finding row in Postgres) OR an inline read-with-provenance record (file:line the agent read directly). Presence is grammar-enforced; that the evidence ACTUALLY supports the claim and the cited lines exist is the M2 trace + irreducible floor.",
+          "oneOf": [
+            {
+              "$comment": "Upstream evidence: points at a Postgres row (Ground fact / Investigate finding). §5 RowRef, never a path.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "row_ref"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "row_ref"
+                },
+                "row_ref": {
+                  "$ref": "./_defs.schema.json#/$defs/RowRef"
+                }
+              }
+            },
+            {
+              "$comment": "Direct evidence: a file:line the agent read. Uses the SourceManifest $def so M2 can re-read + assert every cited line exists (R36). A read INPUT path is allowed (distinct from §5 output-as-file ban).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "source_manifest"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "source_manifest"
+                },
+                "source_manifest": {
+                  "$ref": "./_defs.schema.json#/$defs/SourceManifest"
+                }
+              }
+            },
+            {
+              "$comment": "Reproduction-steps evidence (agent.md L24 'reproduction steps') when neither a row nor a static file:line — a runnable sequence. Truth = the verify_probe sibling re-execution.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "reproduction_steps"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "reproduction_steps"
+                },
+                "reproduction_steps": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "impact": {
+          "description": "Consequence if the finding is ignored (agent.md L25 'Impact'). Optional narrative.",
+          "type": "string",
+          "minLength": 1
+        },
+        "verify_probe": {
+          "$comment": "R20 — re-runnable assertion. Reviewer criterion 10 hard-FAILs on a missing verify_probe; criterion 8 RE-EXECUTES 3 random probes. Truth is the re-execution, not the shape.",
+          "description": "R20 mechanical probe validating this finding (agent.md L26 'mechanical command/file_exists/grep'; reviewer criterion 10 'all flows — 모든 finding에 verify_probe 명시. 누락 시 FAIL'). SHAPE here; x-m2-validator RE-EXECUTES command and compares to expected_result.",
+          "$ref": "./_defs.schema.json#/$defs/VerifyProbe"
+        },
+        "source_tool": {
+          "$comment": "R26 provenance floor — REQUIRED on every finding item.",
+          "description": "The tool/origin that produced this finding (re-read source, ed query, grep, upstream step). Irreducible provenance floor — a finding without source_tool is unsourced and rejected.",
+          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        },
+        "unverified": {
+          "$comment": "R13 KEEP polarity — DESIGNED to persist; Verify is the single gate. NO 'no unverified remain' forbid (legacy agent.md L57 / reviewer criterion 3 deleted by the cleanup, per enforcement.md L41 + UnverifiedFlag $def).",
+          "description": "R13 flag: true = this finding (e.g. a training-data-based claim, agent.md L47) could not be verified by Report itself and MUST propagate to Verify. POLARITY: never forbidden at this step. Grammar enforces presence; whether unverified:false is honest is the irreducible self-asserted-truth floor (mitigated, not eliminated).",
+          "type": "boolean"
+        }
+      }
+    },
+    "ActionItem": {
+      "description": "Concrete next step (README 'action_items: [description, priority, owner?, followup_flow_ref?]'; agent.md L27 'specific: \"Refactor src/auth/token.ts:45-78...\"' not vague). followup_flow_ref links a queued follow-up flow ROW (§5).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "priority"
+      ],
+      "properties": {
+        "description": {
+          "description": "Specific imperative action (agent.md L48 — concrete file:line target, not 'improve auth').",
+          "type": "string",
+          "minLength": 1
+        },
+        "priority": {
+          "description": "Action priority. Mirrors the report severity scale's actionable levels (no INFO — an INFO-only item is not an action item).",
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "owner": {
+          "description": "Optional assignee (README 'owner?').",
+          "type": "string",
+          "minLength": 1
+        },
+        "followup_flow_ref": {
+          "$comment": "§5 — a queued follow-up FLOW row id (Decide.followup_flows linkage, README Activity 3). RowRef, NEVER a path. x-m2-validator: must resolve to an existing flow/work_item row.",
+          "description": "Optional RowRef to the follow-up flow this action item queues (README 'followup_flow_ref?'). Realizes README Activity 3 'followup_flows 추출 (Decide.followup_flows 연결)'. A Postgres row id, not a file path.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        }
+      }
+    },
+    "SpikeVerdict": {
+      "description": "Spike feasibility verdict (agent.md L42 'GO / NO-GO / CONDITIONAL'; reviewer criterion 4). Required on the spike branch only. CONDITIONAL carries the condition.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict"
+      ],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "go",
+            "no_go",
+            "conditional"
+          ]
+        },
+        "condition": {
+          "description": "Required-when-CONDITIONAL elaboration of what must hold for GO. Optional otherwise.",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "conditional"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "verdict",
+          "condition"
+        ]
+      }
+    },
+    "Task": {
+      "$comment": "R19/R33 task — carried VERBATIM/refined from Decide.task_list for plan-standalone. parallel_marker has an M2 same-file mutual-exclusion contract; counts use CountClaim.",
+      "description": "One R19 task in a plan-standalone Design synthesis (agent.md L29 'Decide의 task_list verbatim 또는 정제. Spec/Implement이 직접 consume — deferral 금지'; decide.md L58-66 task shape). Terminal: this report IS the consumable plan. deferral ('Spec이 finalize') is a reviewer FAIL (criterion 9). target_files drives the M2 same-file parallel-exclusion check.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description",
+        "target_files",
+        "acceptance_test",
+        "verify_probe",
+        "parallel_marker"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "description": "Imperative concrete action (decide.md L60). No deferral language.",
+          "type": "string",
+          "minLength": 1
+        },
+        "inputs": {
+          "description": "Upstream artifact RowRefs this task consumes (decide.md L61 'inputs: [<artifact ref>]'). §5 RowRefs, not paths.",
+          "type": "array",
+          "items": {
+            "$ref": "./_defs.schema.json#/$defs/RowRef"
+          }
+        },
+        "target_files": {
+          "$comment": "File paths the task WRITES — these are the keys the M2 same-file parallel-exclusion check compares across tasks. A WRITE-target path is a plan output target, distinct from §5 storage-of-workflow-output ban.",
+          "description": "Files this task will create/modify (decide.md L62 'outputs'). x-m2-validator (with parallel_marker): two tasks sharing any target file MUST both have parallel_marker=false.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "depends_on": {
+          "description": "Task ids this depends on (decide.md L63).",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "acceptance_test": {
+          "description": "How task completion is judged (decide.md L64 '{ type, target, expected }').",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "target",
+            "expected"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target": {
+              "type": "string",
+              "minLength": 1
+            },
+            "expected": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "verify_probe": {
+          "$comment": "R20 — re-runnable; M2 re-executes.",
+          "description": "R20 mechanical probe for this task (decide.md L65, L76 '모든 task에 mechanical execute 가능한 probe').",
+          "$ref": "./_defs.schema.json#/$defs/VerifyProbe"
+        },
+        "est_effort": {
+          "description": "Effort estimate (decide.md L66).",
+          "type": "string",
+          "enum": [
+            "trivial",
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "parallel_marker": {
+          "$comment": "R19/R33 — same-file tasks => parallel_marker=false is an M2 cross-task check, not a keyword.",
+          "description": "Whether this task may run in parallel with siblings. x-m2-validator (REQUIRED): tasks sharing a target_file path MUST both be false. Grammar cannot see cross-task overlap.",
+          "type": "boolean"
+        }
+      }
+    },
+    "TaskList": {
+      "$comment": "plan-standalone Design synthesis (R19). task_count is a MEASURED count → CountClaim (R23), never a bare integer.",
+      "description": "R19 task list for plan-standalone (agent.md L29; decide.md L58). Carried verbatim/refined from Decide; this report is the terminal consumable plan. task_count is a CountClaim (R23) — a measured count of tasks, never a bare integer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tasks",
+        "task_count"
+      ],
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Task"
+          }
+        },
+        "task_count": {
+          "$comment": "R23 count-type — measured count of tasks, NOT a bare integer. x-m2-validator: value derivable from the task-source command stdout.",
+          "description": "Number of tasks (decide.md L224 '모든 count claim (task count, ...)도 R23 wrapper'). CountClaim, never bare int.",
+          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+        }
+      }
+    },
+    "SubFlowSummaries": {
+      "$comment": "Compound top-level aggregation. sub_flow_count is a MEASURED count → CountClaim (R23).",
+      "description": "Compound flow top-level summary (README L7). Aggregates each sub-flow's terminal result row. sub_flow_count is a CountClaim (R23). Each entry references the sub-flow's row (§5 RowRef).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sub_flows",
+        "sub_flow_count"
+      ],
+      "properties": {
+        "sub_flows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "flow_ref",
+              "outcome"
+            ],
+            "properties": {
+              "flow_ref": {
+                "$comment": "§5 — the sub-flow's Postgres flow/step_run row id, never a path.",
+                "description": "RowRef to the sub-flow's terminal row whose result is being summarized.",
+                "$ref": "./_defs.schema.json#/$defs/RowRef"
+              },
+              "outcome": {
+                "description": "One-line outcome of the sub-flow.",
+                "type": "string",
+                "minLength": 1
+              },
+              "source_tool": {
+                "$comment": "R26 provenance floor on each aggregated item.",
+                "description": "Origin of this sub-flow result (the sub-flow's reporting step / orchestrator).",
+                "$ref": "./_defs.schema.json#/$defs/SourceTool"
+              }
+            }
+          }
+        },
+        "sub_flow_count": {
+          "$comment": "R23 count-type — measured count of sub-flows aggregated.",
+          "description": "Number of sub-flows aggregated. CountClaim, never bare int.",
+          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+        }
+      }
+    }
+  },
+  "x-m2-validator-contracts": [
+    {
+      "field": "findings[].verify_probe",
+      "rule": "R20: re-execute verify_probe.command, compare to expected_result",
+      "check": "RE-EXECUTE each finding's probe (reviewer spot-checks 3 random); mismatch = FAIL. Self-asserted 'it passes' is not truth."
+    },
+    {
+      "field": "findings[].evidence_ref",
+      "rule": "R36/evidence-trace: evidence must actually support the claim and cited lines must exist",
+      "check": "For kind=source_manifest re-read each file, confirm sha256, assert every cited_line <= line_count and present (non-existent cited line = hallucinated citation). For kind=row_ref assert the row exists and is a Ground/Investigate output of this flow. For kind=reproduction_steps the verify_probe re-execution is the proof. Residual (evidence semantically supports the statement) = irreducible floor."
+    },
+    {
+      "field": "findings[].source_tool",
+      "rule": "R26 provenance: the named tool actually produced the finding",
+      "check": "Partly M2 (re-read/re-execute the named source), partly irreducible self-asserted-truth floor (cross-verification mitigates, does not eliminate)."
+    },
+    {
+      "field": "findings[].unverified",
+      "rule": "R13 KEEP polarity: unverified must propagate, never be forbidden",
+      "check": "NO 'no unverified remain' check (legacy reviewer criterion 3 / agent.md L57 DELETED per enforcement.md L41). Verify is the single gate. Whether unverified:false is honest = irreducible floor."
+    },
+    {
+      "field": "based_on.{investigate_ref,decide_ref,ground_ref}",
+      "rule": "§5 RowRef resolution",
+      "check": "Each ref resolves to an existing step_runs row of the expected step_name within this flow; not a file path."
+    },
+    {
+      "field": "action_items[].followup_flow_ref",
+      "rule": "§5 RowRef resolution + Decide.followup_flows linkage",
+      "check": "When present, resolves to an existing queued flow/work_item row (README Activity 3 Decide.followup_flows connection)."
+    },
+    {
+      "field": "declared_next_step.declared_next_step",
+      "rule": "R16 chain match",
+      "check": "declared_next_step == orchestrator-injected expected_next_step (reviewer criterion 6, CRITICAL). Mismatch = 'R16 chain violation'. No chain-outside-flow_def step claim (criterion 7)."
+    },
+    {
+      "field": "task_list (plan_standalone)",
+      "rule": "R19 no-deferral",
+      "check": "No task description uses deferral language ('Spec이 finalize'/'defer to ...'); each task is concrete and directly consumable (reviewer criterion 9). Deferral = FAIL 'R19 deferral instead of concrete task'."
+    },
+    {
+      "field": "task_list.tasks[].{target_files,parallel_marker}",
+      "rule": "R19/R33 same-file mutual exclusion",
+      "check": "Two tasks sharing any target_files path MUST both have parallel_marker=false (grammar cannot see cross-task overlap)."
+    },
+    {
+      "field": "task_list.task_count / sub_flow_summaries.sub_flow_count",
+      "rule": "R23 count↔stdout derivation",
+      "check": "Re-hash source.raw_stdout to confirm raw_stdout_sha256, then re-derive value; assert value is derivable. A measured count disconnected from its command is the R23 hallucination."
+    },
+    {
+      "field": "report_type (flow ↔ step presence)",
+      "rule": "non-code terminal only (README L60-62)",
+      "check": "Report exists ONLY in non-code flows; a code flow producing a report (or failure_origin=report) is rejected by Verify. report_type must match the orchestrator's active flow_type."
+    }
+  ],
+  "unevaluatedProperties": false
+}

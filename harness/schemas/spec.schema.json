@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blazewrit.dev/harness/schemas/spec.schema.json",
+  "title": "blazewrit harness — Spec step structured_output",
+  "description": "Spec step OUTPUT schema (draft 2020-12, grammar-constrained / M1 = SHAPE). Spec extracts an IMPLEMENTABLE form from Decide(Design)'s design document: acceptance_criteria (AC, R20 verify_probe), code_architecture (directories/files/module_boundaries/dependencies), tasks (decomposition + depends_on + ac_refs + R33 parallel_marker), spec_card_id (emberdeck — degradable), based_on (RowRefs, §5). TARGET RUNTIME: grammar-constrained generation — the model literally cannot emit a wrong shape/enum/missing-required field. TRUTH (verify_probe re-execution, same-file mutual exclusion, RowRef target existence, declared_next_step==expected_next_step) is closed by SIBLING M2 validator_contracts listed in the manifest below, NOT by any keyword here. TOP-LEVEL is a oneOf discriminated union on `result` — G2 spec failure-mode (HARNESS_FLOW_REVIEW 'G2 spec 실패모드 = M3 result enum + 라우팅', reusing the Investigate compatibility-verdict V1-V13 pattern, NOT a newly-invented contract): the spec payload exists ONLY on the `proceed` branch; needs_clarification/blocked/no_op are first-class absence/failure branches the grammar enforces (R22 — absence is a BRANCH, not a placeholder).",
+
+  "x-validator-contracts": [
+    {
+      "field": "result(proceed).acceptance_criteria[].verify_probe",
+      "rule": "R20 — verify_probe is a re-runnable assertion; SHAPE only in grammar.",
+      "check": "M2 REQUIRED: re-execute verify_probe.command, compare to verify_probe.expected_result. A self-asserted 'AC is satisfiable/testable' is NOT truth — the probe must actually re-execute."
+    },
+    {
+      "field": "result(proceed).tasks[].parallel_marker + tasks[].file_paths",
+      "rule": "R33 — same-file tasks are mutually exclusive.",
+      "check": "M2 REQUIRED: build the set of file_paths per task; for any two tasks sharing a file_path, assert BOTH have parallel_marker=false. Grammar cannot see cross-task file overlap; the code check enforces mutual exclusion."
+    },
+    {
+      "field": "result(proceed).tasks[].depends_on / acceptance_criteria graph",
+      "rule": "Task ordering must be acyclic (spec.md L46 'no circular dependencies').",
+      "check": "M2: topologically sort tasks over depends_on; assert no cycle. A circular depends_on is unimplementable."
+    },
+    {
+      "field": "result(proceed).tasks[].ac_refs / acceptance_criteria[].id",
+      "rule": "Referential integrity: every ac_ref must name an existing AC id; every AC should be covered by >=1 task (spec-reviewer criterion 4).",
+      "check": "M2: assert each tasks[].ac_refs entry exists in acceptance_criteria[].id; assert every AC id appears in >=1 task.ac_refs (uncovered AC = decomposition gap)."
+    },
+    {
+      "field": "result(proceed).tasks[].depends_on / tasks[].id",
+      "rule": "Referential integrity over task graph.",
+      "check": "M2: assert each tasks[].depends_on entry names an existing tasks[].id."
+    },
+    {
+      "field": "based_on.{decide_ref,investigate_ref,ground_ref}",
+      "rule": "§5 — cross-step refs are Postgres step_runs row ids, not file paths.",
+      "check": "M2: assert each RowRef resolves to an existing step_runs row of the expected upstream step_name (decide/investigate/ground)."
+    },
+    {
+      "field": "result(proceed).code_architecture.files[].path / directories[]",
+      "rule": "spec-reviewer criterion 3 — 'Paths are real in the project'. NEW files won't exist yet; MODIFIED/read paths must.",
+      "check": "M2: for files[] with change_kind in {modify,read} and every directory in directories[] marked existing, assert the path exists on disk (re-read / stat). NEW paths are exempt (they are being created)."
+    },
+    {
+      "field": "declared_next_step.declared_next_step",
+      "rule": "R16 — producer DECLARES, orchestrator INJECTS expected_next_step.",
+      "check": "M2: assert declared_next_step == orchestrator-injected expected_next_step (chain check folded into R27 validator body). Mismatch = chain divergence."
+    },
+    {
+      "field": "result(proceed).spec_card_id (Measured branch)",
+      "rule": "emberdeck create_card is MCP-backed and degradable; the Measured branch claims a real card id.",
+      "check": "M2: when status=measured, probe emberdeck capability and (where replayable) confirm the card id exists. When emberdeck is unattached, the grammar must have forced the Omitted branch (M2 capability probe → status=omitted, reason=unavailable)."
+    }
+  ],
+
+  "type": "object",
+  "unevaluatedProperties": false,
+  "required": ["result", "based_on", "declared_next_step"],
+  "properties": {
+    "based_on": {
+      "$comment": "§5 — all values are RowRef (Postgres step_runs row ids), never file paths. Spec consumes Decide + Investigate + Ground.",
+      "description": "§5 BASED-ON bundle (RowRefs only). Spec's chain provides Decide (design document / plan / record), Investigate (constraints, risk_surface, compatibility issues), Ground (task_subgraph, volatile_state). decide_ref and ground_ref are REQUIRED (every spec descends from a Decide and a Ground); investigate_ref is required for code flows but Investigate is degenerate for greenfield — kept required here per the README Inputs contract (Decide+Investigate+Ground). Legacy prose 'based_on: { decide_ref, investigate_ref, ground_ref }' translated from file paths to row refs.",
+      "allOf": [{ "$ref": "./_defs.schema.json#/$defs/BasedOn" }],
+      "required": ["decide_ref", "investigate_ref", "ground_ref"]
+    },
+
+    "declared_next_step": {
+      "$comment": "R16 — advisory; orchestrator injects authoritative expected_next_step. Chain check is an M2 validator_contract.",
+      "description": "R16 DECLARED-NEXT-STEP (advisory). Spec's typical successor is Test (code flows) or Implement (greenfield / test-less chains). The model may DECLARE this; the orchestrator INJECTS the authoritative expected_next_step and the M2 validator asserts they match. Carried on every branch (even blocked/needs_clarification, where the orchestrator routes per the result table).",
+      "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep"
+    },
+
+    "result": {
+      "$comment": "G2 spec failure-mode — discriminated union on `result`. Grammar enforces EXACTLY ONE branch via oneOf + per-branch required. Reuses the Investigate compatibility-verdict pattern; no new contract invented.",
+      "description": "SPEC RESULT (G2 — M3 result enum + orchestrator routing). Discriminated union on the `result` const. proceed = full spec produced (the ONLY branch carrying acceptance_criteria/code_architecture/tasks/spec_card_id). needs_clarification = Spec could not finalize without HITL answers — carries the open clarification questions (legacy spec.md L47 'Max 3 [NEEDS CLARIFICATION]' markers → first-class branch; orchestrator opens decision_requests). blocked = an upstream contract is unsatisfiable/conflicting/missing (spec.md gap: '상충/불충족 정책, 누락 upstream artifact' — the exact failure-mode G2 designs) → orchestrator routes back to the attributed step. no_op = nothing to spec (non-code/docs/exploratory flow routed here, or Decide produced no implementable surface) → orchestrator skips downstream Spec→Test→Implement. The model cannot half-fill: each branch's required[] differs and the grammar forces one valid branch.",
+      "oneOf": [
+        {
+          "title": "Spec result: proceed",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["result", "acceptance_criteria", "code_architecture", "tasks", "spec_card_id"],
+          "properties": {
+            "result": { "const": "proceed" },
+
+            "acceptance_criteria": {
+              "$comment": "AC extraction. verify_probe ($ref VerifyProbe) realizes R20 — SHAPE here, RE-EXECUTION is an M2 validator_contract.",
+              "description": "ACCEPTANCE CRITERIA — every Decide(Design) policy/requirement converted to a measurable, testable criterion. Each AC is the contract a downstream Test asserts (plan-as-prompt). Non-empty (a proceed with zero AC is not a spec).",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "statement", "measurement", "edge_cases", "verify_probe", "source_tool", "unverified"],
+                "properties": {
+                  "id": {
+                    "description": "Stable AC id (e.g. 'AC-001'). Referenced by tasks[].ac_refs. M2 enforces referential integrity.",
+                    "type": "string",
+                    "pattern": "^AC-[0-9]{3,}$"
+                  },
+                  "statement": {
+                    "description": "The criterion itself, in observable 'When {condition}, then {observable outcome}' form. minLength guards against filler.",
+                    "type": "string",
+                    "minLength": 8
+                  },
+                  "measurement": {
+                    "description": "HOW the outcome is mechanically measured (unit, assertion target) — the spec-reviewer's 'mechanical assertion 가능' criterion. minLength guards against 'TBD'/empty.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "edge_cases": {
+                    "description": "Edge cases this AC must cover (boundary/exception/null/permission/state-transition). May be empty when genuinely none, but the field is REQUIRED so the model cannot silently skip the consideration.",
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "verify_probe": {
+                    "$comment": "R20 — re-runnable {command, expected_result}. M2 RE-EXECUTES; self-assertion is not truth.",
+                    "description": "R20 VERIFY-PROBE for this AC: a command + its expected result that re-proves the AC is satisfiable/testable. SHAPE only; the M2 validator_contract re-executes command and compares to expected_result.",
+                    "$ref": "./_defs.schema.json#/$defs/VerifyProbe"
+                  },
+                  "policy_ref": {
+                    "description": "Optional free-text pointer to the Decide policy/requirement this AC traces to (spec-reviewer criterion 1: every policy → >=1 AC). Coverage completeness is a reviewer/M2 cross-check against the Decide row.",
+                    "type": "string"
+                  },
+                  "source_tool": {
+                    "$comment": "Provenance floor (R26) — the origin (e.g. 'decide-design-document', 'investigate-constraints') this AC was extracted from.",
+                    "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                  },
+                  "unverified": {
+                    "$comment": "R13 floor — KEEP polarity. Designed to persist; Verify is the single gate. No 'no unverified remain' forbid.",
+                    "description": "R13 UNVERIFIED FLAG (KEEP polarity). true = this AC's satisfiability was not verified by Spec itself (verify_probe not yet re-executed). Designed to PROPAGATE downstream; Verify is the single gate. Never forbid true here.",
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+
+            "code_architecture": {
+              "$comment": "Directory/file design, module boundaries, dependency graph. files[].path realness is an M2 validator_contract.",
+              "description": "CODE ARCHITECTURE — directories, files (path/purpose/exports + change_kind), module_boundaries, dependencies. Names REAL project paths (spec-reviewer criterion 3); the path-realness check is an M2 validator_contract (NEW files exempt — they are being created).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["directories", "files", "module_boundaries", "dependencies"],
+              "properties": {
+                "directories": {
+                  "description": "Directory structure of the implementation surface. Each entry names a directory and whether it already exists (existing dirs are M2 stat-checked).",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["path", "existing"],
+                    "properties": {
+                      "path": { "type": "string", "minLength": 1 },
+                      "purpose": { "type": "string" },
+                      "existing": {
+                        "description": "true = directory already exists (M2 stat-checks it). false = to be created.",
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "files": {
+                  "description": "File design. Each: path + purpose + exports + change_kind. change_kind discriminates NEW (exempt from path-realness) vs MODIFY/READ (M2 asserts on-disk existence).",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["path", "purpose", "exports", "change_kind"],
+                    "properties": {
+                      "path": {
+                        "description": "Real project file path. M2 checks existence for change_kind in {modify,read}.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "purpose": { "type": "string", "minLength": 1 },
+                      "exports": {
+                        "description": "Symbols this file exports (functions/classes/consts/types). Empty array allowed for non-exporting files (e.g. entrypoints).",
+                        "type": "array",
+                        "items": { "type": "string", "minLength": 1 }
+                      },
+                      "change_kind": {
+                        "description": "create = new file (path-realness exempt); modify = existing file changed; read = existing file consumed (files_to_read for Test/Implement).",
+                        "type": "string",
+                        "enum": ["create", "modify", "read"]
+                      },
+                      "change_summary": {
+                        "description": "For modify/read: what changes / why this file is read (spec.md 'Modified files: path + what changes + why').",
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "module_boundaries": {
+                  "description": "Module/responsibility boundaries — which module owns what, and the seams between them.",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["module", "responsibility"],
+                    "properties": {
+                      "module": { "type": "string", "minLength": 1 },
+                      "responsibility": { "type": "string", "minLength": 1 },
+                      "owns": {
+                        "description": "Paths/areas this module owns.",
+                        "type": "array",
+                        "items": { "type": "string", "minLength": 1 }
+                      }
+                    }
+                  }
+                },
+                "dependencies": {
+                  "description": "Dependency relationships in the architecture — directed edges (module/file -> module/file it depends on) and external package deps.",
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["from", "to", "kind"],
+                    "properties": {
+                      "from": { "type": "string", "minLength": 1 },
+                      "to": { "type": "string", "minLength": 1 },
+                      "kind": {
+                        "description": "internal = module/file edge within the project; external = third-party package dependency.",
+                        "type": "string",
+                        "enum": ["internal", "external"]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+
+            "tasks": {
+              "$comment": "Task decomposition. parallel_marker via $ref ParallelMarker (R33 — same-file => false is an M2 cross-task check). depends_on/ac_refs referential integrity + acyclicity are M2 validator_contracts.",
+              "description": "TASK DECOMPOSITION — ordered, atomic implementation units (one concern / one commit each). Each task: id, description, depends_on (task graph), ac_refs (which ACs it satisfies), file_paths (touched files — fuels R33 same-file mutual-exclusion), parallel_marker (R33). NON-EMPTY. The whole array is the execution prompt for Test/Implement (plan-as-prompt).",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "allOf": [{ "$ref": "./_defs.schema.json#/$defs/ParallelMarker" }],
+                "type": "object",
+                "unevaluatedProperties": false,
+                "required": ["id", "description", "depends_on", "ac_refs", "file_paths", "parallel_marker"],
+                "properties": {
+                  "id": {
+                    "description": "Stable task id (e.g. 'T-001'). Referenced by other tasks' depends_on. M2 enforces referential integrity + acyclicity.",
+                    "type": "string",
+                    "pattern": "^T-[0-9]{3,}$"
+                  },
+                  "description": {
+                    "description": "What this task does — single atomic concern.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "depends_on": {
+                    "description": "Task ids that must complete before this one. M2 asserts each exists and the graph is acyclic. Empty array = no dependency.",
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^T-[0-9]{3,}$" }
+                  },
+                  "ac_refs": {
+                    "description": "AC ids this task satisfies. M2 asserts each exists in acceptance_criteria[].id; every AC must be covered by >=1 task. Non-empty — a task that satisfies no AC is undecomposed scope.",
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "pattern": "^AC-[0-9]{3,}$" }
+                  },
+                  "file_paths": {
+                    "$comment": "Feeds the R33 same-file mutual-exclusion M2 check — two tasks sharing a path must both be parallel_marker=false.",
+                    "description": "Files this task touches. The cross-task set of file_paths drives the R33 M2 validator: any two tasks sharing a path are mutually exclusive (both parallel_marker=false). Non-empty — a task touching no file is not an implementation unit.",
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            },
+
+            "spec_card_id": {
+              "$comment": "M3 DEGRADE — emberdeck create_card is MCP-backed and degradable. Measured(value=card id) | Omitted{reason, source_tool}. NOT nullable, NOT a placeholder.",
+              "description": "M3 DEGRADE — emberdeck spec card reference. emberdeck (create_card + codeLinks) is OPTIONAL + graceful-degrade (DECISIONS §8). When emberdeck is attached, status=measured with value = the created card id. When emberdeck is unattached/fails, the grammar forces status=omitted (reason=unavailable|tool_failed, source_tool='emberdeck') — NOT null, NOT a '# OMITTED' string (R22). The M2 capability probe decides which branch is legal.",
+              "type": "object",
+              "required": ["status"],
+              "oneOf": [
+                {
+                  "title": "spec_card_id measured",
+                  "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Measured" }],
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "description": "The emberdeck spec card id created for this spec (intent/spec card the design document's intent card links to).",
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "code_links": {
+                      "description": "Optional codeLinks created from the card to source paths.",
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                },
+                { "$ref": "./_defs.schema.json#/$defs/Omitted" }
+              ]
+            },
+
+            "files_to_read": {
+              "$comment": "Plan-as-prompt: the files Test/Implement read. READ INPUT paths (not §5 RowRefs) — reading a file is allowed.",
+              "description": "OPTIONAL — files the downstream Test and Implement agents should read (spec.md output #4). These are READ INPUT paths (real on-disk source files the next agents consume), NOT §5 cross-step RowRefs — reading a file is allowed; storing workflow OUTPUT as a file is not.",
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+
+        {
+          "title": "Spec result: needs_clarification",
+          "$comment": "Legacy spec.md L47 'Max 3 [NEEDS CLARIFICATION]' markers → first-class branch. Orchestrator opens decision_requests (HITL).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["result", "clarifications"],
+          "properties": {
+            "result": { "const": "needs_clarification" },
+            "clarifications": {
+              "description": "Open questions Spec cannot resolve without HITL (legacy cap: max 3). Orchestrator opens decision_requests; on answer, Spec re-runs. Each item carries its provenance (which upstream artifact left the gap).",
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["question", "blocks_ac", "source_tool"],
+                "properties": {
+                  "question": {
+                    "description": "The specific clarification needed (legacy '[NEEDS CLARIFICATION: specific question]').",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "blocks_ac": {
+                    "description": "What this ambiguity blocks (which policy/AC/architecture decision cannot be finalized).",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+                }
+              }
+            }
+          }
+        },
+
+        {
+          "title": "Spec result: blocked",
+          "$comment": "G2 core failure-mode — '상충/불충족 정책, 누락 upstream artifact'. Discriminated cause + attributed step for routing.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["result", "blocked_reason", "detail", "attributed_step", "source_tool"],
+          "properties": {
+            "result": { "const": "blocked" },
+            "blocked_reason": {
+              "description": "WHY Spec cannot produce an implementable form. conflicting_policy = Decide policies contradict (R15-adjacent). unsatisfiable_requirement = a requirement cannot be made measurable/testable. missing_upstream = a required upstream artifact (Decide design document / Investigate constraints / Ground subgraph) is absent or empty. compatibility_blocker = Investigate compatibility_verdict surfaced a fatal issue. The exact spec.md failure-modes G2 designs.",
+              "type": "string",
+              "enum": ["conflicting_policy", "unsatisfiable_requirement", "missing_upstream", "compatibility_blocker"]
+            },
+            "detail": {
+              "description": "Specific description of the block (which policies conflict / which requirement / which upstream artifact / which compatibility issue).",
+              "type": "string",
+              "minLength": 1
+            },
+            "attributed_step": {
+              "$comment": "Routing target — which upstream step the orchestrator routes back to. Shared StepName enum (M4 single-source).",
+              "description": "Which upstream step the orchestrator should re-route to (the step whose output made spec impossible — typically decide or investigate or ground).",
+              "$ref": "./_defs.schema.json#/$defs/StepName"
+            },
+            "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+          }
+        },
+
+        {
+          "title": "Spec result: no_op",
+          "$comment": "Nothing to spec — non-code/docs/exploratory flow routed here, or Decide produced no implementable surface. Orchestrator skips Spec→Test→Implement.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["result", "reason", "source_tool"],
+          "properties": {
+            "result": { "const": "no_op" },
+            "reason": {
+              "description": "Why no spec is needed: non_code_flow = docs/config/exploratory work with no implementable code surface (spec/test partial-coverage path, routed to skip). no_implementable_surface = Decide produced a Record/Plan with no buildable output. Orchestrator skips downstream Spec→Test→Implement.",
+              "type": "string",
+              "enum": ["non_code_flow", "no_implementable_surface"]
+            },
+            "detail": {
+              "description": "Optional elaboration of why this flow needs no spec.",
+              "type": "string"
+            },
+            "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+          }
+        }
+      ]
+    }
+  }
+}
