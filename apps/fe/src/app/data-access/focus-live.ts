@@ -1,6 +1,6 @@
 import { Injectable, computed, inject } from '@angular/core';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
-import { of, scan, switchMap } from 'rxjs';
+import { catchError, of, scan, switchMap } from 'rxjs';
 import type { AgentEventDto, StepRunDto } from '@bw/dto';
 import { BlazewritApi } from './api';
 import { AgentStream } from './agent-stream';
@@ -12,17 +12,23 @@ export interface LiveLine {
   readonly text: string;
 }
 
+/** Safely read a string field from the loosely-typed event payload. */
+function str(p: Record<string, unknown>, key: string, fallback = ''): string {
+  const v = p[key];
+  return typeof v === 'string' ? v : fallback;
+}
+
 function formatEvent(ev: AgentEventDto): LiveLine {
-  const p = ev.payload as Record<string, unknown>;
+  const p = ev.payload;
   switch (ev.type) {
     case 'tool_use':
-      return { kind: 'tool', text: `▸ ${p['name'] ?? 'tool'} ${p['input'] ?? ''}`.trimEnd() };
+      return { kind: 'tool', text: `▸ ${str(p, 'name', 'tool')} ${str(p, 'input')}`.trimEnd() };
     case 'tool_result':
-      return { kind: 'ok', text: `✓ ${p['summary'] ?? 'done'}` };
+      return { kind: 'ok', text: `✓ ${str(p, 'summary', 'done')}` };
     case 'thinking':
-      return { kind: 'think', text: String(p['text'] ?? '') };
+      return { kind: 'think', text: str(p, 'text') };
     default:
-      return { kind: 'plain', text: String(p['text'] ?? ev.type) };
+      return { kind: 'plain', text: str(p, 'text', ev.type) };
   }
 }
 
@@ -38,6 +44,8 @@ export class FocusLive {
   private readonly stream = inject(AgentStream);
 
   readonly focus = computed(() => this.store.workItems().at(0) ?? null);
+  /** Single source of truth for "which work item is focused" (consumed by dashboard + canvas). */
+  readonly focusId = computed(() => this.focus()?.id ?? null);
   readonly focusFlow = computed(() => {
     const f = this.focus();
     return f ? (this.store.flowFor(f) ?? null) : null;
@@ -45,7 +53,13 @@ export class FocusLive {
 
   private readonly focusFlowId = computed(() => this.focusFlow()?.id ?? null);
   readonly stepRuns = toSignal(
-    toObservable(this.focusFlowId).pipe(switchMap((id) => (id ? this.api.stepRuns(id) : of([])))),
+    toObservable(this.focusFlowId).pipe(
+      // catchError INSIDE switchMap: a failed fetch maps to [] without terminating the
+      // outer toObservable pipeline, so later focus changes keep updating (self-healing).
+      switchMap((id) =>
+        id ? this.api.stepRuns(id).pipe(catchError(() => of([] as StepRunDto[]))) : of([] as StepRunDto[]),
+      ),
+    ),
     { initialValue: [] as StepRunDto[] },
   );
 
@@ -62,7 +76,11 @@ export class FocusLive {
       // scan inside switchMap: each step-run starts a fresh accumulator.
       switchMap((id) =>
         id
-          ? this.stream.events(id).pipe(scan((acc, ev) => [...acc, ev], [] as AgentEventDto[]))
+          ? this.stream.events(id).pipe(
+              scan((acc, ev) => [...acc, ev], [] as AgentEventDto[]),
+              // A dropped stream maps to last-good/empty instead of throwing on signal read.
+              catchError(() => of([] as AgentEventDto[])),
+            )
           : of([] as AgentEventDto[]),
       ),
     ),

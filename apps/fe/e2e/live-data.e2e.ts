@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test';
 test.describe('live data rendering', () => {
   test('dashboard shows the focused work item and an active flow step', async ({ page }) => {
     await page.goto('/dashboard');
-    await expect(page.locator('.focus h1')).toHaveText('결제 모듈 분기 버그');
+    await expect(page.locator('.focus h2')).toHaveText('결제 모듈 분기 버그');
     // active step node present (test, currently running)
     await expect(page.locator('.metro .n.ac')).toHaveCount(1);
     // connections rendered for the three projects

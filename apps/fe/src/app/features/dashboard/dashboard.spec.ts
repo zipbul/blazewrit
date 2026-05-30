@@ -35,6 +35,7 @@ const storeStub = {
 
 const liveStub = {
   focus: signal(focusItem),
+  focusId: signal(focusItem.id),
   focusFlow: signal(flow),
   metro: signal(metro),
   liveLines: signal([] as LiveLine[]),
@@ -60,7 +61,7 @@ describe('Dashboard', () => {
     const fixture = TestBed.createComponent(Dashboard);
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.focus h1')?.textContent).toContain('결제 모듈 분기 버그');
+    expect(el.querySelector('.focus h2')?.textContent).toContain('결제 모듈 분기 버그');
     expect(el.querySelector('.metro .n.ac')).toBeTruthy();
   });
 

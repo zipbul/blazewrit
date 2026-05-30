@@ -72,7 +72,7 @@
 .unit.warn { color: var(--warning); }
 
 /* focus */
-.focus h1 { font-size: 25px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 6px; }
+.focus h2 { font-size: 25px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 6px; }
 .pill {
   display: inline-block;
   font-family: var(--font-mono);

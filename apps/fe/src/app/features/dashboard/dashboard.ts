@@ -20,7 +20,11 @@ export class Dashboard {
   protected readonly metro = this.live.metro;
   protected readonly liveLines = this.live.liveLines;
 
-  protected readonly otherTasks = computed(() =>
-    this.store.workItems().slice(1).map((w) => ({ item: w, flow: this.store.flowFor(w) ?? null })),
-  );
+  protected readonly otherTasks = computed(() => {
+    const focusId = this.live.focusId();
+    return this.store
+      .workItems()
+      .filter((w) => w.id !== focusId)
+      .map((w) => ({ item: w, flow: this.store.flowFor(w) ?? null }));
+  });
 }

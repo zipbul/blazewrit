@@ -18,9 +18,9 @@ export class AgentStream {
       es.addEventListener('agent-event', (e) => {
         try {
           subscriber.next(JSON.parse((e as MessageEvent).data) as AgentEventDto);
-        } catch (err) {
-          es.close();
-          subscriber.error(err);
+        } catch {
+          // A single malformed frame is non-fatal — skip it and keep the stream alive.
+          console.warn('[agent-stream] dropped unparseable SSE frame');
         }
       });
       es.addEventListener('done', () => {

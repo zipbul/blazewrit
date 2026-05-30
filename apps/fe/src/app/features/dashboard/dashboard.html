@@ -1,3 +1,4 @@
+<h1 class="sr-only">Dashboard</h1>
 <div class="bento">
   <section class="glass card flow">
     @if (focus(); as f) {
@@ -22,13 +23,13 @@
   </section>
 
   <section class="glass card kpi1"><div class="lbl">Active</div><div class="big cyan">{{ activeCount() }}</div><div class="unit">in flow</div></section>
-  <section class="glass card kpi2"><div class="lbl">Live</div><div class="big">{{ liveLines().length }}</div><div class="unit">events</div></section>
+  <section class="glass card kpi2"><div class="lbl">Live</div><div class="big" role="status" aria-live="polite">{{ liveLines().length }}</div><div class="unit">events</div></section>
 
   <section class="glass card focus">
     <div class="lbl">Focus</div>
     @if (focus(); as f) {
       <div class="unit">#{{ f.id }} · {{ focusFlow()?.flowType }}</div>
-      <h1>{{ f.title }}</h1>
+      <h2>{{ f.title }}</h2>
       @if (focusFlow(); as fl) {
         <span class="pill">{{ fl.currentStep }} · attempt {{ fl.attemptNo }}</span>
       }
@@ -47,7 +48,7 @@
 
   <section class="glass card live">
     <div class="lbl">Live · agent&#64;{{ projects()[0]?.id }}</div>
-    <div class="lv">
+    <div class="lv" role="log" aria-live="polite" aria-relevant="additions" aria-label="에이전트 활동 스트림">
       @for (line of liveLines(); track $index) {
         <div [class]="line.kind">
           @switch (line.kind) {

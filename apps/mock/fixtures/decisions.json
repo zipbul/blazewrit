@@ -1,0 +1,61 @@
+[
+  {
+    "id": "dec1",
+    "flowId": "f144-1",
+    "requestingAgent": "decide",
+    "status": "open",
+    "requestType": "single_choice",
+    "question": "캐시 TTL 정책을 어떻게 변경할까요?",
+    "options": [
+      { "label": "전역 즉시 적용", "value": "global", "risk": "high", "recommended": false, "effect": "전체 캐시 무효화 · 롤백 불가" },
+      { "label": "점진 적용 (feature flag)", "value": "gradual", "risk": "low", "recommended": true, "effect": "단계적 · 즉시 롤백 가능" }
+    ],
+    "context": { "why_asking": "캐시 키 스킴 breaking change", "findings": "3개 서비스가 현재 TTL에 의존" },
+    "blocking": true,
+    "risk": "high",
+    "createdAt": "2026-05-29T00:18:30Z"
+  },
+  {
+    "id": "dec2",
+    "flowId": "f143-1",
+    "requestingAgent": "implement",
+    "status": "open",
+    "requestType": "approval",
+    "question": "외부 검색 API 키를 .env에 추가해도 될까요?",
+    "options": [],
+    "context": { "why_asking": "자동완성이 검색 백엔드를 필요로 함" },
+    "blocking": false,
+    "risk": "medium",
+    "createdAt": "2026-05-29T00:20:10Z"
+  },
+  {
+    "id": "dec3",
+    "flowId": "f142-2",
+    "requestingAgent": "decide",
+    "status": "open",
+    "requestType": "free_text",
+    "question": "결제 분기 실패 시 fallback 동작을 어떻게 정의할까요?",
+    "options": [],
+    "context": { "why_asking": "명세에 fallback 경로가 없음" },
+    "blocking": false,
+    "risk": "low",
+    "createdAt": "2026-05-29T00:21:00Z"
+  },
+  {
+    "id": "dec4",
+    "flowId": "f143-1",
+    "requestingAgent": "investigate",
+    "status": "open",
+    "requestType": "multi_choice",
+    "question": "검색 기능에 어떤 데이터 소스를 포함할까요?",
+    "options": [
+      { "label": "제목", "value": "title", "recommended": true },
+      { "label": "본문", "value": "body" },
+      { "label": "태그", "value": "tags", "risk": "low" }
+    ],
+    "context": { "why_asking": "인덱싱 범위 결정 필요" },
+    "blocking": false,
+    "risk": "low",
+    "createdAt": "2026-05-29T00:21:30Z"
+  }
+]

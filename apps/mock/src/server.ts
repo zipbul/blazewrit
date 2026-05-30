@@ -9,18 +9,25 @@
  * shared contract the real backend will also implement (DECISIONS §13).
  */
 import { seal, deserialize, isBakerIssueSet } from '@zipbul/baker';
-import { WorkItemDto, FlowDto, StepRunDto, AgentEventDto } from '@bw/dto';
+import { WorkItemDto, FlowDto, StepRunDto, AgentEventDto, DecisionRequestDto } from '@bw/dto';
 import projects from '../fixtures/projects.json' with { type: 'json' };
 import workItems from '../fixtures/work-items.json' with { type: 'json' };
 import flows from '../fixtures/flows.json' with { type: 'json' };
 import stepRuns from '../fixtures/step-runs.json' with { type: 'json' };
 import streamSr6 from '../fixtures/stream-sr6.json' with { type: 'json' };
+import decisionsFixture from '../fixtures/decisions.json' with { type: 'json' };
+import connections from '../fixtures/connections.json' with { type: 'json' };
 
 const PORT = Number(process.env['MOCK_PORT'] ?? 4500);
 
+// Mutable copy so the answer endpoint can update decision state in-memory.
+// Derived from the contract (not restated) so it cannot drift from DecisionRequestDto.
+type MutableDecision = { -readonly [K in keyof DecisionRequestDto]: DecisionRequestDto[K] };
+const decisions: MutableDecision[] = decisionsFixture.map((d) => ({ ...d }) as MutableDecision);
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
@@ -32,6 +39,7 @@ async function assertFixtures(): Promise<void> {
     ['flows', flows, (v) => deserialize(FlowDto, v)],
     ['step-runs', stepRuns, (v) => deserialize(StepRunDto, v)],
     ['stream-sr6', streamSr6, (v) => deserialize(AgentEventDto, v)],
+    ['decisions', decisionsFixture, (v) => deserialize(DecisionRequestDto, v)],
   ];
   for (const [name, rows, check] of checks) {
     for (const [i, row] of rows.entries()) {
@@ -105,6 +113,22 @@ const server = Bun.serve({
       GET: (req) => sseReplay(req.params.stepRunId === 'sr6' ? streamSr6 : []),
       OPTIONS: preflight,
     },
+    // HITL decision inbox (DECISIONS §10).
+    '/api/decisions': { GET: () => json(decisions), OPTIONS: preflight },
+    '/api/decisions/:id/answer': {
+      OPTIONS: preflight,
+      POST: async (req) => {
+        const decision = decisions.find((d) => d.id === req.params.id);
+        if (!decision) return new Response('not found', { status: 404, headers: CORS });
+        const body = (await req.json().catch(() => ({}))) as { answer?: string };
+        decision.status = 'answered';
+        decision.answer = body.answer ?? '';
+        decision.answeredAt = new Date().toISOString();
+        return json(decision);
+      },
+    },
+    // A2A connection / agent health monitor (distinguishes 'silent' from 'dead').
+    '/api/connections': { GET: () => json(connections), OPTIONS: preflight },
   },
   fetch() {
     return new Response('not found', { status: 404, headers: CORS });

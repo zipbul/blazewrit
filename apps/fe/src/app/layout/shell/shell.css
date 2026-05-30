@@ -11,6 +11,38 @@
   gap: 12px;
 }
 
+/* WCAG 2.4.1 — skip to main content (off-screen until focused) */
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: -48px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--popover);
+  color: var(--foreground);
+  border: 1px solid var(--ring);
+  font-size: 13px;
+  text-decoration: none;
+  transition: top 0.15s;
+}
+.skip-link:focus {
+  top: 14px;
+}
+
+.error-banner {
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: rgba(240, 125, 146, 0.12);
+  border: 1px solid rgba(240, 125, 146, 0.4);
+  color: var(--destructive);
+  font-size: 13px;
+}
+
+.stage:focus {
+  outline: none;
+}
+
 /* top bar */
 .bar {
   display: flex;
@@ -49,6 +81,16 @@
 .views a.on {
   background: rgba(255, 255, 255, 0.1);
   color: var(--foreground);
+}
+.views a .badge {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--warning);
+  background: rgba(240, 189, 94, 0.15);
+  border-radius: 20px;
+  padding: 0 6px;
 }
 .live {
   margin-left: auto;

@@ -1,0 +1,29 @@
+[
+  {
+    "projectId": "api",
+    "endpoint": "a2a://api.local:7142",
+    "status": "connected",
+    "lastHeartbeat": "2026-05-29T00:21:18Z",
+    "latencyMs": 42,
+    "activeStreams": 1,
+    "agentState": "working"
+  },
+  {
+    "projectId": "web",
+    "endpoint": "a2a://web.local:7143",
+    "status": "connected",
+    "lastHeartbeat": "2026-05-29T00:21:17Z",
+    "latencyMs": 88,
+    "activeStreams": 0,
+    "agentState": "idle"
+  },
+  {
+    "projectId": "infra",
+    "endpoint": "a2a://infra.local:7144",
+    "status": "disconnected",
+    "lastHeartbeat": "2026-05-29T00:09:02Z",
+    "latencyMs": null,
+    "activeStreams": 0,
+    "agentState": "unreachable"
+  }
+]

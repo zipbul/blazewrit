@@ -1,5 +1,6 @@
 <div class="canvas">
-  <svg class="wires" preserveAspectRatio="none">
+  <h1 class="sr-only">Canvas</h1>
+  <svg class="wires" aria-hidden="true" focusable="false" preserveAspectRatio="none">
     @for (n of nodes(); track n.item.id) {
       <path [attr.d]="n.wire"></path>
     }
@@ -34,7 +35,7 @@
 
   <div class="glass node livenode">
     <div class="h"><span class="pd"></span>LIVE · agent&#64;{{ project()?.id }}</div>
-    <div class="lv">
+    <div class="lv" role="log" aria-live="polite" aria-relevant="additions" aria-label="에이전트 활동 스트림">
       @for (line of liveLines(); track $index) {
         @switch (line.kind) {
           @case ('tool') { <div><span class="c">{{ line.text }}</span></div> }

@@ -58,3 +58,15 @@ export const AGENT_EVENT_TYPES = [
   'result',
 ] as const;
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
+
+// --- HITL decision requests (DECISIONS §10) ---
+
+export const DECISION_STATUSES = ['open', 'answered', 'expired', 'cancelled'] as const;
+export type DecisionStatus = (typeof DECISION_STATUSES)[number];
+
+export const DECISION_REQUEST_TYPES = ['approval', 'free_text', 'single_choice', 'multi_choice'] as const;
+export type DecisionRequestType = (typeof DECISION_REQUEST_TYPES)[number];
+
+/** Risk tier for an option/decision — drives UI emphasis (DECISIONS §15 HITL risk model). */
+export const RISK_LEVELS = ['low', 'medium', 'high'] as const;
+export type RiskLevel = (typeof RISK_LEVELS)[number];

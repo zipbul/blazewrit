@@ -1,0 +1,186 @@
+:host {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.inbox {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 4px;
+}
+.head h1 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--warning);
+}
+
+.card {
+  padding: 18px 20px;
+}
+.card.risk-medium {
+  box-shadow: 0 0 0 1px rgba(240, 189, 94, 0.3), var(--glass-shadow);
+}
+.card.risk-high {
+  box-shadow: 0 0 0 1px rgba(240, 125, 146, 0.45), 0 0 28px rgba(240, 125, 146, 0.12), var(--glass-shadow);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  margin-bottom: 10px;
+}
+.meta .agent { color: var(--primary); }
+.risk,
+.block {
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+}
+.risk.low { color: var(--success); }
+.risk.medium { color: var(--warning); }
+.risk.high { color: var(--destructive); border-color: rgba(240, 125, 146, 0.4); }
+.block { color: var(--warning); margin-left: auto; }
+
+.card h2 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 12px;
+}
+.ctx {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+  margin-bottom: 4px;
+}
+.ctx .k {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+  text-transform: uppercase;
+  margin-right: 6px;
+}
+
+.answer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.btn {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--foreground);
+  cursor: pointer;
+  transition: 0.15s;
+}
+.btn:hover { background: rgba(255, 255, 255, 0.1); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.ok { border-color: rgba(79, 217, 164, 0.4); color: var(--success); }
+.btn.no { border-color: rgba(240, 125, 146, 0.4); color: var(--destructive); }
+
+.ta {
+  flex: 1 1 100%;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.opt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--foreground);
+  cursor: pointer;
+  transition: 0.15s;
+}
+.opt:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--primary); }
+.opt.recommended { border-color: rgba(79, 217, 164, 0.5); }
+.opt.opt-high { border-color: rgba(240, 125, 146, 0.4); }
+.opt.selected { border-color: var(--primary); background: rgba(94, 200, 236, 0.1); }
+.check { margin-right: 8px; color: var(--primary); }
+.opt-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.rec {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--success);
+  border: 1px solid rgba(79, 217, 164, 0.4);
+  border-radius: 20px;
+  padding: 1px 7px;
+}
+.opt-risk {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+}
+.opt-risk.low { color: var(--success); }
+.opt-risk.high { color: var(--destructive); }
+.opt-effect {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+.ok-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 10px var(--success);
+}

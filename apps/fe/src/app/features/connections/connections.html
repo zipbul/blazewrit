@@ -1,0 +1,29 @@
+<div class="monitor">
+  <div class="head">
+    <h1>연결 상태</h1>
+    <span class="sub">A2A 에이전트 헬스</span>
+  </div>
+
+  <div class="rows">
+    @for (c of connections(); track c.projectId) {
+      <section class="glass row" [class.down]="c.status === 'disconnected'"
+               [class.degraded]="c.status === 'degraded'">
+        <span class="dot" role="img" [attr.aria-label]="c.projectId + ': ' + c.status"
+              [class.ok]="c.status === 'connected'" [class.warn]="c.status === 'degraded'"
+              [class.bad]="c.status === 'disconnected'"></span>
+        <div class="ident">
+          <div class="name">{{ c.projectId }}</div>
+          <div class="endpoint">{{ c.endpoint }}</div>
+        </div>
+        <div class="agent">
+          <span class="state" [class]="c.agentState">{{ c.agentState }}</span>
+        </div>
+        <div class="metric"><span class="mlabel">latency</span><span class="mval">{{ c.latencyMs === null ? '—' : c.latencyMs + 'ms' }}</span></div>
+        <div class="metric"><span class="mlabel">streams</span><span class="mval">{{ c.activeStreams }}</span></div>
+        <div class="metric"><span class="mlabel">heartbeat</span><span class="mval">{{ c.lastHeartbeat | slice: 11:19 }}</span></div>
+      </section>
+    } @empty {
+      <section class="glass row empty">연결된 에이전트가 없습니다.</section>
+    }
+  </div>
+</div>

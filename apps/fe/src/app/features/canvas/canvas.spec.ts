@@ -25,6 +25,7 @@ const storeStub = {
 
 const liveStub = {
   focus: signal(workItems[0]),
+  focusId: signal(workItems[0].id),
   liveLines: signal([] as LiveLine[]),
 } as unknown as FocusLive;
 

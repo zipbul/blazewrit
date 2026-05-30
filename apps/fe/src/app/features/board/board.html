@@ -1,3 +1,4 @@
+<h1 class="sr-only">Board</h1>
 <div class="lanes">
   @for (lane of lanes(); track lane.step) {
     <div class="lane" [class.active]="lane.tasks.length > 0 && !lane.faint">
@@ -20,7 +21,7 @@
               }
             </div>
             @if (t.flow && t.flow.attemptNo > 1) {
-              <div class="retry">↺ reviewer ✗ → re-run ×{{ t.flow.attemptNo }}</div>
+              <div class="retry">↺ flow attempt ×{{ t.flow.attemptNo }}</div>
             }
           </div>
         }
