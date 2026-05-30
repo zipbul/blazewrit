@@ -51,22 +51,35 @@
 
 근거: Linear / Notion / Devin 모두 Postgres (multi-project agent platform의 industry standard). knoldr도 *이미 Postgres + drizzle 사용 중* → zipbul 생태계 일관성.
 
-| Tier | 데이터 | 저장 |
-|---|---|---|
-| **State + Observability** | projects, tasks, task_progress, user_feedback, flow_state, events, **traces** (agent 전체 input/output jsonb + tokens + cost + latency) | **Postgres** (단일 DB, Drizzle ORM) |
-| **Artifact** | 완료된 flow 결과물 | **git-committed file** (HTML/JSON) |
-| **Facts** | verified knowledge | **knoldr A2A** (별도 query) |
+### 파일 vs Postgres 경계 — "소비자가 누구냐" (확정, 2026-05 정정)
 
-### Postgres schema (초안)
+> 핵심: **워크플로가 생성하는 산출물(ground/investigate/decide/report/flow-history)은 거의 전부 Postgres여야 한다.** 파일이 아니다.
+> 이유: 요구 A/B 자체가 "모든 step·출력을 DB에 기록 → UI 1:1 거울 + 제3자 디버깅". 파일로 산출하면 그 요구를 *못 푼다*. (옛 file-first 설계 = legacy 잔재.) 데이터마다 **집은 하나** — 이중 source-of-truth 금지(HARNESS_FLOW_REVIEW의 dual-SoT 갭).
+
+| 카테고리 | 소비자 | 저장 | 비고 |
+|---|---|---|---|
+| **운영 상태** projects/tasks/flows/step_runs/decisions | UI·쿼리·관측 | **Postgres only** | flow-state.json **폐기** (non-atomic·silent-loss 버그) |
+| **워크플로 산출물** ground/investigate/decide/spec/report 결과 | UI(요구 A 거울) | **Postgres** (step_runs/events에 직접 기록) | `.blazewrit/*.html` 파일 산출 자체를 **버림**. 포맷 3중모순(HTML/YAML/.md)도 파일이라 생긴 문제 |
+| **agent 전체 I/O / 이벤트** | 디버깅·replay·관측 | **Postgres** traces/events (+ raw jsonl 원본은 파일/blob, Postgres는 포인터) | 요구 B |
+| **Facts** verified knowledge | 질의 | **knoldr A2A** | 별도 |
+| **에이전트 입력** `.claude/rules`(학습)·CLAUDE.md·AGENTS.md | **Claude Code (파일시스템에서 읽음)** | **파일** | Postgres가 컨텍스트 주입 불가 → 대체 불가. Reflect Tier2 학습의 유일 전달경로 |
+| **코드 + (선택)spec/ADR** | git·개발자 | **파일 (git)** | 브랜치 따라 diff/merge. Postgres row 불가 |
+
+**규칙: 파일은 *워크플로 산출물 저장소가 아니다*. 파일 = ① Claude Code가 읽는 입력(룰/학습) ② git이 버전하는 코드, 딱 둘.**
+
+### Postgres schema (초안 — §10/§14 step_runs 모델로 정렬)
 ```
 projects        (id, name, workspace, deps, ...)
-tasks           (id, project_id, status, current_step, ...)
-task_progress   (id, task_id, step, state, updated_at)
-user_feedback   (id, task_id, content, signal, created_at)
-flow_state      (id, project_id, status, ...)
-traces          (id, flow_id, task_id, agent, input jsonb, output jsonb, tokens, cost, latency_ms, status, created_at)
-events          (append-only log)
+work_items      (id, project_id, type, state, active_flow_id, ...)   # §10
+flows           (id, work_item_id, flow_type, attempt_no, status, current_step_run_id, ...)  # §10 (1:N)
+step_runs       (id, flow_id, parent_step_run_id, step_name, role, attempt_no, status, ...)  # §14 — step 산출물·상태가 여기 (파일 아님)
+events          (id, step_run_id, seq, type, payload jsonb, created_at)  # append-only — agent 전 출력 (요구 B)
+decisions       (id, flow_id, status, request_type, question, options jsonb, answer, ...)    # §10 HITL
+traces          (id, flow_id, agent, input jsonb, output jsonb, tokens, cost, latency_ms, ...) # 관측
+user_feedback   (id, work_item_id, content, signal, created_at)
+raw_sessions    (session_id, step_run_id, jsonl_path|blob, ingested_at)  # replay 원본 포인터
 ```
+**flow-state.json 없음** — flow 상태는 Postgres flows/step_runs가 단일 진실. **`.blazewrit/grounds|plans|reports/*` 파일 없음** — step 산출물은 step_runs/events.
 
 ### Observability — agent orchestrator의 core (optional 아님)
 - "왜 이 결정했나" 디버깅 / flow replay / cost 추적 / 워크플로우 개선 = vibe coding 해결 핵심 메커니즘 (측정 없이 개선 없음)
