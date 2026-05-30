@@ -367,6 +367,26 @@ daemon = FE + BE 실행만 하는 얇은 러너 (bz start → FE+BE 부팅)
 - 대용량(예: 13M jsonl)은 `FilePart.bytes`(base64 인라인) 말고 **`uri` 참조 또는 청크** 권장. spec상 명시적 크기 제한 없음.
 - → **A2A 네이티브로 전 출력 전송 가능, 추가 메커니즘 불필요.** bz는 두 스트림 받아 DB 적재.
 
+### 대화 → Triage 경계 (확정 — HARNESS_FLOW_REVIEW 테마① 해결)
+
+문제: Triage가 대화/명료화 루프를 "host LLM glue"로 위임 → 바이브코딩의 지배적 루프가 step pool 밖, 미설계.
+
+**해결: 대화는 flow가 아니다. 경계는 *사람의 작업 커밋*이다 (LLM 분류 아님).**
+
+```
+대화 (repo 에이전트 native 모드 · bz가 프록시+기록 · flow 안 탐 · events에 flow_id=null)
+   ├ 명확한 명령 ───────────────→ Triage 발동 → flow 시작 (worktree/steps/실행)
+   └ 모호 → 에이전트 "작업으로?" 제안 → 사람 확인 → Triage
+```
+
+- **별도 "대화 레이어"·LLM turn-classifier(L0) 없음** — over-engineering. 대화는 에이전트 기본모드, bz는 채팅 로그만.
+- **트리거 = 사람 의도** (UI "작업 시작" / 명확한 명령). 잡담↔작업 판정을 *사람이* → 더 단순(부품↓) + 더 확실(LLM 오분류 없음) + "that's not what I meant" 안전장치 공짜.
+- 트리거가 mutation *이전*이어야 함(flow가 계획→mutation 순서) → mutation 기반 자동판정 불가, *판단*은 필수, 그 판단을 사람에 둠.
+- **per-repo**: 대화는 bz 레벨(멀티레포 인지), Triage+flow는 repo 레벨. "API랑 웹 둘 다" → bz가 라우팅 → 각 repo가 자기 Triage/flow.
+- 정직한 한계: "THE 최단순" 증명 불가(설계 trade-off), 단 L0 버전보다 명백히 단순+확실. 유일 조건 = 모호 시 에이전트 제안→사람 확인, 명확하면 auto.
+
+**별개 미해결 (테마①과 혼동 금지)**: trivial 작업("더 파랗게")은 *작업*이라 Triage는 타되 9-step 풀 flow면 과함 = **flow 무게** 문제. → `complexity_signal=trivial`이면 *경량 micro-flow* 라우팅으로 따로 해결 (테마②/③와 함께 하네스 재설계 시).
+
 ## 15. FE 화면 패러다임 & 디자인 스택 (리서치 확정, 2026-05)
 
 ### 화면 패러다임 — "워크스페이스 셸" (7 라우팅 화면 → 1 셸+패널)
