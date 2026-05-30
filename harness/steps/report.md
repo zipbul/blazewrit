@@ -1,0 +1,242 @@
+# Report — Deliverable Synthesis
+
+## Definition
+
+> **Report은 분석·조사·리뷰 결과를 deliverable로 합성한다.** 비코드 flow의 terminal artifact 산출.
+
+사용 flow: Review, Retro, Exploration, Spike, plan-standalone, Compound (top-level summary).
+
+**경계 재확인 (principle/boundary)**: Report는 *합성만* 한다. upstream artifact를 *게이팅*하지 않고(그것은 Investigate의 compatibility_verdict 일), flow-level 실패를 *라우팅*하지 않는다(그것은 Verify 일). Report가 sound deliverable을 만들 수 없으면 *오직* 자기 result enum의 escalate 분기로 신호할 뿐이며, 어느 step이 문제인지 진단하거나 followup flow를 큐잉하지 않는다.
+
+## Inputs
+
+- Investigate 출력 (findings 원천: impact_map, constraints, risk_surface, compatibility_verdict)
+- Decide 출력 (mode별 결정/옵션/설계: decision_record, followup_flows?, design 산출물)
+- Ground 출력 (fact 근거 — evidence_ref의 provenance 대상)
+- Flow-specific 추가 입력:
+  - **Spike**: Implement(prototype) 결과 (prototype 산출물 ref + 관찰된 feasibility 신호) — GO/NO-GO/CONDITIONAL verdict의 입력 (P1: success object 참조)
+  - **Compound**: sub-flow 결과 (아래 "Compound input shape" 정의)
+
+### Compound input shape (P6/P8: 입력 모양 정의 — 닫음: Compound input 무정의)
+
+`report_type=compound`에서 Report가 받는 sub-flow 결과는 다음 모양으로 *정형 가정* 한다 (입력 precondition으로 assert — "Input preconditions" 절 참조):
+
+```yaml
+sub_flow_results:                              # Compound 전용. 각 sub-flow가 자체 flow로 종료된 결과
+  - sub_flow_id                                # 식별자 (Decide.sub_flow 분해의 id와 동일)
+    sub_flow_type                              # 16 정규 flow id 중 하나
+    terminal_result                            # completed | abandoned | suspended (Reflect 분류 동일 enum 재사용)
+    verdict_ref?                               # sub-flow가 자체 Report를 냈으면 그 row ref (Spike sub-flow의 GO/NO-GO 등)
+    finding_refs: [<investigate/report finding ref>]   # 집계 대상 finding의 provenance ref
+```
+
+→ `based_on`에 **sub_flow_refs** 필드를 추가로 carry 한다 (아래 Output). README 원본은 investigate_ref/decide_ref/ground_ref만 carry했고 compound source를 추적할 자리가 없었음 — 닫음.
+
+## Activities
+
+1. **report_type assignment** — flow_type → report_type 매핑 (아래 "report_type assignment rule"). *결정이 아니라 mechanical 매핑* (boundary: Decide 일 침범 아님).
+2. **Synthesize** — Investigate/Decide 산출물을 narrative로 합성. Spike이면 prototype 결과를 읽어 feasibility verdict 산출 (P1: Spike verdict).
+3. **Severity 분류** — Review/Retro의 findings에 severity 부여. severity 척도 = Investigate.risk_surface의 단일 척도 재사용 (P6/principle: ONE risk scale).
+4. **Action items** — Decide.followup_flows 연결 (Decide가 이미 낸 것을 *참조*; Report가 새 flow를 만들지 않음 — boundary: Verify/orchestrator 일).
+5. **검증 trail** — 모든 claim에 evidence_ref. evidence를 추적할 수 없으면 "Failure & degrade handling"의 dangling-evidence 분기 적용 (asserting away 금지).
+
+## report_type assignment rule (닫음: report_type 매핑 무정의 — P6/P8)
+
+`report_type`은 *결정이 아니라* flow_type에서 mechanical 파생된다. orchestrator가 active flow의 flow_type을 주입하고 Report는 다음 1:1 테이블로 set 한다:
+
+| flow_type | report_type |
+|---|---|
+| Review | `review` |
+| Retro | `retro` |
+| Exploration | `exploration` |
+| Spike | `spike` |
+| plan-standalone | `plan_standalone` |
+| Compound | `compound` |
+
+- 위 6개 외의 flow_type에서 Report step이 호출되면(코드 flow는 Report step이 없음 — "Constraint" 절) → 그 자체가 입력 precondition 위반 → `result=escalate, failure_origin=upstream` (P8: garbage-in detect). Report는 임의로 report_type을 *추측하지 않는다*.
+- flow_type이 주입되지 않았거나(missing) 위 enum 밖 값이면(malformed) → escalate (principle 3: missing/malformed ≠ legitimately empty).
+
+## Result enum & branches (닫음: 성공/실패 출력 미정의 — P1, principle 1, principle 3)
+
+Report는 Investigate.compatibility_verdict와 *동일한 형태*(discriminated result enum + orchestrator 라우팅 테이블)로 **성공 분기까지** 선언한다. 실패만 정의하던 README 원본을 보강.
+
+```yaml
+report:
+  result: synthesized | empty_clean | escalate     # discriminant
+  report_type: review | retro | exploration | spike | plan_standalone | compound
+  schema_version: 1
+  produced_at: ISO8601
+```
+
+| result | 의미 | 산출 | Orchestrator 처리 |
+|---|---|---|---|
+| `synthesized` | sound deliverable 합성됨 (정상 성공) | 아래 **Success terminal-artifact object** 전체 | Verify step 진입 (terminal artifact가 row로 존재) |
+| `empty_clean` | 보고할 내용이 *합법적으로* 없음 (principle 3: legitimately empty — verdict이지 error 아님) | report_type별 minimum을 충족하는 minimal artifact + `empty_details` | Verify 진입 (Exploration "no minimum structure" 충족) |
+| `escalate` | Report 자기 scope 내에서 sound deliverable 합성 *불가* (principle 1: 보조 입력이 아니라 합성 자체가 막힘) | `escalate_details` (아래) | **NEEDS_CONTEXT** — 기존 경로로 user/caller escalate. Report는 failure_origin을 *진단*하지 않고 `failure_origin=upstream`(또는 입력별 구체 origin)만 신호; orchestrator가 5-누적-fail halt cap 안에서 producer⇄reviewer 재진입 라우팅 |
+
+> **principle 1 (tool-absence)**: Report의 PRIMARY 입력은 도구가 아니라 *upstream artifact*다(Report는 MCP 도구에 의존하지 않는 순수 합성 step). 따라서 P2(자기 도구 부재) 분기는 Report에 해당 없음 — Report에는 escalate-할 "주요 도구"가 없다. upstream artifact 부재/기형이 Report의 escalate 트리거다("Input preconditions"). **(boundary: Report는 Verify식 failure_origin *라우팅*을 갖지 않는다 — escalate를 *신호*만 하고 orchestrator의 기존 NEEDS_CONTEXT 경로로 위임한다.)**
+
+### Success terminal-artifact object (P1: 성공 객체 *전체* 선언)
+
+`result=synthesized`일 때 산출되는 terminal artifact의 전체 모양. README 원본의 success-shape를 보존·확장 (Spike verdict + sub_flow_refs 추가):
+
+```yaml
+findings:                                      # report_type별 minimum은 "Empty/degenerate input" 절
+  - id                                         # invocation-scoped unique
+    statement                                  # narrative claim
+    severity: low | med | high | critical      # (P6/principle: Investigate.risk_surface 단일 척도. 아래 "Severity & priority")
+    evidence_ref: <ground/investigate/decide row ref>   # required. 추적 불가 시 dangling-evidence 분기
+
+action_items:                                  # Decide.followup_flows에서 파생 (Report가 새 flow 생성 안 함)
+  - description
+    priority: low | med | high | critical      # (P6/principle: 동일 단일 척도. 아래 "Severity & priority")
+    owner?
+    followup_flow_ref?                          # Decide.followup_flows 항목 ref (orchestrator가 큐잉)
+
+feasibility_verdict?:                          # report_type=spike일 때 *필수* (P1: Spike GO/NO-GO 자리 — worst hole 닫음)
+  verdict: GO | NO_GO | CONDITIONAL
+  rationale                                    # prototype 관찰 → verdict 근거
+  conditions?: [<string>]                      # verdict=CONDITIONAL일 때 필수 (충족돼야 할 조건)
+  evidence_ref: <implement(prototype) result row ref>   # required — verdict의 prototype 근거
+
+based_on:
+  investigate_ref?                             # 조건부 (해당 flow가 Investigate 산출 시)
+  decide_ref?                                  # 조건부
+  ground_ref?                                  # 조건부
+  sub_flow_refs?: [<sub_flow_id>]              # report_type=compound일 때 필수 (Compound source 추적 — 닫음)
+```
+
+**feasibility_verdict 생산 규칙 (P1: Activities가 verdict를 *실제로* 만들도록)**: Activity 2(Synthesize)에서 report_type=spike이면 Report는 Implement(prototype) 결과(Inputs)를 읽어 GO/NO_GO/CONDITIONAL 중 하나를 *반드시* 산출한다. prototype 결과가 명확한 feasibility 신호를 주면 GO 또는 NO_GO, 부분 충족·미해결 조건이 남으면 CONDITIONAL(+conditions). prototype 결과가 *부재/기형*이면(precondition fault) verdict을 *추측하지 않고* `result=escalate, failure_origin=implement` (principle 3: missing ≠ 합법적 verdict). 이는 flows/README.md "Non-Implementation Flow Completion Criteria" 표(Spike = "Report exists + feasibility verdict (GO/NO-GO/CONDITIONAL)")를 만족시키는 유일 산출 경로.
+
+### Severity & priority — 단일 척도 (닫음: severity/priority enum 무정의 — P6, principle 6)
+
+`findings[].severity`와 `action_items[].priority`는 **둘 다** Investigate.risk_surface가 이미 쓰는 *그 하나의* 척도를 재사용한다:
+
+```
+low | med | high | critical
+```
+
+- **두 번째 척도를 발명하지 않는다** (principle 6). 코드베이스에 존재하는 또 다른 척도(compatibility-verdict.md의 `fatal|high|medium|low`)는 *issue 분류용*이며 Report가 인용하지 않는다 — Report는 risk_surface 척도 하나로 통일. 이로써 reviewer의 "severity가 있는가"가 *falsifiable* 해짐(legal value 집합이 명시됨).
+- `severity`/`priority` 값이 위 enum 밖이거나 비어 있으면(finding은 있는데 severity 미부여) → reviewer FAIL(기계 강제). default 없음 — Report가 *반드시* 명시적으로 부여한다(Activity 3).
+
+## Input preconditions (닫음: garbage-in 맹신 — P8, principle 1·3)
+
+> 횡단 input-precondition 절(전 소비자 동일 문구의 Report판). Report는 합성을 시작하기 전에 *필수 upstream 필드의 존재+정형*을 assert 한다. 진실성은 assert하지 않는다(그건 Verify 일 — boundary). 결손/기형이면 `result=escalate, failure_origin=upstream`(또는 입력별 구체 origin). 이 escalate는 안전하다 — orchestrator의 `(flow_id, step)` **5-누적-fail halt cap**(decide/failure-routing.md)이 producer⇄reviewer ping-pong을 bound 하므로.
+
+| 입력 | precondition (존재+정형) | 위반 시 |
+|---|---|---|
+| `flow_type` (주입) | 6개 비코드 flow_type 중 하나로 존재 | escalate, failure_origin=upstream (report_type 추측 금지) |
+| Investigate findings 원천 | report_type이 findings를 요구하는 경우(review/retro) 정형 risk_surface/impact 존재 | escalate, failure_origin=investigate |
+| Decide 산출 | report_type이 결정/followup을 요구하는 경우 decision_record 정형 존재 | escalate, failure_origin=decide |
+| Implement(prototype) 결과 | report_type=spike일 때 prototype 결과 row 존재+정형 | escalate, failure_origin=implement (verdict 추측 금지) |
+| sub_flow_results | report_type=compound일 때 위 "Compound input shape"대로 존재 | escalate, failure_origin=upstream |
+
+**principle 3 구분 강제**: "필드는 존재하나 내용이 비었다"(예: Investigate.findings가 빈 list — Exploration/Retro의 *합법적* 결과)는 **escalate 아님** → `result=empty_clean` 또는 `synthesized`(verdict). "필드 자체가 missing/malformed/upstream broken"만 escalate. *절대로* 두 번째를 첫 번째로 silent rubber-stamp 하지 않는다.
+
+## Failure & degrade handling (닫음: 내부 실패/escalate 출력 부재 + dangling evidence — P1, P8)
+
+### result=escalate 산출 모양
+
+```yaml
+escalate_details:
+  reason                                       # 왜 sound deliverable 합성 불가
+  failure_origin: upstream | investigate | decide | implement   # 입력별. (Report는 진단 책임 없음 — 입력 precondition이 가리키는 가장 가까운 origin)
+  evidence: <missing/malformed field ref>      # 무엇이 결손/기형인지
+```
+
+- orchestrator는 이 신호를 **기존 NEEDS_CONTEXT 경로**로 처리한다(Report가 routing 테이블을 소유하지 않음 — boundary). failure_origin=report로 *Report 자신*이 재진입되는 것은 Verify의 failure-routing(failure-routing.md: 비코드 flow에서만 유효)이며 *그것도 Verify가 트리거*함 — Report는 자기 escalate만 낸다.
+- **request_upstream_deepen 금지 (principle 2)**: Report는 `request_upstream_deepen`을 *발행하지 않는다* — 그 신호는 Decide 전용(1-cycle cap). degenerate/missing upstream은 위 `failure_origin` escalate 경로로만 라우팅.
+
+### Dangling/missing evidence_ref (닫음: assert away 대신 처리)
+
+Activity 5는 "모든 claim에 evidence_ref"를 *불변식*으로 요구한다. 그 불변식을 만족할 수 없을 때의 동작을 정의한다(asserting away 금지):
+
+- claim의 근거가 *합법적으로 unverified* (Investigate가 unverified 플래그로 전달한 사실): finding은 유지하되 evidence_ref에 그 unverified 원천 ref를 달고 propagate 한다 — *drop 하지 않는다*(enforcement.md L41: `[UNVERIFIED]`는 설계상 persist, Verify가 단일 게이트). Report는 unverified를 *지우는* 게이트가 아니다(boundary).
+- claim에 추적 가능한 evidence_ref가 *아예 없고* 그것이 합성의 핵심 claim이면: 그 claim은 합성에서 *제외*하거나(보조 claim일 때), 핵심이라 제외하면 deliverable이 무의미해지면 → `result=escalate, failure_origin=<해당 upstream>`(근거 없는 claim을 사실로 도장 금지 — principle 3).
+
+## Empty/degenerate input — minimum-content rules (닫음: 빈 findings/followup 동작 미정의 — P7/principle 3)
+
+Investigate.findings가 비었거나(Exploration/Retro의 *합법적* outcome) Decide가 followup_flows를 안 냈을 때의 동작. 여기서 핵심은 **"빈-합법(verdict) vs 빈-결손(escalate)" 구분**(principle 3) + **report_type별 최소 완료 바**(flows/README.md "Non-Implementation Flow Completion Criteria" 표 권위 인용).
+
+### report_type별 최소 완료 바 (단일 flat schema가 아니라 분기별 minimum)
+
+| report_type | 최소 완료 바 (권위: flows/README.md 표) | 빈 입력 시 |
+|---|---|---|
+| `review` | 모든 finding에 severity tag. (finding이 *합법적으로* 0개 = clean review) | findings 0 + upstream 정형 → `result=empty_clean`, empty_details(reason="clean: no issues found", evidence) |
+| `retro` | **≥1 action_item** | action_item 0 강제 불가 시: upstream에 학습거리가 *진짜* 없으면 `empty_clean`은 **불가** — Retro는 minimum 1을 요구하므로 Report가 합성할 action_item이 없으면 `result=escalate, failure_origin=decide`(Decide가 followup/학습을 못 냄). 단순 도장 금지 |
+| `exploration` | content 존재 (no minimum structure) | findings/action_items 0이어도 narrative content 있으면 `synthesized`. content조차 없으면 `empty_clean`(suggested: reframe) |
+| `spike` | Report 존재 + feasibility_verdict (GO/NO_GO/CONDITIONAL) | findings 0이어도 verdict는 *필수* — verdict 없으면 `escalate`(failure_origin=implement). verdict 있으면 `synthesized` |
+| `plan_standalone` | design document 존재 + next step 명시 | Decide(Design) 산출이 정형 존재해야 — 부재면 `escalate, failure_origin=decide` |
+| `compound` | top-level summary + sub_flow_refs | sub_flow_results 부재/기형이면 `escalate, failure_origin=upstream`. 모든 sub-flow가 abandoned/no_op이어도 그 사실 자체가 합법적 summary → `synthesized` |
+
+### empty_clean 산출 모양
+
+```yaml
+empty_details:                                 # result=empty_clean일 때 필수
+  reason                                       # 왜 보고할 내용이 합법적으로 없는가
+  evidence: <ground/investigate fact ref>      # "clean"이 결손이 아니라 사실임을 가리키는 근거
+  suggested_action?: none | reframe_request    # exploration 등 후속 제안 (선택)
+```
+
+> **principle 3 한 줄 요약**: *빈-합법*(clean review / 빈 exploration) = `empty_clean` verdict. *빈-결손*(retro인데 학습 0, spike인데 verdict 0, upstream broken) = `escalate`. 두 번째를 첫 번째로 둔갑시키지 않는다.
+
+## Output
+
+```yaml
+report:
+  result: synthesized | empty_clean | escalate          # discriminant (P1)
+  report_type: review | retro | exploration | spike | plan_standalone | compound
+  schema_version: 1
+  produced_at: ISO8601
+
+  # result=synthesized | empty_clean (성공 분기)
+  findings?:                                             # report_type별 minimum 적용
+    - id, statement, severity, evidence_ref
+  action_items?:
+    - description, priority, owner?, followup_flow_ref?
+  feasibility_verdict?:                                  # report_type=spike일 때 필수
+    verdict: GO | NO_GO | CONDITIONAL
+    rationale, conditions?, evidence_ref
+  based_on?: { investigate_ref?, decide_ref?, ground_ref?, sub_flow_refs? }
+  empty_details?: { reason, evidence, suggested_action? }   # result=empty_clean일 때 필수
+
+  # result=escalate (실패 분기)
+  escalate_details?: { reason, failure_origin, evidence }   # result=escalate일 때 필수
+```
+
+## Step Depth Policy
+
+| Depth | 활동 | Caps |
+|---|---|---|
+| Shallow | summary (key findings 1-page) | wall_s=30, tokens=5k |
+| Deep | full structured report (severity 분류 + action items + 검증 trail) | wall_s=180, tokens=15k |
+
+**Deepen triggers**: flow_type ∈ {Compound, plan-standalone} | Investigate.findings.length ≥ 5 | Decide.mode=Design
+
+## Reviewer (report-reviewer)
+
+- `result` discriminant이 명시됐는가 (synthesized | empty_clean | escalate) — 산출 모양이 분기와 일치 (P1)
+- findings에 severity(low|med|high|critical 단일 척도) + evidence_ref가 있는가 — severity 미부여/enum 밖 = FAIL (P6)
+- action items의 priority가 동일 단일 척도인가
+- report_type별 최소 완료 바 충족 (review=severity tag, retro=≥1 action item, spike=feasibility_verdict 존재, plan_standalone=next step 명시, exploration=content, compound=sub_flow_refs)
+- **Spike**: feasibility_verdict.verdict ∈ {GO, NO_GO, CONDITIONAL} 존재 (없으면 FAIL — terminal artifact 미충족)
+- claims이 검증됐는가 (evidence_ref 추적 가능; unverified는 propagate된 채 허용 — Verify가 단일 게이트)
+- `result=empty_clean`이 *합법적 빔*인가 *결손 도장*인가 검사 (empty_details.evidence 추적) — principle 3
+- `result=escalate`가 request_upstream_deepen을 *발행하지 않았는가* (principle 2) — escalate_details만 산출했는가
+- 비코드 flow terminal artifact 요건 충족
+
+## Boundary
+
+| 항목 | 책임 |
+|---|---|
+| 사실 캡처 | Ground |
+| 해석·findings 생성 | Investigate |
+| 결정·옵션·followup_flows *생성* | Decide |
+| 코드 변경 | Implement (Report은 비코드) |
+| Flow-level 목표 검증 + failure 라우팅 | Verify (Report는 escalate를 *신호*만, 라우팅 안 함 — principle/boundary) |
+| 후속 flow 큐잉 | Orchestrator (Report는 followup_flow_ref를 *참조*만) |
+| upstream artifact 게이팅 (proceed/blocked) | Investigate (Report는 게이트 아님 — boundary) |
+
+## Constraint — 코드 flow에서의 Report
+
+코드 flow (Feature/Bug Fix/Refactor/Performance/Migration/Test/Chore/Release)에서는 *Report 단계 없음*. `failure_origin=report`도 코드 flow에선 invalid (Verify가 거부 — failure-routing.md). 코드 flow의 flow_type으로 Report가 호출되면 → 입력 precondition 위반 → `result=escalate, failure_origin=upstream` (report_type 추측 금지 — "report_type assignment rule").
