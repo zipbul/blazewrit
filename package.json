@@ -7,14 +7,9 @@
     "packages/*"
   ],
   "devDependencies": {
-    "@types/bun": "latest",
-    "ajv": "8",
-    "ajv-formats": "^3.0.1"
+    "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
-  },
-  "scripts": {
-    "schemas:check": "node harness/schemas/validate.mjs"
   }
 }
