@@ -12,6 +12,7 @@
   "private": true,
   "packageManager": "bun@1.3.14",
   "dependencies": {
+    "@bw/dto": "workspace:*",
     "@angular/cdk": "21.0.0",
     "@angular/common": "^21.2.0",
     "@angular/compiler": "^21.2.0",

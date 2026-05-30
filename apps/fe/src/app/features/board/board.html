@@ -1,39 +1,30 @@
 <div class="lanes">
-  <div class="lane done"><div class="lane-h"><span class="nn"></span>ground<span class="ct">—</span></div><div class="lane-body"></div></div>
-  <div class="lane done"><div class="lane-h"><span class="nn"></span>investigate<span class="ct">—</span></div><div class="lane-body"></div></div>
-  <div class="lane done"><div class="lane-h"><span class="nn"></span>decide<span class="ct">—</span></div><div class="lane-body"></div></div>
-
-  <div class="lane active"><div class="lane-h"><span class="nn"></span>test<span class="ct">1</span></div>
-    <div class="lane-body">
-      <div class="glass tc live-c">
-        <div class="id">#142 · bugfix</div>
-        <div class="t">결제 분기 버그</div>
-        <div class="row"><span class="pulse"><span class="pd"></span>test ⚠2</span></div>
-        <div class="retry">↺ reviewer ✗ → re-run ×2</div>
+  @for (lane of lanes(); track lane.step) {
+    <div class="lane" [class.active]="lane.tasks.length > 0 && !lane.faint">
+      <div class="lane-h" [class.faint]="lane.faint">
+        <span class="nn"></span>{{ lane.step }}<span class="ct">{{ lane.tasks.length || '—' }}</span>
+      </div>
+      <div class="lane-body">
+        @for (t of lane.tasks; track t.item.id) {
+          <div class="glass tc" [class.live-c]="$first && !lane.faint">
+            <div class="id">#{{ t.item.id }} · {{ t.flow?.flowType ?? t.item.type }}</div>
+            <div class="t">{{ t.item.title }}</div>
+            <div class="row">
+              <span class="chip">{{ t.item.type }}</span>
+              @if (lane.faint || !t.flow) {
+                <span class="dim">◇ queued</span>
+              } @else {
+                <span class="pulse" [class.ok]="t.flow.attemptNo <= 1">
+                  <span class="pd"></span>{{ t.flow.currentStep }}@if (t.flow.attemptNo > 1) { <span> ⚠{{ t.flow.attemptNo }}</span> }
+                </span>
+              }
+            </div>
+            @if (t.flow && t.flow.attemptNo > 1) {
+              <div class="retry">↺ reviewer ✗ → re-run ×{{ t.flow.attemptNo }}</div>
+            }
+          </div>
+        }
       </div>
     </div>
-  </div>
-
-  <div class="lane active"><div class="lane-h"><span class="nn"></span>implement<span class="ct">1</span></div>
-    <div class="lane-body">
-      <div class="glass tc">
-        <div class="id">#143 · feature</div>
-        <div class="t">검색 자동완성</div>
-        <div class="row"><span class="chip">feature</span><span class="pulse ok"><span class="pd"></span>run</span></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="lane"><div class="lane-h"><span class="nn"></span>verify<span class="ct">0</span></div><div class="lane-body"></div></div>
-  <div class="lane"><div class="lane-h"><span class="nn"></span>reflect<span class="ct">0</span></div><div class="lane-body"></div></div>
-
-  <div class="lane"><div class="lane-h faint"><span class="nn"></span>backlog<span class="ct">1</span></div>
-    <div class="lane-body">
-      <div class="glass tc">
-        <div class="id">#144 · refactor</div>
-        <div class="t">캐시 리팩터</div>
-        <div class="row"><span class="chip">refactor</span><span class="dim">◇ queued</span></div>
-      </div>
-    </div>
-  </div>
+  }
 </div>

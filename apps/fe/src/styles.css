@@ -60,7 +60,8 @@
   --glass-blur: 24px;
   --glass-radius: 1rem;
   --glass-shadow: 0 14px 44px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  --faint: #5f5a80;
+  /* WCAG AA: 5.45:1 on --background (was #5f5a80 = 3.08:1, failed) */
+  --faint: #8782a6;
   --mesh:
     radial-gradient(42% 45% at 18% 8%, rgba(94, 200, 236, 0.12), transparent),
     radial-gradient(40% 42% at 86% 14%, rgba(157, 134, 240, 0.12), transparent),
@@ -80,6 +81,12 @@
     font-family: var(--font-sans);
     background-image: var(--mesh);
     background-attachment: fixed;
+  }
+  /* WCAG 2.4.7 — visible keyboard focus for all interactive elements */
+  :where(a, button, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 }
 

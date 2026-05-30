@@ -1,48 +1,77 @@
 <div class="bento">
   <section class="glass card flow">
-    <div class="lbl">#142 결제 분기 버그 · flow [bugfix]</div>
-    <div class="metro">
-      <div class="st"><span class="n dn"></span><small>ground</small></div><span class="sg dn"></span>
-      <div class="st"><span class="n dn"></span><small>investigate</small></div><span class="sg dn"></span>
-      <div class="st"><span class="n dn"></span><small>decide</small></div><span class="sg dn"></span>
-      <div class="st"><span class="n ac"></span><small class="cur">test</small></div><span class="sg"></span>
-      <div class="st"><span class="n gh"></span><small>implement</small></div><span class="sg"></span>
-      <div class="st"><span class="n gh"></span><small>verify</small></div><span class="sg"></span>
-      <div class="st"><span class="n gh"></span><small>reflect</small></div>
-    </div>
-    <div class="retry">↺ test-reviewer ✗ → re-run ×2 (gate: typecheck)</div>
+    @if (focus(); as f) {
+      <div class="lbl">#{{ f.id }} {{ f.title }} · flow [{{ focusFlow()?.flowType }}]</div>
+    }
+    @if (metro(); as m) {
+      <div class="metro">
+        @for (step of m.steps; track step.name; let last = $last) {
+          <div class="st">
+            <span class="n" role="img" [attr.aria-label]="step.name + ': ' + step.state"
+                  [class.dn]="step.state === 'done'" [class.ac]="step.state === 'active'"
+                  [class.gh]="step.state === 'pending'"></span>
+            <small [class.cur]="step.state === 'active'">{{ step.name }}</small>
+          </div>
+          @if (!last) { <span class="sg" [class.dn]="step.state === 'done'"></span> }
+        }
+      </div>
+      @if (m.reviewerFailed) {
+        <div class="retry">↺ {{ m.activeStep }}-reviewer ✗ → re-run ×{{ m.attempts }}</div>
+      }
+    }
   </section>
 
-  <section class="glass card kpi1"><div class="lbl">Active</div><div class="big cyan">3</div><div class="unit">tasks</div></section>
-  <section class="glass card kpi2"><div class="lbl">Events</div><div class="big">1.2k</div><div class="unit warn">⚑ 1 pending</div></section>
+  <section class="glass card kpi1"><div class="lbl">Active</div><div class="big cyan">{{ activeCount() }}</div><div class="unit">in flow</div></section>
+  <section class="glass card kpi2"><div class="lbl">Live</div><div class="big">{{ liveLines().length }}</div><div class="unit">events</div></section>
 
   <section class="glass card focus">
     <div class="lbl">Focus</div>
-    <div class="unit">#142 · bugfix</div>
-    <h1>결제 모듈 분기 버그</h1>
-    <span class="pill">verify · attempt 2</span>
+    @if (focus(); as f) {
+      <div class="unit">#{{ f.id }} · {{ focusFlow()?.flowType }}</div>
+      <h1>{{ f.title }}</h1>
+      @if (focusFlow(); as fl) {
+        <span class="pill">{{ fl.currentStep }} · attempt {{ fl.attemptNo }}</span>
+      }
+    }
     <div class="tasks">
-      <div class="tl"><span class="id">#143</span><span class="nm">검색 자동완성</span><span class="s ok">▸ implement</span></div>
-      <div class="tl"><span class="id">#144</span><span class="nm">캐시 리팩터</span><span class="s dim">◇ ground</span></div>
+      @for (t of otherTasks(); track t.item.id) {
+        <div class="tl">
+          <span class="id">#{{ t.item.id }}</span>
+          <span class="nm">{{ t.item.title }}</span>
+          <span class="s" [class.ok]="t.flow?.status === 'active'"
+                [class.dim]="t.flow?.currentStep === 'ground'">{{ t.flow?.currentStep === 'ground' ? '◇' : '▸' }} {{ t.flow?.currentStep }}</span>
+        </div>
+      }
     </div>
   </section>
 
   <section class="glass card live">
-    <div class="lbl">Live · agent&#64;api</div>
+    <div class="lbl">Live · agent&#64;{{ projects()[0]?.id }}</div>
     <div class="lv">
-      <div>00:17 <span class="c">▸ Edit router.ts +6 −2</span></div>
-      <div>00:19 <span class="c">▸ Bash bun test</span></div>
-      <div>00:21 <span class="ok">✓ 14 pass · 0 fail</span></div>
-      <div>00:21 verify 진입 준비…</div>
+      @for (line of liveLines(); track $index) {
+        <div [class]="line.kind">
+          @switch (line.kind) {
+            @case ('tool') { <span class="c">{{ line.text }}</span> }
+            @case ('ok') { <span class="ok">{{ line.text }}</span> }
+            @default { {{ line.text }} }
+          }
+        </div>
+      } @empty {
+        <div class="dim">스트림 대기 중…</div>
+      }
     </div>
   </section>
 
   <section class="glass card conn">
     <div class="lbl">Connections</div>
     <div class="conns">
-      <span class="x"><span class="b ok glow"></span>api</span>
-      <span class="x"><span class="b ok"></span>web</span>
-      <span class="x"><span class="b down glow-d"></span>infra</span>
+      @for (p of projects(); track p.id) {
+        <span class="x">
+          <span class="b" role="img" [attr.aria-label]="p.name + ': ' + p.status"
+                [class.ok]="p.status === 'up'" [class.down]="p.status === 'down'"
+                [class.glow]="p.status === 'up'" [class.glow-d]="p.status === 'down'"></span>{{ p.name }}
+        </span>
+      }
     </div>
   </section>
 </div>
