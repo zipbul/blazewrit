@@ -385,7 +385,7 @@ daemon = FE + BE 실행만 하는 얇은 러너 (bz start → FE+BE 부팅)
 - **per-repo**: 대화는 bz 레벨(멀티레포 인지), Triage+flow는 repo 레벨. "API랑 웹 둘 다" → bz가 라우팅 → 각 repo가 자기 Triage/flow.
 - 정직한 한계: "THE 최단순" 증명 불가(설계 trade-off), 단 L0 버전보다 명백히 단순+확실. 유일 조건 = 모호 시 에이전트 제안→사람 확인, 명확하면 auto.
 
-**별개 미해결 (테마①과 혼동 금지)**: trivial 작업("더 파랗게")은 *작업*이라 Triage는 타되 9-step 풀 flow면 과함 = **flow 무게** 문제. → `complexity_signal=trivial`이면 *경량 micro-flow* 라우팅으로 따로 해결 (테마②/③와 함께 하네스 재설계 시).
+**flow 무게 — 이미 해결됨 (2026-05 검증 철회).** 초안은 "trivial → micro-flow 필요"라 했으나 적대 검증이 file 증거로 뒤집음: trivial fast-path가 *이미 존재* — `chore`(Minimal pipeline) + **Adaptive Step Depth Policy**(모든 step default shallow, mechanical trigger 시만 deepen). 싼 반복은 새 flow 아니라 *depth 변조*. micro-flow는 over-eng + Ground 삭제 시 Verify baseline 깨짐. → micro-flow 안 만듦. (상세 HARNESS_FLOW_REVIEW '플로우-셋 최적성'.)
 
 ## 15. FE 화면 패러다임 & 디자인 스택 (리서치 확정, 2026-05)
 
