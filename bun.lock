@@ -45,6 +45,14 @@
         "vitest": "^4.0.8",
       },
     },
+    "apps/mock": {
+      "name": "@bw/mock",
+      "version": "0.0.0",
+      "dependencies": {
+        "@bw/dto": "workspace:*",
+        "@zipbul/baker": "^3.0.0",
+      },
+    },
     "packages/dto": {
       "name": "@bw/dto",
       "version": "0.0.0",
@@ -325,6 +333,8 @@
     "@bufbuild/protobuf": ["@bufbuild/protobuf@2.12.0", "", {}, "sha512-B/XlCaFIP8LOwzo+bz5uFzATYokcwCKQcghqnlfwSmM5eX/qTkvDBnDPs+gXtX/RyjxJ4DRikECcPJbyALA8FA=="],
 
     "@bw/dto": ["@bw/dto@workspace:packages/dto"],
+
+    "@bw/mock": ["@bw/mock@workspace:apps/mock"],
 
     "@colordx/core": ["@colordx/core@5.4.3", "", {}, "sha512-kIxYSfA5T8HXjav55UaaH/o/cKivF6jCCGIb8eqtcsfI46wsvlSiT8jMDyrl779qLec3c2c2oHBZo4oAhvbjrQ=="],
 

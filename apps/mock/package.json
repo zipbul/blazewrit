@@ -1,0 +1,13 @@
+{
+  "name": "@bw/mock",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/server.ts"
+  },
+  "dependencies": {
+    "@bw/dto": "workspace:*",
+    "@zipbul/baker": "^3.0.0"
+  }
+}

@@ -1,0 +1,5 @@
+[
+  { "id": "api", "name": "api", "status": "up", "activeCount": 3 },
+  { "id": "web", "name": "web", "status": "up", "activeCount": 0 },
+  { "id": "infra", "name": "infra", "status": "down", "activeCount": 0 }
+]

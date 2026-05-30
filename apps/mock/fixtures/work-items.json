@@ -1,0 +1,44 @@
+[
+  {
+    "id": "142",
+    "projectId": "api",
+    "title": "결제 모듈 분기 버그",
+    "description": "currency 누락 시 fallthrough",
+    "type": "bug",
+    "labels": ["payment"],
+    "state": "in_flow",
+    "priority": 1,
+    "source": "user",
+    "activeFlowId": "f142-2",
+    "createdAt": "2026-05-29T00:10:00Z",
+    "updatedAt": "2026-05-29T00:21:00Z"
+  },
+  {
+    "id": "143",
+    "projectId": "api",
+    "title": "검색 자동완성 기능",
+    "description": "타이핑 시 제안 표시",
+    "type": "feature",
+    "labels": ["search", "ux"],
+    "state": "in_flow",
+    "priority": 2,
+    "source": "user",
+    "activeFlowId": "f143-1",
+    "createdAt": "2026-05-29T00:05:00Z",
+    "updatedAt": "2026-05-29T00:20:00Z"
+  },
+  {
+    "id": "144",
+    "projectId": "api",
+    "title": "캐시 레이어 리팩터",
+    "description": "TTL 정책 재정비",
+    "type": "task",
+    "labels": ["cache"],
+    "state": "in_flow",
+    "priority": 3,
+    "source": "agent",
+    "activeFlowId": "f144-1",
+    "createdAt": "2026-05-29T00:02:00Z",
+    "updatedAt": "2026-05-29T00:18:00Z"
+  }
+]

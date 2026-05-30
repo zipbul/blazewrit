@@ -1,0 +1,8 @@
+[
+  { "id": "sr1", "flowId": "f142-2", "stepName": "ground", "role": "producer", "attemptNo": 1, "status": "done", "startedAt": "2026-05-29T00:15:10Z", "endedAt": "2026-05-29T00:16:00Z" },
+  { "id": "sr2", "flowId": "f142-2", "stepName": "investigate", "role": "producer", "attemptNo": 1, "status": "done", "startedAt": "2026-05-29T00:16:00Z", "endedAt": "2026-05-29T00:17:00Z" },
+  { "id": "sr3", "flowId": "f142-2", "stepName": "decide", "role": "producer", "attemptNo": 1, "status": "done", "startedAt": "2026-05-29T00:17:00Z", "endedAt": "2026-05-29T00:18:00Z" },
+  { "id": "sr4", "flowId": "f142-2", "stepName": "test", "role": "producer", "attemptNo": 1, "status": "done", "startedAt": "2026-05-29T00:18:00Z", "endedAt": "2026-05-29T00:19:00Z" },
+  { "id": "sr5", "flowId": "f142-2", "stepName": "test", "role": "reviewer", "attemptNo": 1, "status": "rejected", "reviewVerdict": "fail", "startedAt": "2026-05-29T00:19:00Z", "endedAt": "2026-05-29T00:19:30Z" },
+  { "id": "sr6", "flowId": "f142-2", "stepName": "test", "role": "producer", "attemptNo": 2, "loopIteration": 2, "status": "running", "sessionId": "sess-142", "startedAt": "2026-05-29T00:20:00Z" }
+]
