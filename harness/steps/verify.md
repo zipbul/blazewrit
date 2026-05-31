@@ -54,34 +54,44 @@ result: pass | fail | degraded_pass | blocked | retry_exhausted
 
 | result | 의미 | 동반 필수 객체 |
 |---|---|---|
-| `pass` | 모든 pass 통과, 목적 달성 | `pass_record` |
-| `degraded_pass` | enhancement 도구(pyreez) 부재로 cross-verify 없이 internal multi-pass만으로 PASS 판정 (P2/P5, 원칙①) | `pass_record`(`verdict_summary` + `degraded_tools`) |
+| `pass` | 모든 pass 통과, 목적 달성 | `verdict_summary` (+ 공통 `internal_passes`) |
+| `degraded_pass` | enhancement 도구(pyreez) 부재로 cross-verify 없이 internal multi-pass만으로 PASS 판정 (P2/P5, 원칙①) | `verdict_summary` + `degraded_tools` (+ 공통 `internal_passes`) |
 | `fail` | 1개 이상 pass 미통과 → 특정 producer step에 귀착 | `failure_origin` 객체 |
 | `blocked` | 자기 게이트 도구(firebat/emberdeck) mechanical error/timeout, 또는 stale-2nd, 또는 input-precondition fault, 또는 self-misjudgment — Verify가 자기 일을 못 함 (원칙①·③, 게이트 부재→escalate) | `escalation` 객체 |
 | `retry_exhausted` | producer⇄reviewer 또는 (flow_id,step) 누적 fail cap 도달, 또는 cap_exceeded | `exhaustion` 객체 |
 
-### `pass_record` (P1: PASS 출력 객체 — 이전엔 미정의)
+### 공통 (전 분기) 출력 필드
 
-`result ∈ {pass, degraded_pass}`일 때 필수. Reflect가 받는 `Verify 결과(PASS/...)`의 실체.
+`result` discriminant와 무관하게 **모든** Verify 출력이 항상 운반하는 top-level required 필드 (schema top-level `required`):
 
-> §5 storage law: flow/step 상관은 **top-level `based_on` RowRef 번들**로 한다 — pass_record/failure_origin/escalation은 `flow_id`/`schema_version`/`verified_at` 같은 식별자를 *자유기입하지 않는다* (cross-flow correlation은 RowRef 기반). `source_version.ed_snapshot_version`만은 freshness/race 재검에 쓰는 *측정 hash*이므로 유지 (식별자 아님).
+- **`based_on`** — §5 RowRef 번들. Verify는 flow chain 전체를 평가하므로 평가한 row들을 기록한다. `triage_ref`는 항상 존재(모든 flow는 Triage에서 시작); spec_ref/test_ref는 코드 flow만, report_ref는 비코드 flow만. cross-flow correlation은 *이 RowRef 번들*로만 한다 (flow_id 자유기입 없음).
+- **`flow_kind`** ∈ {`code`, `non_code`} — 어느 internal multi-pass set을 돌렸는지. 어느 `pass1_*` variant가 채워지는지 결정 (code→pass1_mechanical, non_code→pass1_completeness).
+- **`internal_passes`** — 4-pass 자체검증 기록 (`pass1_mechanical`|`pass1_completeness`, `pass2_goal_backward`, `pass3_adversarial`, `pass4_pyreez_cross_verification`). PASS/FAIL/degraded 전 분기 공통 — goal-backward가 항상 보존됨 (P1).
+- **`self_misjudgment_check`** — `{ suspected: bool, triggers?: [...] }`. R2 자기판단 의심 기록 (auditable). suspected=true면 result는 반드시 `blocked` + `escalation(failure_origin=verify)`.
+
+optional top-level 필드:
+
+- **`high_risk_flow`** (boolean, optional) — [high-risk flow 정의](#high-risk-flow-정의)에서 도출한 high-risk 판정을 *출력에 기록*하는 감사용 필드 (pyreez cross-verify gate 결정의 근거를 auditable하게 남김). 파생 조건이지 새 척도 아님.
+- **`declared_next_step`** (optional) — R16 advisory 후속 선언. orchestrator가 권위 있는 `expected_next_step`을 주입하고 `result`/`failure_origin`을 읽어 라우팅한다; `declared_next_step`은 *advisory*일 뿐이며 `declared_next_step==expected_next_step`은 M2 validator_contract (여기 grammar로 강제 안 함). (Verify는 `request_upstream_deepen`은 발행 안 함 — 원칙②.)
+
+### PASS 출력 객체 (`verdict_summary` + 공통 `internal_passes`)
+
+`result ∈ {pass, degraded_pass}`일 때 PASS 분기 필수 필드는 `verdict_summary` (string) 하나다 (degraded_pass는 추가로 `degraded_tools`). **별도 `pass_record` 객체는 없다** — goal-backward 기록과 per-pass 결과는 *모든 분기에서 항상 존재하는* top-level `internal_passes` 객체가 운반한다 (이 always-present 불변식이 분기별 pass_record보다 강하다). Reflect가 받는 `Verify 결과(PASS/...)`의 실체는 `result` + `verdict_summary` + `internal_passes`다.
+
+> §5 storage law: flow/step 상관은 **top-level `based_on` RowRef 번들**로 한다 — verdict_summary/failure/escalation은 `flow_id`/`schema_version`/`verified_at` 같은 식별자를 *자유기입하지 않는다* (cross-flow correlation은 RowRef 기반). `source_version.ed_snapshot_version`만은 freshness/race 재검에 쓰는 *측정 hash*이므로 유지 (식별자 아님).
 
 ```yaml
-pass_record:
-  result: pass | degraded_pass
-  goal_satisfied: true                 # self-asserted truth — cross-verify로 완화만 (환원불가 residual)
-  goal_backward:                        # Pass 2 산출 — 전 분기 유지 (P1)
-    - assertion: <"무엇이 TRUE여야 하나">
-      held: true
-      evidence: <file:line | artifact ref>
-  pass_results:                         # 집계 입력 — 투명성 (P1 aggregation 근거)
-    mechanical: pass | n/a               # 비코드 flow면 completeness
-    completeness: pass | n/a
-    goal_backward: pass
-    adversarial: pass                    # surface된 우려가 verdict를 뒤집지 않음을 명시
-    cross_verify: pass | omitted         # pyreez 결과 (omitted = degraded)
-  source_version:                       # freshness 재검 (race detection)
-    ed_snapshot_version: <hash>          # Ground.task_subgraph.ed_snapshot_version과 동일
+verdict_summary: "<무엇이 TRUE로 검증되었나>"
+# goal_satisfied + goal-backward 추적 + per-pass 결과는 분기 객체가 아니라 공통 internal_passes에 있다:
+internal_passes:                          # 전 분기 공통 (top-level required, 아래 [공통 출력 필드] 참조)
+  pass2_goal_backward:                     # Pass 2 산출 — 전 분기 유지 (P1)
+    goal_satisfied: true                   # self-asserted truth — cross-verify로 완화만 (환원불가 residual)
+    traced_assertions:
+      - assertion: <"무엇이 TRUE여야 하나">
+        holds: true
+        evidence_ref: <file:line | artifact ref>   # optional
+        source_tool: <probe origin>                # required (각 assertion 항목)
+  # pass1_mechanical | pass1_completeness, pass3_adversarial, pass4_pyreez_cross_verification 도 여기 (집계 입력)
 # P0 후속 신호는 별도 분기-레벨 필드 `p0_post_stabilization`로 emit (pass/degraded_pass 분기 공통, 아래 참조).
 ```
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://blazewrit.dev/harness/schemas/decide.schema.json",
   "title": "blazewrit harness — decide step structured_output",
-  "description": "Decide = the OWNER of the decision, sitting on Investigate output (every flow runs Decide, no skip). Output depth is declared via a per-flow MODE: record | plan | design. TARGET RUNTIME: grammar-constrained generation (M1 = SHAPE). This schema models the Decide OUTPUT as a top-level discriminated union on `result`: a normal `decision` (which itself carries the 3-mode record|plan|design sub-union), plus the two prose-mandated control outputs `reclassify_required` (triage_mismatch surfaced) and `request_upstream_deepen` (shallow Ground/Investigate, cap 1). $ref-s ./_defs.schema.json for all shared primitives (M4 single source). IMPORTANT: grammar here enforces SHAPE only. The MODE is FORCED MECHANICALLY by R6 from Investigate schema fields (NOT free-chosen by the LLM) — the orchestrator computes the forced mode and a SIBLING M2 validator_contract (see x-validator-contracts) asserts the emitted `mode` matches that R6 computation. Other truth-bearing fields (R6 mode-force, R16 chain, R20 verify probes in plans, R23 measured counts, R26 provenance, R36 citations, R5 cross-verify on Design) are likewise closed by deterministic code checks listed in x-validator-contracts, NOT by any keyword here.",
+  "description": "Decide = the OWNER of the decision, sitting on Investigate output (every flow runs Decide, no skip). Output depth is declared via a per-flow MODE: record | plan | design. TARGET RUNTIME: grammar-constrained generation (M1 = SHAPE). This schema models the Decide OUTPUT as a top-level discriminated union on `result`: a normal `decision` (which itself carries the 3-mode record|plan|design sub-union), the two prose-mandated control outputs `reclassify_required` (triage_mismatch surfaced) and `request_upstream_deepen` (shallow Ground/Investigate, cap 1), plus the precondition-fault output `precondition_fault` (a required-but-missing/malformed upstream field detected by the Input-preconditions gate; Decide does NOT decide, it escalates with failure_origin=investigate|ground). $ref-s ./_defs.schema.json for all shared primitives (M4 single source). IMPORTANT: grammar here enforces SHAPE only. The MODE is FORCED MECHANICALLY by R6 from Investigate schema fields (NOT free-chosen by the LLM) — the orchestrator computes the forced mode and a SIBLING M2 validator_contract (see x-validator-contracts) asserts the emitted `mode` matches that R6 computation. Other truth-bearing fields (R6 mode-force, R16 chain, R20 verify probes in plans, R23 measured counts, R26 provenance, R36 citations, R5 cross-verify on Design) are likewise closed by deterministic code checks listed in x-validator-contracts, NOT by any keyword here.",
 
   "type": "object",
   "required": ["result"],
@@ -11,9 +11,9 @@
   "properties": {
     "result": {
       "$comment": "Top-level discriminant. Grammar forces exactly one branch via the oneOf below.",
-      "description": "Which Decide output this is. 'decision' = a real decision was made (carries `mode` sub-union). 'reclassify_required' = Investigate surfaced triage_mismatch; Decide does NOT proceed, signals reclassify (orchestrator re-enters Triage; cap 3/flow). 'request_upstream_deepen' = Ground/Investigate too shallow to decide; Decide signals upstream deepen (cap 1/flow, then Verify is final safety).",
+      "description": "Which Decide output this is. 'decision' = a real decision was made (carries `mode` sub-union). 'reclassify_required' = Investigate surfaced triage_mismatch; Decide does NOT proceed, signals reclassify (orchestrator re-enters Triage; cap 3/flow). 'request_upstream_deepen' = Ground/Investigate too shallow to decide; Decide signals upstream deepen (cap 1/flow, then Verify is final safety). 'precondition_fault' = the Input-preconditions gate found a required upstream field absent/malformed/enum-invalid/ref-unresolved; Decide does NOT decide, it escalates with failure_origin=investigate|ground (5-累積 halt cap bounds re-entry).",
       "type": "string",
-      "enum": ["decision", "reclassify_required", "request_upstream_deepen"]
+      "enum": ["decision", "reclassify_required", "request_upstream_deepen", "precondition_fault"]
     }
   },
 
@@ -88,8 +88,8 @@
         },
 
         "followup_flows": {
-          "$comment": "Record mode (esp. Review audit flow). dedup by (type, scope_hash) is an M2 validator, not a grammar keyword.",
-          "description": "Audit-flow followups (Review Decide.Record surfaces review findings here; orchestrator QUEUEs them, does not auto-run). M2 validator: dedup by (type, scope_hash). scope is a RowRef to the finding row.",
+          "$comment": "Available in ALL modes (record|plan|design) — generalized output slot. Two sources: Record audit surfacing AND partial_proceed.blocked_set queuing (any mode, esp. Plan). dedup by (type, scope_hash) is an M2 validator, not a grammar keyword.",
+          "description": "Followup-flow queue slot, available in ALL three modes. Two sources: (1) Record/audit surfacing — Review Decide.Record surfaces review findings here; (2) partial_proceed.blocked_set queuing — in ANY mode (esp. Plan: Migration-style partial_proceed flows run in Plan mode), Decide queues each blocked scope here. Orchestrator QUEUEs them, never auto-runs. M2 validator: dedup by (type, scope_hash). scope is a RowRef to the finding/blocked-scope row.",
           "type": "array",
           "items": {
             "type": "object",
@@ -300,7 +300,7 @@
             },
 
             "cross_verify_result": {
-              "description": "Optional R5 outcome once cross-verification ran. 'disagree' is the self-misjudgment signal.",
+              "description": "Required in Design; not_run when pyreez did not run (or cross_verify_required==false). Always recorded in Design mode (single producing rule, decide-reviewer '반드시 기록'). 'agree' = pyreez ran and matched; 'disagree' = pyreez ran and conflicts (self-misjudgment signal → failure_origin=verify escalate); 'inconclusive' = ran but undetermined; 'not_run' = pyreez absent/error/timeout or not triggered.",
               "type": "string",
               "enum": ["agree", "disagree", "inconclusive", "not_run"]
             },
@@ -504,6 +504,36 @@
           "type": "object"
         }
       }
+    },
+
+    {
+      "$comment": "BRANCH D — precondition_fault. The Input-preconditions gate (P8 garbage-in defense) found a required upstream field absent/malformed/enum-invalid/ref-unresolved BEFORE the decision activity. Decide does NOT decide; it escalates. Exclusive with the success/control branches: no `decision`/mode payload, no reclassify/deepen payload. failure_origin is the concrete broken upstream (ground|investigate). The 5-累積 halt cap (failure-routing.md) bounds producer⇄reviewer re-entry.",
+      "additionalProperties": false,
+      "required": ["result", "failure_origin", "faulting_field", "detail", "based_on"],
+      "properties": {
+        "result": { "const": "precondition_fault" },
+        "failure_origin": {
+          "$comment": "Tightened local enum over the shared FailureOrigin (the wider _defs enum carries verify/cap_exceeded/multiple which Decide's precondition gate cannot attribute). Only the two upstream steps Decide rests on can fault its preconditions.",
+          "description": "Which upstream step's required field was absent/malformed. Decide's precondition gate can only attribute to ground or investigate (the two upstreams it reads). allOf-restricts the shared FailureOrigin enum.",
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/FailureOrigin" }],
+          "type": "string",
+          "enum": ["ground", "investigate"]
+        },
+        "faulting_field": {
+          "description": "The specific required upstream field that was absent/malformed/enum-invalid/ref-unresolved (e.g. 'compatibility_verdict.result', 'risk_surface', 'investigate.based_on_ground').",
+          "type": "string",
+          "minLength": 1
+        },
+        "detail": {
+          "description": "Mechanical-error description: which precondition failed and how (missing | type-mismatch | enum-invalid | ref-unresolved). NOT a truth/semantic judgment — only structural decision.",
+          "type": "string",
+          "minLength": 1
+        },
+        "based_on": {
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/BasedOn" }],
+          "type": "object"
+        }
+      }
     }
   ],
 
@@ -592,6 +622,16 @@
       "rule": "R13",
       "field": "decision.unverified",
       "check": "Floor, KEEP polarity: unverified is designed to persist to Verify (the single gate). NO 'no unverified remain' forbid. Whether unverified:false is honest is self-asserted-truth residual."
+    },
+    {
+      "rule": "reviewer/unverified-polarity",
+      "field": "decision.unverified",
+      "check": "M2 (decide-reviewer 'unverified 정합성'): mode-conditioned polarity. Record/Plan are not cross-verify targets => unverified MUST be false. Design: unverified true iff cross_verify_result in {not_run, inconclusive} (pyreez degrade), false when agree. This is a TRUTH/polarity check (not grammar — R13 KEEP-polarity must not forbid true); reject polarity violations."
+    },
+    {
+      "rule": "control/precondition-fault",
+      "field": "result=precondition_fault",
+      "check": "M2/gate: the Input-preconditions gate detected a required upstream field absent/malformed/enum-invalid/ref-unresolved; failure_origin in {ground, investigate} names the concrete broken upstream. Decide does NOT decide on this branch. 5-累積 (flow_id, step) halt cap bounds producer⇄reviewer re-entry (failure-routing.md)."
     },
     {
       "rule": "control/reclassify-cap",

@@ -697,7 +697,7 @@
                   ]
                 },
                 "omission": {
-                  "description": "The Omitted record. reason ∈ {unavailable (tool_unavailable), timeout (tool_timeout), not_applicable} plus the mandatory_but_unavailable case is recorded via mandatory_but_unavailable=true (high-risk flow whose forced pyreez was absent — verdict still degraded_pass).",
+                  "description": "The Omitted record (shared _defs/Omitted enum). Canonical reason mapping: absent→tool_absent, error→tool_failed, tool_unavailable→unavailable, tool_timeout→timeout, plus not_applicable. reason ∈ {tool_absent, tool_failed, timeout, unavailable, not_applicable}. The mandatory_but_unavailable case is recorded separately via mandatory_but_unavailable=true (high-risk flow whose forced pyreez was absent — verdict still degraded_pass).",
                   "$ref": "./_defs.schema.json#/$defs/Omitted"
                 },
                 "mandatory_but_unavailable": {
@@ -812,13 +812,11 @@
                   ],
                   "properties": {
                     "tool": {
+                      "description": "Only the verdict-blocking GATE tools (firebat/emberdeck). typecheck/tests degrade via the mechanical fallback and pyreez drives degraded_pass — none of those are gate_tool_unavailable blockers.",
                       "type": "string",
                       "enum": [
-                        "typecheck",
-                        "tests",
                         "firebat",
-                        "emberdeck",
-                        "pyreez"
+                        "emberdeck"
                       ]
                     },
                     "omission": {

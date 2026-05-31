@@ -83,7 +83,12 @@ ground_result.status: ok | degraded_pass | escalate
 |---|---|---|---|
 | `ok` | 모든 primary 활동 정상 — bounded·sourced·current 사실 + 명시 unknowns 산출 | 아래 [Output] 전체 (task_subgraph.status=measured) | Investigate 진입 |
 | `degraded_pass` | **ENHANCEMENT-급 결손만** 발생 — primary(ED)는 살아있고, *conditional volatile profile 명령 일부 부재/timeout* 또는 *racing_changes 재시도 후 잔존* 처럼 Investigate가 unknown/risk로 처분 가능한 결손. `degrade_reasons[]` 명시 + 해당 측정은 M3 Omitted 분기 + omitted_fields 기록 | [Output] 전체 + `degrade_reasons` + `omitted_fields` | Investigate 진입 (Investigate가 unknown-disposition matrix로 처분) |
-| `escalate` | **PRIMARY 결손 또는 mechanical error** — ED MCP 부재/error/timeout, input precondition 위반, malformed active_flow_state (→ `failure_origin=ground`); 또는 **step 전체 budget 소진** (→ `failure_origin=cap_exceeded`). Ground가 *자기 일을 못 함* | `escalate_detail: { failure_origin: ground\|cap_exceeded, reason, evidence }` (정상 [Output] 미산출 또는 부분) | **Flow halt**. `failure_origin=ground`→producer⇄reviewer 재진입(5-fail halt cap); `failure_origin=cap_exceeded`→즉시 halt(NO auto-reinvoke) |
+| `escalate` | **PRIMARY 결손 또는 mechanical error** — ED MCP 부재/error/timeout, input precondition 위반, malformed active_flow_state (→ `failure_origin=ground`); 또는 **step 전체 budget 소진** (→ `failure_origin=cap_exceeded`). Ground가 *자기 일을 못 함* | `escalate_detail: { failure_origin: ground\|cap_exceeded, reason, evidence }` + **구조적 envelope는 여전히 존재** (아래 escalate 필드 생존 규칙). `volatile_state`·`freshness`만 drop됨 | **Flow halt**. `failure_origin=ground`→producer⇄reviewer 재진입(5-fail halt cap); `failure_origin=cap_exceeded`→즉시 halt(NO auto-reinvoke) |
+
+**escalate 필드 생존 규칙 (schema escalate `then`과 정합)**: `status=escalate`여도 정상 [Output]이 통째로 사라지는 게 아니다 — '미산출 또는 부분'은 너무 느슨한 표현이다. 정확히는 *구조적 envelope는 여전히 required-present*하고 측정 본문(`volatile_state`, `freshness`)만 required-set에서 빠진다:
+- **여전히 required**: `ground_result`(escalate_detail 포함), `flow_id`, `captured_at`, `schema_version`, `input_refs`, `channel`, `flow_type`, `depth`, `task_subgraph`(ED 부재 시 **Omitted 분기**로 — additionalProperties:false상 통째 부재 불가), `unknowns`(빈 배열 가능), `conflicts`(빈 배열 가능), `verification_proof`(escalate를 증명한 attempted tool_call 포함).
+- **required에서 drop**: `volatile_state`, `freshness` (부재 또는 부분 가능 — 측정 전에 escalate했을 수 있으므로).
+- `degrade_reasons`/`source_manifest`/`active_flow_note`/`omitted_fields`는 평소대로 조건부/optional.
 
 **분기 선택 규칙 (mechanical)**:
 1. input precondition 위반 → `escalate` (`failure_origin=ground`).
@@ -174,6 +179,8 @@ tool/data 부재로 *어떤 schema key를 산출 못 할 때*의 규칙 (Ground 
 - ED 부재로 escalate가 아닌 "ED present인데 god_node 분류 불가" 같은 경우는 발생하지 않는다 — ED present면 god_nodes_in_scope는 measured 분기에 존재하고, ED absent면 escalate다. (R18: god_node interpretation when ED absent → 본 contract에선 ED absent=escalate이므로 god_node 산출 자체가 차단됨)
 
 이 carrier가 없으면 `omitted_fields`를 참조하는 자기 degrade(conditional volatile 부재 등)가 갈 곳이 없었다 — 그 홀을 닫는다. (closes: README schema가 omitted_fields carrier 부재였던 gap)
+
+**M2-only invariant (grammar 미강제)**: `omitted_fields`는 grammar 수준에선 *optional*이다 (schema의 top-level required에 없음 — 아무것도 omit 안 한 ok 출력은 빈/부재 carrier가 합법). "어떤 schema key가 omit됐으면 정확히 1행이 존재하고 비어있지 않아야 한다"는 *키↔행 linkage*는 grammar로 닫을 수 없으므로 **M2 reviewer가 강제한다** (§223 omitted_fields gate). 즉 `degraded_pass` 분기(conditional volatile 부재, `git_state≠repo` head_* omission, unrecognized_flow conditional 필드 omission)는 정의상 키를 omit하므로 M2에서 `omitted_fields` 비어있지 않음이 보장된다 — 단 이는 grammar invariant가 아니라 M2-only invariant다.
 
 ### unknowns.dim FACTUAL tag enum (P6 — 사실 태그만, disposition 토큰 발명 금지)
 

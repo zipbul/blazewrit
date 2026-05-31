@@ -31,6 +31,11 @@
       "check": "M2: assert each tasks[].depends_on entry names an existing tasks[].id."
     },
     {
+      "field": "result(proceed).code_architecture.dependencies[].{from,to,kind}",
+      "rule": "spec.md L128-132 referent rules — `from` is always a module_boundaries[].module; kind=internal `to` resolves to another module_boundaries[].module (referential integrity); kind=external `to` is a package identifier (name@version|name), module-resolve exempt.",
+      "check": "M2: for each dependencies[] edge assert `from` names an existing module_boundaries[].module; when kind=internal assert `to` names another existing module_boundaries[].module; when kind=external assert `to` is a package identifier (name@version|name) and is exempt from module resolution. Grammar cannot do cross-ref; SHAPE stays bare strings."
+    },
+    {
       "field": "based_on.{decide_ref,investigate_ref,ground_ref}",
       "rule": "§5 — cross-step refs are Postgres step_runs row ids, not file paths.",
       "check": "M2: assert each RowRef resolves to an existing step_runs row of the expected upstream step_name (decide/investigate/ground)."
@@ -283,6 +288,11 @@
                   "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Measured" }],
                   "type": "object",
                   "properties": {
+                    "source_tool": {
+                      "$comment": "Pinned provenance — overrides the inherited open SourceTool floor. emberdeck is the only tool that produces a spec card; mirrors the omitted branch which fixes source_tool='emberdeck'.",
+                      "description": "Fixed to 'emberdeck' — the only tool that creates a spec card (create_card). Const overrides the open shared SourceTool floor inherited from Measured.",
+                      "const": "emberdeck"
+                    },
                     "value": {
                       "description": "The emberdeck spec card id created for this spec (intent/spec card the design document's intent card links to).",
                       "type": "string",

@@ -104,6 +104,7 @@ proceed를 *우발적*으로만 도달시켰다. 이 계약은 proceed를 다른
 - `ground_unknowns_addressed` → matrix [unknown-disposition 절](#unknown-disposition-matrix)
 - `sub_flow_identification` (Compound 전용)
 - `triage_mismatch?` (Triage 오류 의심 시 surface — reclassify 트리거; **production rule 아래 명시**)
+- `external_research?` (optional — 외부 리서치 findings; ExternalFinding[] — claim/claim_class/result. [External Research Policy 절](#external-research-policy) 정책 준수; result는 Measured(trust grade) | Omitted(degrade). provenance는 `external_research[].result.provenance`에 기록)
 - `verification_proof`
 - `ed_availability` (ED MCP 가용성 분기 — M3 degrade-as-branch; Measured(ed_snapshot_version) | Omitted; 아래 Failure & degrade handling)
 
@@ -219,7 +220,7 @@ Decide 전용 신호). Ground가 미흡/결손이면 Investigate는 **failure_or
 > **횡단 input-precondition 절** (전 소비자 동일 패턴, Ground의 active_flow_state mechanical-error 패턴
 > 일반화). Investigate는 해석을 시작하기 전에 *필수 upstream 필드의 존재 + 정형*을 assert한다. **진실은
 > assert하지 않는다 — 그건 Verify의 일** (principle 1·3). 결손/기형이면 mechanical error로 escalate한다
-> (failure_origin=upstream). ping-pong은 기존 `(flow_id, step)` 5-누적-fail halt cap이 이미 bound하므로
+> (failure_origin은 실패한 precondition에 따라 `ground` 또는 `triage` — PC1~PC5 표 참조; investigate_error.failure_origin은 ground|triage|investigate 3값만 합법, 'upstream' 같은 umbrella 값 없음). ping-pong은 기존 `(flow_id, step)` 5-누적-fail halt cap이 이미 bound하므로
 > precondition escalation은 안전하다.
 
 **필수 precondition assert (Activity 0, mechanical):**

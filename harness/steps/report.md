@@ -186,10 +186,10 @@ Investigate.findings가 비었거나(Exploration/Retro의 *합법적* outcome) D
 |---|---|---|
 | `review` | 모든 finding에 severity tag. (finding이 *합법적으로* 0개 = clean review) | findings 0 + upstream 정형 → `result=empty_clean`, empty_details(reason="clean: no issues found", evidence) |
 | `retro` | **≥1 action_item** | action_item 0 강제 불가 시: upstream에 학습거리가 *진짜* 없으면 `empty_clean`은 **불가** — Retro는 minimum 1을 요구하므로 Report가 합성할 action_item이 없으면 `result=escalate, failure_origin=decide`(Decide가 followup/학습을 못 냄). 단순 도장 금지 |
-| `exploration` | content 존재 = `body.summary` 비어있지 않음 (no minimum structure) | findings/action_items 0이어도 `body.summary` 있으면 `synthesized`. `body.summary`조차 없으면 `empty_clean`(suggested: reframe) |
-| `spike` | Report 존재 + feasibility_verdict (go/no_go/conditional) | findings 0이어도 verdict는 *필수* — verdict 없으면 `escalate`(failure_origin=implement). verdict 있으면 `synthesized` |
+| `exploration` | content 존재 = `body.summary` 비어있지 않음 (no minimum structure) | findings/action_items 0이어도 `body.summary` 있으면 `synthesized`. `body.summary`조차 없으면 `empty_clean`(suggested: reframe_request) |
+| `spike` | Report 존재 + feasibility_verdict (go/no_go/conditional) | findings 0이어도 verdict는 *필수* — verdict 없으면 `escalate`(failure_origin=implement). verdict 있으면 `synthesized`. **report_type=spike는 empty_clean 케이스가 없다** (verdict-or-escalate): verdict이 있으면 synthesized, 없으면 escalate이므로 feasibility_verdict 의무는 `synthesized`에만 게이팅된다 |
 | `plan_standalone` | `task_list`(machine) + design document(`body.sections`) + next step(`body.next_step`) 모두 존재 | Decide(Design) 산출이 정형 존재해야 — 부재면 `escalate, failure_origin=decide` |
-| `compound` | top-level summary(`body.summary`) + `sub_flow_summaries`(machine 집계) + sub_flow_refs(`based_on.sub_flow_refs`) | sub_flow_results 부재/기형이면 `escalate, failure_origin=upstream`. 모든 sub-flow가 abandoned/no_op이어도 그 사실 자체가 합법적 summary → `body.summary`에 명시하고 `synthesized` |
+| `compound` | top-level summary(`body.summary`) + `sub_flow_summaries`(machine 집계) + sub_flow_refs(`based_on.sub_flow_refs`) | sub_flow_results 부재/기형이면 `escalate, failure_origin=upstream`. 모든 sub-flow가 abandoned/suspended이어도 그 사실 자체가 합법적 summary → `body.summary`에 명시하고 `synthesized` |
 
 ### empty_clean 산출 모양
 

@@ -153,6 +153,64 @@
               }
             }
           }
+        },
+        {
+          "$comment": "SYNTHESIZED-ONLY per-report_type minimum-content obligations. These gate result=synthesized ONLY (README L183); empty_clean is EXEMPT (satisfied by empty_details alone). retro ⇒ >=1 action_item; spike ⇒ feasibility_verdict; plan_standalone ⇒ task_list + body.sections + body.next_step; compound ⇒ sub_flow_summaries.",
+          "if": {
+            "properties": { "result": { "const": "synthesized" } },
+            "required": ["result"]
+          },
+          "then": {
+            "allOf": [
+              {
+                "$comment": "retro synthesized ⇒ >=1 action item (the sole action-item floor).",
+                "if": {
+                  "properties": { "report_type": { "const": "retro" } },
+                  "required": ["report_type"]
+                },
+                "then": {
+                  "properties": {
+                    "action_items": { "minItems": 1 }
+                  }
+                }
+              },
+              {
+                "$comment": "spike synthesized ⇒ feasibility_verdict (go/no_go/conditional). A spike with no verdict ESCALATES (README L190), so it is never empty_clean.",
+                "if": {
+                  "properties": { "report_type": { "const": "spike" } },
+                  "required": ["report_type"]
+                },
+                "then": {
+                  "required": ["feasibility_verdict"]
+                }
+              },
+              {
+                "$comment": "plan_standalone synthesized ⇒ task_list (machine) + body.sections + body.next_step (human-readable); both shapes coexist (cross-cutting decision 5).",
+                "if": {
+                  "properties": { "report_type": { "const": "plan_standalone" } },
+                  "required": ["report_type"]
+                },
+                "then": {
+                  "required": ["task_list"],
+                  "properties": {
+                    "body": {
+                      "required": ["summary", "sections", "next_step"]
+                    }
+                  }
+                }
+              },
+              {
+                "$comment": "compound synthesized ⇒ sub_flow_summaries (machine aggregation); coexists with body.summary + based_on.sub_flow_refs.",
+                "if": {
+                  "properties": { "report_type": { "const": "compound" } },
+                  "required": ["report_type"]
+                },
+                "then": {
+                  "required": ["sub_flow_summaries"]
+                }
+              }
+            ]
+          }
         }
       ],
       "oneOf": [
@@ -166,17 +224,16 @@
           "required": ["report_type"]
         },
         {
-          "$comment": "RETRO — process observations; reviewer requires >=1 action item (the sole action-item floor).",
+          "$comment": "RETRO — process observations. The >=1 action-item floor is gated to result=synthesized (see the synthesized-only allOf below); empty_clean retro is EXEMPT (it is satisfied by empty_details), though per README L188 a retro with no learnings normally ESCALATES rather than emitting empty_clean.",
           "title": "report_type=retro",
           "additionalProperties": true,
           "properties": {
-            "report_type": { "const": "retro" },
-            "action_items": { "minItems": 1 }
+            "report_type": { "const": "retro" }
           },
           "required": ["report_type"]
         },
         {
-          "$comment": "EXPLORATION — 'content over form' (agent.md L41). Minimum-bar = body.summary non-empty; action items NOT required (minItems 0).",
+          "$comment": "EXPLORATION — 'content over form' (agent.md L41). Minimum-bar = body.summary non-empty (gated to synthesized via the outer body.summary if/then); action items NOT required.",
           "title": "report_type=exploration",
           "additionalProperties": true,
           "properties": {
@@ -186,34 +243,31 @@
           "required": ["report_type"]
         },
         {
-          "$comment": "SPIKE — feasibility assessment; MUST end with a go/no_go/conditional verdict (reviewer Spike criterion). feasibility_verdict required only on this branch; satisfied by the verdict (no action-item floor).",
+          "$comment": "SPIKE — feasibility assessment; on result=synthesized MUST end with a go/no_go/conditional verdict (reviewer Spike criterion). feasibility_verdict is required only when result=synthesized (see the synthesized-only allOf below); a spike has effectively no empty_clean case (README L190: verdict-or-escalate), so the obligation is gated to synthesized per cross-cutting decision 5.",
           "title": "report_type=spike",
           "additionalProperties": true,
           "properties": {
             "report_type": { "const": "spike" }
           },
-          "required": ["report_type", "feasibility_verdict"]
+          "required": ["report_type"]
         },
         {
-          "$comment": "PLAN_STANDALONE — Decide(Design)→Report→Verify terminal Design doc. Carries BOTH the machine-consumable task_list (R19, verbatim/refined from Decide, deferral forbidden — reviewer criterion 9) AND the human-readable body.sections (design document) + body.next_step (cross-cutting decision 5). task_list, body.sections, body.next_step all required on this branch.",
+          "$comment": "PLAN_STANDALONE — Decide(Design)→Report→Verify terminal Design doc. On result=synthesized carries BOTH the machine-consumable task_list (R19, verbatim/refined from Decide, deferral forbidden — reviewer criterion 9) AND the human-readable body.sections (design document) + body.next_step (cross-cutting decision 5). task_list, body.sections, body.next_step are required only when result=synthesized (see the synthesized-only allOf below); empty_clean is EXEMPT (README L183).",
           "title": "report_type=plan_standalone",
           "additionalProperties": true,
           "properties": {
-            "report_type": { "const": "plan_standalone" },
-            "body": {
-              "required": ["summary", "sections", "next_step"]
-            }
+            "report_type": { "const": "plan_standalone" }
           },
-          "required": ["report_type", "task_list"]
+          "required": ["report_type"]
         },
         {
-          "$comment": "COMPOUND — top-level summary aggregating sub-flow results (README L7). Carries BOTH the machine-consumable sub_flow_summaries AND body.summary + based_on.sub_flow_refs provenance. No action-item floor (all-abandoned sub-flows still yield a legitimate summary).",
+          "$comment": "COMPOUND — top-level summary aggregating sub-flow results (README L7). On result=synthesized carries BOTH the machine-consumable sub_flow_summaries AND body.summary + based_on.sub_flow_refs provenance. sub_flow_summaries is required only when result=synthesized (see the synthesized-only allOf below); empty_clean is EXEMPT (README L183). No action-item floor.",
           "title": "report_type=compound",
           "additionalProperties": true,
           "properties": {
             "report_type": { "const": "compound" }
           },
-          "required": ["report_type", "sub_flow_summaries"]
+          "required": ["report_type"]
         }
       ]
     },

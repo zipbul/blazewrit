@@ -6,14 +6,21 @@
 
   "type": "object",
   "additionalProperties": false,
-  "required": ["input", "result", "tests_written_count", "red_confirmed_count", "based_on", "unverified"],
+  "required": ["input", "tests_written_count", "red_confirmed_count", "based_on", "unverified"],
 
   "allOf": [
     {
-      "$comment": "P1: behavior-test flows must carry a non-empty primary behavior-test block. When result ∈ {red, unexpected_green}, at least one of tests_added / coverage_added must be present and non-empty (derived per-test status drives result). measured/no_op flows fill other blocks instead.",
+      "$comment": "ESCALATE EXCLUSIVITY (prose L74: 'escalate는 result enum 값이 아니다 ... 성공 result 분기와 배타적이다'). escalate is a first-class TERMINAL branch mutually exclusive with the success result verdict. When `escalate` is ABSENT, `result` is required (the success/no_op verdict path); when `escalate` is PRESENT, the precondition/in-scope-failure escalation routes purely on `escalate` and `result` is NOT required (it may be omitted entirely — there is no success result and no success output block).",
+      "if": { "not": { "required": ["escalate"] } },
+      "then": { "required": ["result"] }
+    },
+    {
+      "$comment": "P1: behavior-test flows must carry a non-empty primary behavior-test block. When result ∈ {red, unexpected_green} AND escalate is absent, at least one of tests_added / coverage_added must be present and non-empty (derived per-test status drives result). measured/no_op flows fill other blocks instead. Guarded by absence of escalate: on escalate these primary-block obligations are SUPPRESSED (escalate is exclusive with the success result blocks).",
       "if": {
-        "properties": { "result": { "enum": ["red", "unexpected_green"] } },
-        "required": ["result"]
+        "allOf": [
+          { "properties": { "result": { "enum": ["red", "unexpected_green"] } }, "required": ["result"] },
+          { "not": { "required": ["escalate"] } }
+        ]
       },
       "then": {
         "anyOf": [
@@ -23,10 +30,12 @@
       }
     },
     {
-      "$comment": "result=measured (Performance/Migration) requires the measuring primary block.",
+      "$comment": "result=measured (Performance/Migration) requires the measuring primary block — suppressed on escalate.",
       "if": {
-        "properties": { "result": { "const": "measured" } },
-        "required": ["result"]
+        "allOf": [
+          { "properties": { "result": { "const": "measured" } }, "required": ["result"] },
+          { "not": { "required": ["escalate"] } }
+        ]
       },
       "then": {
         "anyOf": [
@@ -36,10 +45,12 @@
       }
     },
     {
-      "$comment": "result=no_op requires no_op_details (legitimately-zero output verdict, not escalate).",
+      "$comment": "result=no_op requires no_op_details (legitimately-zero output verdict, not escalate) — suppressed on escalate.",
       "if": {
-        "properties": { "result": { "const": "no_op" } },
-        "required": ["result"]
+        "allOf": [
+          { "properties": { "result": { "const": "no_op" } }, "required": ["result"] },
+          { "not": { "required": ["escalate"] } }
+        ]
       },
       "then": { "required": ["no_op_details"] }
     }
@@ -75,7 +86,7 @@
     },
 
     "escalate": {
-      "$comment": "Mechanical-error / in-scope-failure terminal carrier — present INSTEAD of a result verdict path's success blocks (preconditions PC, test-runner absent, migration dry_run failed|partial, caps mid-activity). failure_origin reuses _defs FailureOrigin restricted to the Test-reachable origins {spec, decide, test, cap_exceeded}. NOT request_upstream_deepen (Decide-only, principle 2). When `escalate` is present the success result blocks (tests_added/coverage_added/profile/migration_validation) may be omitted; `result` still records the closest verdict context if derivable, else the orchestrator routes purely on `escalate`.",
+      "$comment": "Mechanical-error / in-scope-failure terminal carrier — present INSTEAD of a result verdict path's success blocks (preconditions PC, test-runner absent, migration dry_run failed|partial, caps mid-activity). failure_origin reuses _defs FailureOrigin restricted to the Test-reachable origins {spec, decide, test, cap_exceeded}. NOT request_upstream_deepen (Decide-only, principle 2). EXCLUSIVE with success: when `escalate` is present (a) `result` is NOT required (root allOf only requires `result` when escalate is absent) and (b) the three conditional primary-block requirements (tests_added/coverage_added for red|unexpected_green, profile|migration_validation for measured, no_op_details for no_op) are SUPPRESSED — the orchestrator routes purely on `escalate`.",
       "description": "OPTIONAL escalate carrier for Test's in-scope failures (mechanical errors): missing/malformed upstream (failure_origin=spec|decide), test-runner absent or migration dry_run failed|partial (failure_origin=test), or caps blown mid-activity (failure_origin=cap_exceeded). reason + evidence (ref or file:line) diagnose it. Routed out-of-band by the orchestrator; never via request_upstream_deepen.",
       "type": "object",
       "additionalProperties": false,
@@ -426,7 +437,7 @@
     },
 
     "based_on": {
-      "$comment": "§5 — cross-step refs are Postgres RowRefs, never file paths. Test requires its driving input ref (spec_ref XOR decide_ref, mirrored in `input`) and may carry optional enrichment refs (investigate_ref for edge-case priority, ground_ref for volatile baseline).",
+      "$comment": "§5 — cross-step refs are Postgres RowRefs, never file paths. Test requires its driving input ref (spec_ref XOR decide_ref, mirrored in `input`) and may carry optional enrichment refs (investigate_ref for edge-case priority, ground_ref for volatile baseline). NOTE: the exactly-one-of (spec_ref XOR decide_ref) is grammar-enforced on the `input` discriminant (input_kind oneOf), NOT here — the shared BasedOn $def is intentionally all-optional (it also carries enrichment refs); M2 cross-checks that based_on's driving ref mirrors input.input_kind. The loose BasedOn $ref is therefore deliberate, not drift.",
       "description": "§5 BASED-ON bundle. RowRefs (Postgres step_runs rows) for the upstream steps Test consumed — NEVER file paths. The driving input (spec_ref or decide_ref) mirrors the `input` discriminant. Optional enrichment: investigate_ref (risk_surface for edge-case priority), ground_ref (volatile_state pass/fail baseline). x-validator-contract (M2): the present spec_ref/decide_ref matches `input.input_kind` and the orchestrator's chain.",
       "$ref": "./_defs.schema.json#/$defs/BasedOn"
     },

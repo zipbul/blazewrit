@@ -83,7 +83,7 @@ Hook이 **강제 못 하는 것 (정직한 floor)**: 섹션이 *진실하고 통
 
 - terminal `result = reflect_incomplete` 반환 + `incomplete_details: { failing_sections: [...], iterations_used: 3, reason }`.
 - 이는 Verify의 RETRY_EXHAUSTED와 *유사한 cap-halt* (decide/failure-routing.md의 cap 패턴 재사용 — 새 메커니즘 발명 아님): Reflect는 학습을 *위조하지 않고* "추출 실패"를 명시적 terminal로 보고.
-- Tier 1 raw는 *있는 만큼* archive (부분 학습 보존), 단 status=`incomplete`로 태그 → Tier 2 promotion 후보에서 제외 (filler가 rule로 승격되는 것 방지).
+- Tier 1 raw는 *있는 만큼* archive (부분 학습 보존), 단 status=`incomplete`로 태그 → Tier 2 promotion 후보에서 제외 (filler가 rule로 승격되는 것 방지). **부분 보존의 schema 표현**: substance floor를 통과한 섹션만 그 섹션 필드에 emit되고, *실패한 섹션은 비거나 filler 배열로 emit되지 않고 아예 OMIT된다* (schema는 hollow/empty 섹션을 표현할 수 없다 — `ReflectionSection`은 `minItems:1` + Finding `minLength:24`이라 빈/자리표시 배열을 emit할 수 없으므로, 실패 섹션은 생략이 유일한 표현이고 `incomplete_details.failing_sections`가 *어느 섹션이 생략됐는지*를 명명한다). 즉 reflect_incomplete에서 4 섹션은 unconditionally-required가 아니며, 통과한 만큼만 present.
 - escalate는 *아님* — Reflect는 flow를 routing하지 않는다 (Boundary). `reflect_incomplete`는 학습 추출 자체의 verdict이지 upstream 결손 신호가 아님. orchestrator는 이를 기록만 하고 flow를 이미 종료된 상태로 둔다.
 
 ## Result Enum & Branches (P1 — 성공/주요 출력 명시 선언)

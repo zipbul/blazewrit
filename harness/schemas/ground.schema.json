@@ -432,13 +432,11 @@
       }
     },
     "freshness": {
-      "$comment": "racing_changes is a bool the model SETS; the M2 validator asserts it == (git_head_start != git_head_end after the 1 retry). head_start/head_end mirror volatile_state.git.",
-      "description": "Freshness/racing-changes metadata. ed_snapshot_version + git_head_start are reviewer-required. racing_changes is set true when head_start ≠ head_end after the single capture retry. x-validator-contract (M2): racing_changes == (git_head_start != git_head_end); ed_snapshot_version matches task_subgraph.value.ed_snapshot_version when the subgraph is measured.",
+      "$comment": "racing_changes is a bool the model SETS; the M2 validator asserts it == (git_head_start != git_head_end after the 1 retry). head_start/head_end mirror volatile_state.git and exist ONLY when git_state=repo — so they are NOT in the base required set; the top-level conditional allOf (git_state=repo → require git_head_start/git_head_end) is the sole source of their requiredness. On git_state ∈ {no_repo,empty_repo,git_unavailable} they are omitted (+ omitted_fields row) and racing_changes=false. racing_changes is ALWAYS present.",
+      "description": "Freshness/racing-changes metadata. racing_changes is ALWAYS present; git_head_start/git_head_end are present (and required) ONLY when volatile_state.git.git_state=repo — when git_state≠repo they are omitted (+ omitted_fields row) and racing_changes=false. ed_snapshot_version is reviewer-required when ED was measured. racing_changes is set true when head_start ≠ head_end after the single capture retry. x-validator-contract (M2): racing_changes == (git_head_start != git_head_end) when git_state=repo, else false; ed_snapshot_version matches task_subgraph.value.ed_snapshot_version when the subgraph is measured.",
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "git_head_start",
-        "git_head_end",
         "racing_changes"
       ],
       "properties": {
