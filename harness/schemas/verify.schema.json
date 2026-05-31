@@ -5,6 +5,71 @@
   "description": "Verify = FLOW-LEVEL goal verifier (NOT a step reviewer; no reviewer of its own — internal multi-pass IS the quality gate). Runs in every flow. OUTPUT is a discriminated union on `result`: pass | degraded_pass | fail | blocked | retry_exhausted (HARNESS_FLOW_REVIEW G5 adds degraded_pass|blocked to the README's pass|fail|retry_exhausted for the tool-degrade case). TARGET RUNTIME: grammar-constrained generation — M1 enforces SHAPE/enum/required only. Truth-bearing fields (CountClaim value↔raw_stdout, VerifyProbe re-execution, sha256 re-hash, declared_next_step==expected_next_step, pyreez disagree==self-misjudgment) are closed by SIBLING M2 validator_contracts listed in this step's manifest, NOT by any keyword here. Mechanical-pass tool fields (typecheck/tests/firebat/emberdeck/pyreez) reuse the shared DegradableMeasurement (M3) + CountClaim (R23) because those tools can be ABSENT/FAIL/timeout — absence is a first-class schema BRANCH, never null/placeholder (R22).",
   "type": "object",
   "unevaluatedProperties": false,
+  "$defs": {
+    "SourceVersion": {
+      "description": "Freshness anchor for race detection / Stale-ED-2nd-attempt. Mirrors Ground.task_subgraph.ed_snapshot_version (a content hash). NOT a free-filled flow_id/verified_at envelope — it is the measured freshness hash the stale-2nd-attempt and race-detection logic compare against. Flow/step correlation otherwise lives in the top-level `based_on` RowRef bundle (§5).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ed_snapshot_version"
+      ],
+      "properties": {
+        "ed_snapshot_version": {
+          "description": "The ed_snapshot_version hash carried from Ground.task_subgraph, re-checked for staleness/races.",
+          "$ref": "./_defs.schema.json#/$defs/Sha256"
+        }
+      }
+    },
+    "EscalationCause": {
+      "description": "WHY Verify could not produce a clean producer-attributed verdict (blocked/retry_exhausted). Carries cap/self-misjudgment/gate/precondition semantics so the step-attribution failure_origin enum stays clean (field-type consistency). verify_self_misjudgment/gate_tool_unavailable/stale_2nd_attempt/input_precondition_fault belong to `blocked`; retry_cap/cap_exceeded belong to `retry_exhausted`.",
+      "type": "string",
+      "enum": [
+        "verify_self_misjudgment",
+        "gate_tool_unavailable",
+        "stale_2nd_attempt",
+        "input_precondition_fault",
+        "retry_cap",
+        "cap_exceeded"
+      ]
+    },
+    "P0PostStabilization": {
+      "description": "P0 (bugfix-p0) only, on result ∈ {pass, degraded_pass}. Verify SIGNALS a recommended follow-up when complexity_signal was high or a god_node was in scope; it does NOT queue/create the flow (orchestrator queues — Verify-signals-only boundary). Records the SUGGESTED follow-up.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "triggered_by",
+        "suggested_followup",
+        "evidence"
+      ],
+      "properties": {
+        "triggered_by": {
+          "description": "Which signal fired the recommendation. high_complexity = Triage.complexity_signal was high; god_node = Ground.task_subgraph.god_nodes_in_scope non-empty.",
+          "type": "string",
+          "enum": [
+            "high_complexity",
+            "god_node"
+          ]
+        },
+        "suggested_followup": {
+          "description": "The recommended follow-up flow (a SIGNAL — orchestrator decides actual queuing/execution).",
+          "type": "string",
+          "enum": [
+            "bugfix_normal",
+            "retro"
+          ]
+        },
+        "suggested_depth": {
+          "description": "Recommended depth for the follow-up (deep when suggested_followup=bugfix_normal).",
+          "$ref": "./_defs.schema.json#/$defs/Depth"
+        },
+        "evidence": {
+          "description": "god_node ref or complexity ref backing the recommendation.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
   "required": [
     "result",
     "based_on",
@@ -14,7 +79,7 @@
   ],
   "properties": {
     "result": {
-      "description": "DISCRIMINANT (top-level oneOf). pass = flow goal achieved, no tool degrade. degraded_pass = goal achieved but one or more mechanical-pass tools (firebat/emberdeck/pyreez/typecheck/test) were ABSENT/FAILED so the verdict rests on a reduced evidence set (G5). fail = a step produced a wrong result; routes via failure_origin. blocked = a mechanical-pass tool the verdict DEPENDS ON is unavailable AND its absence is verdict-blocking (cannot even degrade-pass; G5). retry_exhausted = max iterations hit → flow halt + escalate, Reflect classifies `abandoned` (NO DONE_WITH_CONCERNS type exists).",
+      "description": "DISCRIMINANT (top-level oneOf). pass = flow goal achieved, no tool degrade. degraded_pass = goal achieved but the pyreez cross-verify (ENHANCEMENT) leg was OMITTED (absent/error/timeout) so the verdict rests on the internal multi-pass alone (G5/P5); pyreez-specific — gate-tool failure does NOT produce degraded_pass. fail = a PRODUCER step produced a wrong result; routes via failure_origin (step-attribution only). blocked = Verify cannot produce its own verdict: gate-tool (firebat/emberdeck) mechanical error/timeout, stale-2nd-attempt, input-precondition fault, OR self-misjudgment (pyreez disagreement / adversarial-overturns / post_hoc_signal / unattributable_goal_failure) → carries the escalation object with failure_origin∈{verify,ground}. retry_exhausted = max iterations / cap hit → flow halt + escalate, Reflect classifies `abandoned` (NO DONE_WITH_CONCERNS type exists).",
       "type": "string",
       "enum": [
         "pass",
@@ -386,7 +451,7 @@
           }
         },
         "pass4_pyreez_cross_verification": {
-          "description": "Pass 4 (both flow_kinds, R5). pyreez multi-model cross-verification for high-risk flows. TOOL-DEPENDENT (pyreez can be absent) → DegradableMeasurement: Omitted{unavailable} when pyreez not attached, Omitted{not_applicable} on a non-high-risk flow. Measured.value carries the CrossVerifyFlag result; cross_verify_result='disagree' (opposite verdict) is the self-misjudgment trigger (R2/R5) → failure_origin=verify.",
+          "description": "Pass 4 (both flow_kinds, R5). pyreez multi-model cross-verification for high-risk flows. TOOL-DEPENDENT (pyreez can be absent) → DegradableMeasurement: Omitted{unavailable} when pyreez not attached, Omitted{not_applicable} on a non-high-risk flow. Measured.value carries the CrossVerifyFlag result; cross_verify_result='disagree' (opposite verdict) is the self-misjudgment trigger (R2/R5) → result=blocked with escalation.failure_origin=verify (NOT a fail — pyreez disagreement makes Verify distrust its OWN verdict, so it blocks rather than attributing to a producer). pyreez ABSENCE (not disagreement) drives degraded_pass instead.",
           "oneOf": [
             {
               "type": "object",
@@ -424,7 +489,7 @@
                       "type": "boolean"
                     },
                     "cross_verify_result": {
-                      "description": "pyreez verdict vs primary passes. 'disagree' = opposite verdict = self-misjudgment signal (R2) → fail{failure_origin:verify}. From shared CrossVerifyFlag.",
+                      "description": "pyreez verdict vs primary passes. 'disagree' = opposite verdict = self-misjudgment signal (R2) → blocked{escalation.failure_origin:verify}. From shared CrossVerifyFlag.",
                       "type": "string",
                       "enum": [
                         "agree",
@@ -445,7 +510,7 @@
       }
     },
     "self_misjudgment_check": {
-      "description": "R2 self-misjudgment detector. Verify suspects its OWN verdict when: (a) pyreez cross-verify gives the OPPOSITE verdict; (b) a Pass 3 adversarial finding overturns Pass 1 mechanical; (c) a post-hoc external signal (user reject / downstream failure). If suspected ⇒ the result MUST be `fail` with failure_origin='verify' (handled in the fail branch's escalate=true / no auto-reinvoke). This object records WHY (auditable), not the routing.",
+      "description": "R2 self-misjudgment detector. Verify suspects its OWN verdict when: (a) pyreez cross-verify gives the OPPOSITE verdict; (b) a Pass 3 adversarial finding overturns Pass 1 mechanical; (c) a post-hoc external signal (user reject / downstream failure); (d) an unattributable_goal_failure (diffuse defect with no step locus). If suspected ⇒ the result MUST be `blocked` with the escalation object carrying failure_origin='verify' (escalate=true / NEEDS_CONTEXT / no auto-reinvoke — prevents infinite self-route). Self-misjudgment is NOT a `fail` (a fail attributes to a producer step); Verify distrusting its own verdict cannot honestly attribute to a producer, so it blocks. This object records WHY (auditable), not the routing.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -453,7 +518,7 @@
       ],
       "properties": {
         "suspected": {
-          "description": "true ⇒ Verify distrusts its own verdict; the fail branch MUST carry failure_origin='verify' and escalate (NEEDS_CONTEXT, no auto-reinvoke — prevents infinite self-route).",
+          "description": "true ⇒ Verify distrusts its own verdict; the result MUST be `blocked` and the escalation object MUST carry failure_origin='verify' with escalate=true (NEEDS_CONTEXT, no auto-reinvoke — prevents infinite self-route).",
           "type": "boolean"
         },
         "triggers": {
@@ -533,7 +598,7 @@
       "then": {
         "properties": {
           "failure": {
-            "description": "FAIL payload. Routing record the orchestrator reads.",
+            "description": "FAIL payload. Routing record the orchestrator reads. A `fail` attributes the defect to a PRODUCER step (triage..report or 'multiple'); it NEVER carries 'verify' (self-misjudgment is `blocked`, not fail) and NEVER 'cap_exceeded' (cap is `retry_exhausted`). Flow correlation is the top-level `based_on` RowRef bundle — this payload does not free-fill flow_id/schema_version/verified_at (§5).",
             "type": "object",
             "additionalProperties": false,
             "required": [
@@ -544,8 +609,19 @@
             ],
             "properties": {
               "failure_origin": {
-                "description": "WHICH step the failure is attributed to (shared FailureOrigin enum). Drives the produce⇄review re-entry table. 'verify' = self-misjudgment (no auto-reinvoke). 'cap_exceeded' = global flow_caps blown (immediate halt). 'multiple' = several bad steps (route earliest first). 'report' valid only on non-code flows.",
-                "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+                "description": "WHICH PRODUCER step the failure is attributed to. STEP-ATTRIBUTION enum only — a strict subset of _defs FailureOrigin that EXCLUDES the control values 'verify' (self-misjudgment routes to `blocked`) and 'cap_exceeded' (routes to `retry_exhausted`). cap/self-misjudgment causes are carried by the escalation/exhaustion `cause` field, NOT by polluting this step-attribution enum (field-type consistency). 'multiple' = several bad steps (route earliest first). 'report' valid only on non-code flows. Drives the produce⇄review re-entry table.",
+                "type": "string",
+                "enum": [
+                  "triage",
+                  "ground",
+                  "investigate",
+                  "decide",
+                  "spec",
+                  "test",
+                  "implement",
+                  "report",
+                  "multiple"
+                ]
               },
               "reason": {
                 "description": "Specific issue description (the routing reason).",
@@ -558,16 +634,22 @@
                 "minLength": 1
               },
               "escalate": {
-                "description": "true ⇒ NEEDS_CONTEXT escalation, NO auto-reinvoke. MUST be true when failure_origin∈{verify, cap_exceeded} (R2 anti-infinite-self-route + cap halt). An M2 validator_contract asserts this coupling.",
+                "description": "true ⇒ NEEDS_CONTEXT escalation, NO auto-reinvoke. For a fail this is normally false (the orchestrator re-enters the attributed producer's produce⇄review loop). An M2 validator_contract asserts the routing coupling.",
                 "type": "boolean"
+              },
+              "source_version": {
+                "description": "Freshness correlation — Ground.task_subgraph.ed_snapshot_version mirrored for race detection (homologous to pass/blocked source_version). Optional.",
+                "$ref": "#/$defs/SourceVersion"
               },
               "earliest_step": {
                 "description": "When failure_origin='multiple', the earliest problematic step to route to first (shared StepName enum). Required by the M2 validator when failure_origin='multiple'.",
                 "$ref": "./_defs.schema.json#/$defs/StepName"
               },
               "reclassify_count": {
-                "description": "When failure_origin='triage', how many reclassify cycles have occurred (cap 3). R23 measured count.",
-                "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                "description": "When failure_origin='triage', how many reclassify cycles have occurred (cap 3). An internal orchestrator-tracked cycle counter — a plain bounded integer, NOT a CountClaim (there is no command/stdout to hash).",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
               }
             }
           }
@@ -596,7 +678,7 @@
             "minLength": 1
           },
           "degraded_tools": {
-            "description": "G5. Which mechanical-pass tools were Omitted, so the reduced-confidence verdict is auditable. Each entry names the tool and the Omitted reason. MUST be non-empty (degraded_pass means at least one tool degraded).",
+            "description": "G5. The degraded_pass branch is PYREEZ-SPECIFIC: it is reached ONLY when the pyreez cross-verify leg was OMITTED (the enhancement tool was absent/error/timeout) and all other passes passed (Multi-pass aggregation rule 3). Gate-tool (firebat/emberdeck) mechanical error routes to `blocked`, not here; their construction-absence is a fallback INSIDE the mechanical leg, not a degraded_pass driver. So `tool` is restricted to pyreez. Each entry names the tool and the Omitted reason. MUST be non-empty.",
             "type": "array",
             "minItems": 1,
             "items": {
@@ -610,18 +692,27 @@
                 "tool": {
                   "type": "string",
                   "enum": [
-                    "typecheck",
-                    "tests",
-                    "firebat",
-                    "emberdeck",
                     "pyreez"
                   ]
                 },
                 "omission": {
+                  "description": "The Omitted record. reason ∈ {unavailable (tool_unavailable), timeout (tool_timeout), not_applicable} plus the mandatory_but_unavailable case is recorded via mandatory_but_unavailable=true (high-risk flow whose forced pyreez was absent — verdict still degraded_pass).",
                   "$ref": "./_defs.schema.json#/$defs/Omitted"
+                },
+                "mandatory_but_unavailable": {
+                  "description": "true ⇒ this was a high-risk flow where pyreez cross-verify was MANDATORY but the tool was absent. Distinguishes from a low-risk legitimately-omitted leg; the verdict is degraded_pass either way (mandatory means try-obligation, not success-precondition — P5).",
+                  "type": "boolean"
                 }
               }
             }
+          },
+          "source_version": {
+            "description": "Freshness anchor mirrored from Ground.task_subgraph.ed_snapshot_version (race detection). Optional.",
+            "$ref": "#/$defs/SourceVersion"
+          },
+          "p0_post_stabilization": {
+            "$comment": "Shared with the PASS branch — P0 follow-up SIGNAL is emitted on result ∈ {pass, degraded_pass}.",
+            "$ref": "#/$defs/P0PostStabilization"
           }
         },
         "required": [
@@ -649,24 +740,7 @@
             "minLength": 1
           },
           "p0_post_stabilization": {
-            "description": "P0 (bugfix-p0) only. On PASS, auto-queue a follow-up flow when complexity_signal was high or a god_node was detected. Records the auto-queued follow-up.",
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "queue_followup"
-            ],
-            "properties": {
-              "queue_followup": {
-                "type": "boolean"
-              },
-              "followup_kind": {
-                "type": "string",
-                "enum": [
-                  "bugfix_normal_deep",
-                  "retro"
-                ]
-              }
-            }
+            "$ref": "#/$defs/P0PostStabilization"
           }
         },
         "required": [
@@ -687,43 +761,81 @@
       },
       "then": {
         "properties": {
-          "blocked_on": {
-            "description": "G5. The verdict-blocking tool(s) and why their absence cannot be degraded around.",
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "tool",
-                "omission",
-                "why_verdict_blocking"
-              ],
-              "properties": {
-                "tool": {
-                  "type": "string",
-                  "enum": [
-                    "typecheck",
-                    "tests",
-                    "firebat",
-                    "emberdeck",
-                    "pyreez"
-                  ]
-                },
-                "omission": {
-                  "$ref": "./_defs.schema.json#/$defs/Omitted"
-                },
-                "why_verdict_blocking": {
-                  "description": "Why a degraded_pass is NOT acceptable without this tool (the verdict structurally depends on it).",
-                  "type": "string",
-                  "minLength": 1
+          "escalation": {
+            "description": "BLOCKED payload — Verify cannot produce its own verdict. Covers ALL non-clean-fail blocked causes: self-misjudgment, gate-tool mechanical error/timeout, stale-2nd-attempt, input-precondition fault. NEEDS_CONTEXT escalation; orchestrator does NOT auto-reinvoke a failure_origin=verify. Flow correlation is the top-level `based_on` RowRef bundle (§5) — this object does not free-fill flow_id/schema_version/verified_at.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "cause",
+              "reason",
+              "evidence"
+            ],
+            "properties": {
+              "cause": {
+                "description": "Why Verify is blocked. blocked uses {verify_self_misjudgment, gate_tool_unavailable, stale_2nd_attempt, input_precondition_fault}. The cap causes (retry_cap/cap_exceeded) belong to `retry_exhausted`, not here.",
+                "$ref": "#/$defs/EscalationCause"
+              },
+              "failure_origin": {
+                "description": "Optional STEP-ID locus of the block — ONLY {verify, ground}: verify = self-misjudgment (pyreez disagreement / adversarial-overturns / post_hoc_signal / unattributable_goal_failure); ground = stale_2nd_attempt. Omitted for gate_tool_unavailable / input_precondition_fault (no producer-step attribution). Never a cause value (field-type consistency).",
+                "type": "string",
+                "enum": [
+                  "verify",
+                  "ground"
+                ]
+              },
+              "reason": {
+                "description": "Specific block reason (e.g. firebat_unavailable, upstream_chain_malformed, invalid_flow_type, unattributable_goal_failure).",
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "description": "file:line or artifact reference backing the block. RowRef when pointing at an upstream step output (§5).",
+                "type": "string",
+                "minLength": 1
+              },
+              "source_version": {
+                "description": "Freshness anchor — required-in-spirit for stale_2nd_attempt (the stale hash that triggered the block). Optional otherwise.",
+                "$ref": "#/$defs/SourceVersion"
+              },
+              "blocked_on": {
+                "description": "G5. For cause=gate_tool_unavailable: the verdict-blocking gate tool(s) (firebat/emberdeck) and why their absence cannot be degraded around. Empty/absent for non-tool block causes.",
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "tool",
+                    "omission",
+                    "why_verdict_blocking"
+                  ],
+                  "properties": {
+                    "tool": {
+                      "type": "string",
+                      "enum": [
+                        "typecheck",
+                        "tests",
+                        "firebat",
+                        "emberdeck",
+                        "pyreez"
+                      ]
+                    },
+                    "omission": {
+                      "$ref": "./_defs.schema.json#/$defs/Omitted"
+                    },
+                    "why_verdict_blocking": {
+                      "description": "Why a degraded_pass is NOT acceptable without this tool (the verdict structurally depends on it).",
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
                 }
               }
             }
           }
         },
         "required": [
-          "blocked_on"
+          "escalation"
         ]
       }
     },
@@ -741,23 +853,39 @@
       "then": {
         "properties": {
           "exhaustion": {
-            "description": "RETRY_EXHAUSTED payload → flow halt + escalate, Reflect → `abandoned`. NO DONE_WITH_CONCERNS.",
+            "description": "RETRY_EXHAUSTED payload → flow halt + escalate, Reflect → `abandoned`. NO DONE_WITH_CONCERNS. Flow correlation is the top-level `based_on` RowRef bundle (§5) — not free-filled flow_id/verified_at.",
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "cause",
               "iterations",
-              "last_failure_origin",
               "escalate",
               "reflect_classification"
             ],
             "properties": {
+              "cause": {
+                "description": "WHY the flow exhausted — the cap that was hit. retry_exhausted uses {retry_cap, cap_exceeded}. cap causes are not attributed to a single producer step, so failure_origin is omitted; the cap meaning is carried HERE (field-type consistency).",
+                "$ref": "#/$defs/EscalationCause"
+              },
               "iterations": {
-                "description": "How many produce⇄review iterations were attempted before exhaustion (R23 measured count).",
-                "$ref": "./_defs.schema.json#/$defs/CountClaim"
+                "description": "How many produce⇄review iterations were attempted before exhaustion. An internal orchestrator-tracked counter — a plain bounded integer (cap typically 5), NOT a CountClaim (no command/stdout to hash).",
+                "type": "integer",
+                "minimum": 0
               },
               "last_failure_origin": {
-                "description": "The failure_origin of the final failed iteration.",
-                "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+                "description": "Optional — the STEP-ATTRIBUTION origin of the final failed iteration (the producer that kept failing). Omitted for cap_exceeded (global cap, no single producer). Same step-attribution enum as fail.failure_origin (no verify/cap_exceeded pollution).",
+                "type": "string",
+                "enum": [
+                  "triage",
+                  "ground",
+                  "investigate",
+                  "decide",
+                  "spec",
+                  "test",
+                  "implement",
+                  "report",
+                  "multiple"
+                ]
               },
               "escalate": {
                 "description": "MUST be true — retry_exhausted always halts + escalates; silent proceed is forbidden.",

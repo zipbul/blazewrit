@@ -6,6 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "result",
     "changes",
     "commits",
     "firebat_results",
@@ -19,10 +20,20 @@
     "declared_next_step"
   ],
   "properties": {
+    "result": {
+      "description": "P1 first-class result discriminant (reuses the Investigate compatibility_verdict pattern — success is a declared enum branch, not just failure). implemented = changes written, GATEs (firebat blockers=0 AND emberdeck_drift=0, both measured) passed, commit done. blocked = a GATE blocked (firebat blockers>0 or emberdeck_drift≠0 unresolved by 3x self-converge loop), or commit structurally failed, or a precondition violation / GATE-tool-absent escalate. needs_setup_recovery = setup (deps/infra) failed and auto-rollback restored a clean state — code phase never entered. no_op = LEGITIMATELY no code to change (requested change already exists = real GREEN, or a Decide-only chain whose decision is 'no code change'; principle 3 empty-legal, distinct from a missing/malformed-input escalate). The orchestrator routing table keys off this field; escalate branches (result != implemented) additionally carry failure_origin/escalate_reason/escalate_evidence, and no_op carries no_op_details.",
+      "type": "string",
+      "enum": [
+        "implemented",
+        "blocked",
+        "needs_setup_recovery",
+        "no_op"
+      ]
+    },
     "changes": {
-      "description": "Every file the implementation touched, with the kind of change. file_path is a git-versioned CODE path (DECISIONS §5 L66 — code stays a file, NOT a Postgres RowRef and NOT a .blazewrit/* artifact). change_type is a closed enum (grammar-enforced). This array is the ground truth the emberdeck card↔code drift check and the firebat scan run against.",
+      "description": "Every file the implementation touched, with the kind of change. file_path is a git-versioned CODE path (DECISIONS §5 L66 — code stays a file, NOT a Postgres RowRef and NOT a .blazewrit/* artifact). change_type is a closed enum (grammar-enforced). This array is the ground truth the emberdeck card↔code drift check and the firebat scan run against. minItems:0 — legitimate zero-change results (result=no_op, result=needs_setup_recovery, and pre-code blocked branches: precondition violations, setup-dirty, GATE-tool-absent) emit an empty array rather than fabricating a change; minItems:1 is gated on result=='implemented' via the allOf conditional below.",
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -243,8 +254,118 @@
     "declared_next_step": {
       "description": "R16 advisory declaration of the successor step (typically verify). The producer does NOT free-fill the authoritative value — the orchestrator INJECTS expected_next_step. x-validator-contract (M2, folded into R27): assert declared_next_step == orchestrator's expected_next_step; mismatch = chain divergence.",
       "$ref": "./_defs.schema.json#/$defs/StepName"
+    },
+    "failure_origin": {
+      "description": "Escalate-branch routing field (shared FailureOrigin enum: implement|spec|decide|test|ground|investigate|cap_exceeded). REQUIRED whenever result != 'implemented' (blocked / needs_setup_recovery / cap_exceeded branches — see the allOf conditional below). principle 2/3: Implement detects an upstream defect and routes via failure_origin (it does NOT emit request_upstream_deepen, which is Decide-only). cap_exceeded = step budget exhausted → orchestrator-level halt+escalate (no auto Implement⇄Reviewer reentry).",
+      "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+    },
+    "escalate_reason": {
+      "description": "Human-readable reason for the escalate branch (GATE 3x-fail residual blockers, GATE-tool-absent, setup-dirty-unrecoverable, commit conflict, budget exhausted, precondition violation). Populated whenever result != 'implemented' (see allOf).",
+      "type": "string",
+      "minLength": 1
+    },
+    "escalate_evidence": {
+      "description": "Evidence backing the escalate (a RowRef, a file:line, firebat/emberdeck raw_stdout ref, git status, or progress summary). Populated whenever result != 'implemented' (see allOf).",
+      "type": "string",
+      "minLength": 1
+    },
+    "no_op_details": {
+      "description": "REQUIRED when result=='no_op' (see allOf). Records WHY there was legitimately no code to change (principle 3 empty-legal, NOT a missing/malformed-input escalate). reason = why no change; evidence = proof (e.g. existing code already GREEN, or the Decide decision mandating zero change); current_state/target_state = the observed-equals-target situation; suggested_action = what the orchestrator/Reflect should do.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "evidence",
+        "current_state",
+        "target_state",
+        "suggested_action"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "current_state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "suggested_action": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   },
+  "allOf": [
+    {
+      "$comment": "P1: result=='implemented' requires at least one change; the success branch cannot be empty. Zero-change is reserved for no_op / needs_setup_recovery / pre-code blocked branches.",
+      "if": {
+        "properties": {
+          "result": {
+            "const": "implemented"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "changes": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "$comment": "principle 2/3: every escalate branch (result != implemented) must carry failure_origin/escalate_reason/escalate_evidence so the orchestrator can route. implemented does not.",
+      "if": {
+        "not": {
+          "properties": {
+            "result": {
+              "const": "implemented"
+            }
+          },
+          "required": [
+            "result"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "failure_origin",
+          "escalate_reason",
+          "escalate_evidence"
+        ]
+      }
+    },
+    {
+      "$comment": "result=no_op carries its mandated no_op_details (legitimate empty result, principle 3).",
+      "if": {
+        "properties": {
+          "result": {
+            "const": "no_op"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "required": [
+          "no_op_details"
+        ]
+      }
+    }
+  ],
   "x-validator-contracts": [
     {
       "field": "firebat_results.value.blockers",

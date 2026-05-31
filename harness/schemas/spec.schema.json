@@ -58,9 +58,9 @@
   "properties": {
     "based_on": {
       "$comment": "§5 — all values are RowRef (Postgres step_runs row ids), never file paths. Spec consumes Decide + Investigate + Ground.",
-      "description": "§5 BASED-ON bundle (RowRefs only). Spec's chain provides Decide (design document / plan / record), Investigate (constraints, risk_surface, compatibility issues), Ground (task_subgraph, volatile_state). decide_ref and ground_ref are REQUIRED (every spec descends from a Decide and a Ground); investigate_ref is required for code flows but Investigate is degenerate for greenfield — kept required here per the README Inputs contract (Decide+Investigate+Ground). Legacy prose 'based_on: { decide_ref, investigate_ref, ground_ref }' translated from file paths to row refs.",
+      "description": "§5 BASED-ON bundle (RowRefs only). Spec's chain provides Decide (design document / plan / record), Investigate (constraints, risk_surface, compatibility issues), Ground (task_subgraph, volatile_state). decide_ref and ground_ref are REQUIRED (every spec descends from a Decide and a Ground); investigate_ref is OPTIONAL/conditional — required only when the chain HAS Investigate (M2/reviewer cross-check), but greenfield / Investigate-degenerate chains legitimately lack it, so it is NOT an M1 grammar invariant. Legacy prose 'based_on: { decide_ref, investigate_ref, ground_ref }' translated from file paths to row refs.",
       "allOf": [{ "$ref": "./_defs.schema.json#/$defs/BasedOn" }],
-      "required": ["decide_ref", "investigate_ref", "ground_ref"]
+      "required": ["decide_ref", "ground_ref"]
     },
 
     "declared_next_step": {
@@ -121,8 +121,10 @@
                     "type": "string"
                   },
                   "source_tool": {
-                    "$comment": "Provenance floor (R26) — the origin (e.g. 'decide-design-document', 'investigate-constraints') this AC was extracted from.",
-                    "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                    "$comment": "Provenance floor (R26) — CLOSED value space for Spec AC provenance (S5 / branch-selection): the Decide source this AC was extracted from. Not the open shared SourceTool floor — Spec AC provenance is a fixed three-value space (design-document|plan-chosen|record-decision).",
+                    "description": "The Decide source this AC was extracted from: design-document (mode=design), plan-chosen (mode=plan), record-decision (mode=record). Closed enum.",
+                    "type": "string",
+                    "enum": ["design-document", "plan-chosen", "record-decision"]
                   },
                   "unverified": {
                     "$comment": "R13 floor — KEEP polarity. Designed to persist; Verify is the single gate. No 'no unverified remain' forbid.",
@@ -272,7 +274,7 @@
 
             "spec_card_id": {
               "$comment": "M3 DEGRADE — emberdeck create_card is MCP-backed and degradable. Measured(value=card id) | Omitted{reason, source_tool}. NOT nullable, NOT a placeholder.",
-              "description": "M3 DEGRADE — emberdeck spec card reference. emberdeck (create_card + codeLinks) is OPTIONAL + graceful-degrade (DECISIONS §8). When emberdeck is attached, status=measured with value = the created card id. When emberdeck is unattached/fails, the grammar forces status=omitted (reason=unavailable|tool_failed, source_tool='emberdeck') — NOT null, NOT a '# OMITTED' string (R22). The M2 capability probe decides which branch is legal.",
+              "description": "M3 DEGRADE — emberdeck spec card reference. emberdeck (create_card + codeLinks) is OPTIONAL + graceful-degrade (DECISIONS §8). When emberdeck is attached, status=measured with value = the created card id. When emberdeck is unattached/fails/times out, OR the Decide mode is plan/record (no intent card), the grammar forces status=omitted with reason restricted to {unavailable, tool_failed, timeout, not_applicable} (source_tool='emberdeck') — NOT null, NOT a '# OMITTED' string (R22). The M2 capability probe decides which branch is legal.",
               "type": "object",
               "required": ["status"],
               "oneOf": [
@@ -293,7 +295,19 @@
                     }
                   }
                 },
-                { "$ref": "./_defs.schema.json#/$defs/Omitted" }
+                {
+                  "title": "spec_card_id omitted",
+                  "$comment": "Step-local Omitted specialization — reason restricted to {unavailable, tool_failed, timeout, not_applicable}. emberdeck-unattached/fail/timeout uses unavailable|tool_failed|timeout; plan/record (no intent card) uses not_applicable. The shared Omitted floor stays open; Spec's spec_card_id narrows it.",
+                  "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Omitted" }],
+                  "type": "object",
+                  "properties": {
+                    "reason": {
+                      "description": "Why the spec card is absent. unavailable = emberdeck not attached; tool_failed = create_card failed; timeout = create_card timed out; not_applicable = Decide mode plan/record (no intent card to link).",
+                      "type": "string",
+                      "enum": ["unavailable", "tool_failed", "timeout", "not_applicable"]
+                    }
+                  }
+                }
               ]
             },
 
@@ -330,11 +344,16 @@
                     "minLength": 1
                   },
                   "blocks_ac": {
-                    "description": "What this ambiguity blocks (which policy/AC/architecture decision cannot be finalized).",
+                    "description": "BACKWARD ref to the Decide-source item this clarification blocks — NOT an emitted AC id (the needs_clarification branch carries no acceptance_criteria, so no forward AC id exists; R14 fail-loud). It names which upstream Decide item cannot be reduced to a measurable AC: a design policy/requirement/user_flow id, a plan sequencing unit or chosen.approach item, or a record decision id.",
                     "type": "string",
                     "minLength": 1
                   },
-                  "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+                  "source_tool": {
+                    "$comment": "CLOSED value space — the Decide source of the blocked item (needs_clarification only arises from a Decide-source policy/requirement that cannot be made measurable; Investigate-source conflicts route to blocked instead). Same closed enum as AC source_tool.",
+                    "description": "The Decide source of the blocked item: design-document | plan-chosen | record-decision. Closed enum.",
+                    "type": "string",
+                    "enum": ["design-document", "plan-chosen", "record-decision"]
+                  }
                 }
               }
             }
@@ -377,7 +396,7 @@
           "properties": {
             "result": { "const": "no_op" },
             "reason": {
-              "description": "Why no spec is needed: non_code_flow = docs/config/exploratory work with no implementable code surface (spec/test partial-coverage path, routed to skip). no_implementable_surface = Decide produced a Record/Plan with no buildable output. Orchestrator skips downstream Spec→Test→Implement.",
+              "description": "Why no spec is needed: non_code_flow = the flow is non-code BY NATURE from the start (docs/config/exploratory work — S2). no_implementable_surface = a WELL-FORMED, COMPLETE Decide decision EXPLICITLY determines zero implementable surface (e.g. Record 'no change / already satisfied', yielding 0 build surface — S3); strictly distinct from blocked(missing_upstream) which is a malformed/empty/conflicting Decide payload (S4), NOT a verdict. Orchestrator skips downstream Spec→Test→Implement.",
               "type": "string",
               "enum": ["non_code_flow", "no_implementable_surface"]
             },

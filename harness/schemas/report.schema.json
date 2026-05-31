@@ -2,193 +2,229 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://blazewrit.dev/harness/schemas/report.schema.json",
   "title": "blazewrit harness — Report step structured_output",
-  "description": "Report = deliverable synthesis. The TERMINAL artifact of a NON-CODE flow (Review, Retro, Exploration, Spike, plan-standalone, Compound top-level summary). Synthesizes Investigate/Decide/Ground outputs into severity-tagged findings + action items, with an evidence trail. CODE flows (Feature/Bug/Refactor/Perf/Migration/Test/Chore/Release) have NO report step (README L60-62: failure_origin=report is invalid in code flows; Verify rejects). TARGET RUNTIME: grammar-constrained generation — M1 enforces SHAPE/enum/required/oneOf-branch at token-generation time; the model literally cannot emit a wrong shape. Fields needing TRUTH (evidence re-read, verify_probe re-execution, chain match, same-file parallel mutual-exclusion, count↔stdout derivation) are closed by SIBLING deterministic code checks listed in `x-m2-validator-contracts`, NOT by any keyword here. STORAGE §5: this output persists to Postgres step_runs jsonb; legacy '.blazewrit/reports/{id}.md' / '.blazewrit/plans/{id}-plan.md' paths are PRE-§5 and are DROPPED — there is no artifact_path field; cross-step refs are RowRefs.",
+  "description": "Report = deliverable synthesis. The TERMINAL artifact of a NON-CODE flow (Review, Retro, Exploration, Spike, plan-standalone, Compound top-level summary). Synthesizes Investigate/Decide/Ground outputs into severity-tagged findings + action items, with an evidence trail. CODE flows (Feature/Bug/Refactor/Perf/Migration/Test/Chore/Release) have NO report step (README L60-62: failure_origin=report is invalid in code flows; Verify rejects). PRIMARY DISCRIMINANT is `result` (synthesized | empty_clean | escalate) — the terminal-artifact branch model (P1/principle 1/principle 3); report_type sub-discriminates the success/empty branches. TARGET RUNTIME: grammar-constrained generation — M1 enforces SHAPE/enum/required/oneOf-branch at token-generation time; the model literally cannot emit a wrong shape. Fields needing TRUTH (evidence re-read, verify_probe re-execution, chain match, same-file parallel mutual-exclusion, count↔stdout derivation) are closed by SIBLING deterministic code checks listed in `x-m2-validator-contracts`, NOT by any keyword here. STORAGE §5: this output persists to Postgres step_runs jsonb; legacy '.blazewrit/reports/{id}.md' / '.blazewrit/plans/{id}-plan.md' paths are PRE-§5 and are DROPPED — there is no artifact_path field; cross-step refs are RowRefs.",
   "type": "object",
   "required": [
-    "report_type",
-    "summary",
-    "findings",
-    "action_items",
-    "based_on",
-    "declared_next_step"
+    "result"
   ],
-  "$comment": "report_type is the DISCRIMINANT. Common fields (summary/findings/action_items/based_on/declared_next_step) are required for every branch; the oneOf below tightens per-flow obligations (spike => verdict; plan_standalone => task_list; exploration relaxes the action-item floor; compound => sub_flow_summaries). based_on, declared_next_step, findings[].evidence_ref, findings[].verify_probe carry M2 validator contracts (truth, not shape).",
-  "properties": {
-    "report_type": {
-      "description": "DISCRIMINANT (README L26). Which non-code flow this report terminates. Drives the per-branch required obligations in the top-level oneOf. plan_standalone is the snake_case of legacy 'plan-standalone'.",
-      "type": "string",
-      "enum": [
-        "review",
-        "retro",
-        "exploration",
-        "spike",
-        "plan_standalone",
-        "compound"
-      ]
-    },
-    "summary": {
-      "description": "One-paragraph narrative synthesis: what was investigated/reviewed and the key conclusion (agent.md L21 'Summary'; README Activity 1 Synthesize). The deliverable's lede.",
-      "type": "string",
-      "minLength": 1
-    },
-    "findings": {
-      "description": "Severity-tagged findings synthesized from Investigate/Review/Retro (README 'findings: [id, statement, severity, evidence_ref]'; agent.md L22-26 adds impact + verify_probe). Each finding carries: evidence_ref (SHAPE present here; 'claim verified'/evidence-traceable is the IRREDUCIBLE floor + M2 trace), source_tool provenance (R26 floor, REQUIRED), verify_probe (R20, re-executed by M2), and an unverified flag (R13 KEEP polarity — NOT forbidden). Empty array allowed (e.g. a clean review with no issues), but the reviewer spot-checks 2-3 against source.",
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/Finding"
-      }
-    },
-    "action_items": {
-      "description": "Concrete next steps (README 'action_items: [description, priority, owner?, followup_flow_ref?]'; agent.md L27). README/agent require >=1 action item for every flow EXCEPT exploration (reviewer criterion 2 'except Exploration'). That per-flow floor is encoded in the top-level oneOf (exploration => minItems 0; all others => minItems 1). followup_flow_ref links a queued follow-up flow ROW (§5 RowRef, never a path) — realizes README Activity 3 'Action items — followup_flows 추출 (Decide.followup_flows 연결)'.",
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ActionItem"
-      }
-    },
-    "based_on": {
-      "description": "§5 upstream RowRefs the report synthesized from. README 'based_on: { investigate_ref, decide_ref, ground_ref }'. EVERY value is a Postgres step_runs row id, NEVER a file path (legacy '.blazewrit/grounds/**' is PRE-§5). All three keys required here because Report's inputs (README Inputs) are Investigate + Decide + Ground outputs; a report not grounded in those three rows is unsourced. x-m2-validator: each ref must resolve to an existing step_run row of the expected step in this flow.",
-      "allOf": [
-        {
-          "$ref": "./_defs.schema.json#/$defs/BasedOn"
-        }
-      ],
-      "required": [
-        "investigate_ref",
-        "decide_ref",
-        "ground_ref"
-      ]
-    },
-    "declared_next_step": {
-      "$comment": "R16 — producer DECLARES but does not free-fill the authoritative next step; orchestrator injects expected_next_step; chain match is M2.",
-      "description": "R16 (agent.md L28/L31-33; reviewer criterion 6 CRITICAL). Report's declared successor — for a terminal non-code flow this is typically 'verify' (plan-standalone: Decide→Report→Verify). ADVISORY: the schema carries the declared value; the authoritative value is orchestrator-injected. x-m2-validator: declared_next_step == orchestrator's expected_next_step (chain-divergence check). Mismatch = reviewer FAIL 'R16 chain violation'.",
-      "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep"
-    }
-  },
+  "$comment": "result is the TOP-LEVEL discriminant (synthesized | empty_clean | escalate). The outer oneOf branches on result: synthesized/empty_clean carry the success/empty terminal-artifact shape (report_type + body + findings + action_items + based_on + declared_next_step, with a nested report_type oneOf for per-flow obligations); escalate carries only escalate_details and is emittable WITHOUT a valid report_type (so a code-flow / missing-flow_type precondition violation is representable — README report_type assignment rule). based_on, declared_next_step, findings[].evidence_ref, findings[].verify_probe carry M2 validator contracts (truth, not shape).",
   "oneOf": [
     {
-      "$comment": "REVIEW — Pass1 critical / Pass2 informational (agent.md L39). Findings-driven; action items required (>=1).",
-      "title": "report_type=review",
-      "additionalProperties": true,
-      "properties": {
-        "report_type": {
-          "const": "review"
-        },
-        "action_items": {
-          "minItems": 1
-        }
-      },
+      "$comment": "result ∈ {synthesized, empty_clean} — the SUCCESS / legitimately-empty terminal artifact. report_type + the common synthesis fields are required; the nested report_type oneOf tightens per-flow obligations. empty_clean additionally requires empty_details; synthesized requires body.summary present (enforced by body.required=[summary]).",
+      "title": "result=synthesized|empty_clean",
+      "type": "object",
       "required": [
-        "report_type"
-      ]
-    },
-    {
-      "$comment": "RETRO — process observations; reviewer criterion 5 requires >=1 action item.",
-      "title": "report_type=retro",
-      "additionalProperties": true,
-      "properties": {
-        "report_type": {
-          "const": "retro"
-        },
-        "action_items": {
-          "minItems": 1
-        }
-      },
-      "required": [
-        "report_type"
-      ]
-    },
-    {
-      "$comment": "EXPLORATION — 'content over form' (agent.md L41). The SOLE flow where action items are NOT required (reviewer criterion 2 'except Exploration'). minItems 0.",
-      "title": "report_type=exploration",
-      "additionalProperties": true,
-      "properties": {
-        "report_type": {
-          "const": "exploration"
-        },
-        "action_items": {
-          "minItems": 0
-        }
-      },
-      "required": [
-        "report_type"
-      ]
-    },
-    {
-      "$comment": "SPIKE — feasibility assessment; MUST end with a GO/NO-GO/CONDITIONAL verdict (agent.md L42, reviewer criterion 4). verdict required only on this branch.",
-      "title": "report_type=spike",
-      "additionalProperties": true,
-      "properties": {
-        "report_type": {
-          "const": "spike"
-        },
-        "action_items": {
-          "minItems": 1
-        },
-        "spike_verdict": {
-          "$ref": "#/$defs/SpikeVerdict"
-        }
-      },
-      "required": [
+        "result",
         "report_type",
-        "spike_verdict"
-      ]
-    },
-    {
-      "$comment": "PLAN_STANDALONE — Decide(Design)→Report→Verify terminal Design doc. task_list (R19) carried VERBATIM/refined from Decide, consumed directly by no downstream code step (terminal); deferral forbidden (reviewer criterion 9). task_list required only on this branch.",
-      "title": "report_type=plan_standalone",
-      "additionalProperties": true,
+        "body",
+        "findings",
+        "action_items",
+        "based_on",
+        "declared_next_step"
+      ],
       "properties": {
+        "result": {
+          "description": "synthesized = sound deliverable synthesized (normal success). empty_clean = legitimately nothing to report (principle 3: empty-as-verdict, NOT error) — a report_type-specific minimal artifact + empty_details.",
+          "type": "string",
+          "enum": ["synthesized", "empty_clean"]
+        },
         "report_type": {
-          "const": "plan_standalone"
+          "description": "DISCRIMINANT (README report_type assignment rule). Which non-code flow this report terminates — mechanically mapped 1:1 from the orchestrator-injected flow_type (review/retro/exploration/spike/plan-standalone/compound). Drives the per-branch required obligations in the nested oneOf. plan_standalone is the snake_case slug of flow-stem 'plan-standalone'.",
+          "type": "string",
+          "enum": [
+            "review",
+            "retro",
+            "exploration",
+            "spike",
+            "plan_standalone",
+            "compound"
+          ]
+        },
+        "body": {
+          "description": "Deliverable body slot (README 'body 생산 규칙'). The SOLE narrative slot for content/summary/design+next-step. summary is required (top-level narrative for every report_type, present+non-empty when result=synthesized). sections carries optional structured body (plan_standalone design document). next_step is required for plan_standalone (minimum-bar 'next step').",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summary"],
+          "properties": {
+            "summary": {
+              "description": "Top-level narrative synthesis: what was investigated/reviewed and the key conclusion (README Activity 2 Synthesize). Required+non-empty for every report_type on the synthesized branch (the deliverable's lede). exploration minimum-bar 'content 존재' = this non-empty.",
+              "type": "string",
+              "minLength": 1
+            },
+            "sections": {
+              "description": "Optional structured body (plan_standalone design document, etc). Required for plan_standalone (design-document minimum-bar) — Decide(Design) 산출을 narrative로 옮긴 것이지 새 설계가 아니다.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["heading", "content"],
+                "properties": {
+                  "heading": { "type": "string", "minLength": 1 },
+                  "content": { "type": "string", "minLength": 1 }
+                }
+              }
+            },
+            "next_step": {
+              "description": "Next step narrative — REQUIRED for report_type=plan_standalone (minimum-bar 'next step 명시'). Optional otherwise.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "findings": {
+          "description": "Severity-tagged findings synthesized from Investigate/Review/Retro (README 'findings: [id, statement, severity, evidence_ref]'; agent.md L22-26 adds impact + verify_probe). Each finding carries: evidence_ref (SHAPE present here; 'claim verified'/evidence-traceable is the IRREDUCIBLE floor + M2 trace), source_tool provenance (R26 floor, REQUIRED), verify_probe (R20, re-executed by M2), and an unverified flag (R13 KEEP polarity — NOT forbidden). Empty array allowed (e.g. a clean review with no issues → result=empty_clean), but the reviewer spot-checks 2-3 against source.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Finding"
+          }
         },
         "action_items": {
-          "minItems": 1
+          "description": "Concrete next steps (README 'action_items: [description, priority, owner?, followup_flow_ref?]'). priority is re-projected from the origin finding/risk severity (Report does NOT invent a new priority — 'priority 생산 규칙'). Per-flow floor: only retro requires >=1 action item (reviewer 'retro=≥1 action item'); review/exploration/spike/plan_standalone/compound do not floor action_items (review-with-0-findings → empty_clean; spike satisfied by feasibility_verdict; compound satisfied by body.summary + sub_flow_summaries). That floor is encoded in the nested report_type oneOf. followup_flow_ref links a queued follow-up flow ROW (§5 RowRef, never a path).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionItem"
+          }
+        },
+        "feasibility_verdict": {
+          "$comment": "Required only on the spike branch (nested oneOf). Field name unified to feasibility_verdict (cross-cutting decision 3); enum lowercase go|no_go|conditional.",
+          "$ref": "#/$defs/FeasibilityVerdict"
         },
         "task_list": {
+          "$comment": "Required only on the plan_standalone branch (nested oneOf). R19 machine-consumable task list carried verbatim/refined from Decide — co-exists with body.sections+body.next_step (the human-readable narrative); neither drops the other (cross-cutting decision 5).",
           "$ref": "#/$defs/TaskList"
+        },
+        "sub_flow_summaries": {
+          "$comment": "Required only on the compound branch (nested oneOf). Machine-consumable sub-flow aggregation. Coexists with body.summary (the human-readable top-level summary).",
+          "$ref": "#/$defs/SubFlowSummaries"
+        },
+        "empty_details": {
+          "$comment": "Required only when result=empty_clean (enforced by the outer-branch allOf/if-then below).",
+          "$ref": "#/$defs/EmptyDetails"
+        },
+        "based_on": {
+          "description": "§5 upstream RowRefs the report synthesized from. README 'based_on: { investigate_ref, decide_ref, ground_ref }'. EVERY value is a Postgres step_runs row id, NEVER a file path (legacy '.blazewrit/grounds/**' is PRE-§5). All three keys required here because Report's inputs (README Inputs) are Investigate + Decide + Ground outputs; a report not grounded in those three rows is unsourced. sub_flow_refs is the additional Compound provenance key (array of sub_flow_id RowRefs) coexisting with sub_flow_summaries. x-m2-validator: each ref must resolve to an existing step_run row of the expected step in this flow.",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/BasedOn"
+            }
+          ],
+          "required": [
+            "investigate_ref",
+            "decide_ref",
+            "ground_ref"
+          ],
+          "properties": {
+            "sub_flow_refs": {
+              "$comment": "§5 — Compound source provenance. Coexists with the richer sub_flow_summaries object (cross-cutting decision 5: carry both the machine shape and the provenance refs).",
+              "description": "Array of sub-flow RowRefs aggregated by a Compound report (README Compound input shape). Present for report_type=compound; each is a Postgres flow/step_run row id, never a path.",
+              "type": "array",
+              "items": {
+                "$ref": "./_defs.schema.json#/$defs/RowRef"
+              }
+            }
+          }
+        },
+        "declared_next_step": {
+          "$comment": "R16 — producer DECLARES but does not free-fill the authoritative next step; orchestrator injects expected_next_step; chain match is M2.",
+          "description": "R16 (agent.md L28/L31-33; reviewer criterion 6 CRITICAL). Report's declared successor — for a terminal non-code flow this is typically 'verify' (plan-standalone: Decide→Report→Verify). ADVISORY: the schema carries the declared value; the authoritative value is orchestrator-injected. x-m2-validator: declared_next_step == orchestrator's expected_next_step (chain-divergence check). Mismatch = reviewer FAIL 'R16 chain violation'.",
+          "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep"
         }
       },
-      "required": [
-        "report_type",
-        "task_list"
+      "allOf": [
+        {
+          "$comment": "empty_clean ⇒ empty_details required.",
+          "if": {
+            "properties": { "result": { "const": "empty_clean" } },
+            "required": ["result"]
+          },
+          "then": {
+            "required": ["empty_details"]
+          }
+        }
+      ],
+      "oneOf": [
+        {
+          "$comment": "REVIEW — Pass1 critical / Pass2 informational (agent.md L39). Findings-driven. No action-item floor: a clean review with 0 findings routes to empty_clean.",
+          "title": "report_type=review",
+          "additionalProperties": true,
+          "properties": {
+            "report_type": { "const": "review" }
+          },
+          "required": ["report_type"]
+        },
+        {
+          "$comment": "RETRO — process observations; reviewer requires >=1 action item (the sole action-item floor).",
+          "title": "report_type=retro",
+          "additionalProperties": true,
+          "properties": {
+            "report_type": { "const": "retro" },
+            "action_items": { "minItems": 1 }
+          },
+          "required": ["report_type"]
+        },
+        {
+          "$comment": "EXPLORATION — 'content over form' (agent.md L41). Minimum-bar = body.summary non-empty; action items NOT required (minItems 0).",
+          "title": "report_type=exploration",
+          "additionalProperties": true,
+          "properties": {
+            "report_type": { "const": "exploration" },
+            "action_items": { "minItems": 0 }
+          },
+          "required": ["report_type"]
+        },
+        {
+          "$comment": "SPIKE — feasibility assessment; MUST end with a go/no_go/conditional verdict (reviewer Spike criterion). feasibility_verdict required only on this branch; satisfied by the verdict (no action-item floor).",
+          "title": "report_type=spike",
+          "additionalProperties": true,
+          "properties": {
+            "report_type": { "const": "spike" }
+          },
+          "required": ["report_type", "feasibility_verdict"]
+        },
+        {
+          "$comment": "PLAN_STANDALONE — Decide(Design)→Report→Verify terminal Design doc. Carries BOTH the machine-consumable task_list (R19, verbatim/refined from Decide, deferral forbidden — reviewer criterion 9) AND the human-readable body.sections (design document) + body.next_step (cross-cutting decision 5). task_list, body.sections, body.next_step all required on this branch.",
+          "title": "report_type=plan_standalone",
+          "additionalProperties": true,
+          "properties": {
+            "report_type": { "const": "plan_standalone" },
+            "body": {
+              "required": ["summary", "sections", "next_step"]
+            }
+          },
+          "required": ["report_type", "task_list"]
+        },
+        {
+          "$comment": "COMPOUND — top-level summary aggregating sub-flow results (README L7). Carries BOTH the machine-consumable sub_flow_summaries AND body.summary + based_on.sub_flow_refs provenance. No action-item floor (all-abandoned sub-flows still yield a legitimate summary).",
+          "title": "report_type=compound",
+          "additionalProperties": true,
+          "properties": {
+            "report_type": { "const": "compound" }
+          },
+          "required": ["report_type", "sub_flow_summaries"]
+        }
       ]
     },
     {
-      "$comment": "COMPOUND — top-level summary aggregating sub-flow results (README L7 'Compound (top-level summary)'; Inputs L14). sub_flow_summaries required only on this branch.",
-      "title": "report_type=compound",
-      "additionalProperties": true,
-      "properties": {
-        "report_type": {
-          "const": "compound"
-        },
-        "action_items": {
-          "minItems": 1
-        },
-        "sub_flow_summaries": {
-          "$ref": "#/$defs/SubFlowSummaries"
-        }
-      },
+      "$comment": "result=escalate — Report cannot synthesize a sound deliverable within its own scope (principle 1: synthesis itself is blocked, not an auxiliary tool). Emittable WITHOUT a valid report_type (a code-flow / missing-or-malformed flow_type precondition violation → escalate, failure_origin=upstream — README report_type assignment rule + Constraint). Only escalate_details is required. Orchestrator routes via the existing NEEDS_CONTEXT path; Report does NOT diagnose or queue followups.",
+      "title": "result=escalate",
+      "type": "object",
       "required": [
-        "report_type",
-        "sub_flow_summaries"
-      ]
+        "result",
+        "escalate_details"
+      ],
+      "properties": {
+        "result": {
+          "const": "escalate"
+        },
+        "escalate_details": {
+          "$ref": "#/$defs/EscalateDetails"
+        }
+      }
     }
   ],
   "$defs": {
-    "ReportSeverity": {
-      "$comment": "Report-specific severity scale — distinct from shared Severity (low|med|high|critical) and SeverityIssue (fatal|high|medium|low). The cleanup FORBIDS collapsing scales; this scale (agent.md L23 'CRITICAL / HIGH / MEDIUM / LOW / INFO') has an INFO level neither shared scale has, so it is defined locally here, not $ref-ed.",
-      "description": "Finding severity for reports (agent.md L23). INFO = advisory/style (Review Pass2). Lowercased to match harness style; INFO is the report-only extra level.",
-      "type": "string",
-      "enum": [
-        "critical",
-        "high",
-        "medium",
-        "low",
-        "info"
-      ]
-    },
     "Finding": {
-      "description": "One severity-tagged finding (README 'findings: [id, statement, severity, evidence_ref]' + agent.md L22-26 impact/verify_probe). evidence_ref present = SHAPE; evidence-traceable / 'claim verified' = irreducible floor closed by M2 (re-read the cited source) + the unverified KEEP-polarity flag. source_tool is the REQUIRED R26 provenance floor on every finding item.",
+      "description": "One severity-tagged finding (README 'findings: [id, statement, severity, evidence_ref]' + agent.md L22-26 impact/verify_probe). evidence_ref present = SHAPE; evidence-traceable / 'claim verified' = irreducible floor closed by M2 (re-read the cited source) + the unverified KEEP-polarity flag. source_tool is the REQUIRED R26 provenance floor on every finding item. severity uses the SINGLE shared risk Severity scale low|med|high|critical (cross-cutting decision 2 / principle 6 — no second scale invented).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -212,11 +248,12 @@
           "minLength": 1
         },
         "severity": {
-          "$ref": "#/$defs/ReportSeverity"
+          "$comment": "SINGLE risk scale (cross-cutting decision 2 / principle 6). Reuses the shared Severity $def low|med|high|critical; the compatibility-issue scale (fatal|high|medium|low) is NOT cited here.",
+          "$ref": "./_defs.schema.json#/$defs/Severity"
         },
         "evidence_ref": {
           "$comment": "SHAPE present here; 'evidence_ref 추적 가능' / 'claim verified' is the irreducible/M2 trace, NOT closeable by grammar.",
-          "description": "Evidence backing the finding (README 'evidence_ref'; agent.md L24 'file:line reference, data, or reproduction steps'). Either an upstream RowRef (a Ground fact row / Investigate finding row in Postgres) OR an inline read-with-provenance record (file:line the agent read directly). Presence is grammar-enforced; that the evidence ACTUALLY supports the claim and the cited lines exist is the M2 trace + irreducible floor.",
+          "description": "Evidence backing the finding (README 'evidence_ref'; agent.md L24 'file:line reference, data, or reproduction steps'). Either an upstream RowRef (a Ground fact row / Investigate finding row in Postgres) OR an inline read-with-provenance record (file:line the agent read directly) OR reproduction steps. Presence is grammar-enforced; that the evidence ACTUALLY supports the claim and the cited lines exist is the M2 trace + irreducible floor.",
           "oneOf": [
             {
               "$comment": "Upstream evidence: points at a Postgres row (Ground fact / Investigate finding). §5 RowRef, never a path.",
@@ -282,8 +319,8 @@
           "minLength": 1
         },
         "verify_probe": {
-          "$comment": "R20 — re-runnable assertion. Reviewer criterion 10 hard-FAILs on a missing verify_probe; criterion 8 RE-EXECUTES 3 random probes. Truth is the re-execution, not the shape.",
-          "description": "R20 mechanical probe validating this finding (agent.md L26 'mechanical command/file_exists/grep'; reviewer criterion 10 'all flows — 모든 finding에 verify_probe 명시. 누락 시 FAIL'). SHAPE here; x-m2-validator RE-EXECUTES command and compares to expected_result.",
+          "$comment": "R20 — re-runnable assertion. Reviewer hard-FAILs on a missing verify_probe; re-executes random probes. Truth is the re-execution, not the shape.",
+          "description": "R20 mechanical probe validating this finding (agent.md L26 'mechanical command/file_exists/grep'; reviewer '모든 finding에 verify_probe 명시. 누락 시 FAIL'). SHAPE here; x-m2-validator RE-EXECUTES command and compares to expected_result.",
           "$ref": "./_defs.schema.json#/$defs/VerifyProbe"
         },
         "source_tool": {
@@ -299,7 +336,7 @@
       }
     },
     "ActionItem": {
-      "description": "Concrete next step (README 'action_items: [description, priority, owner?, followup_flow_ref?]'; agent.md L27 'specific: \"Refactor src/auth/token.ts:45-78...\"' not vague). followup_flow_ref links a queued follow-up flow ROW (§5).",
+      "description": "Concrete next step (README 'action_items: [description, priority, owner?, followup_flow_ref?]'; agent.md L27 'specific: \"Refactor src/auth/token.ts:45-78...\"' not vague). priority uses the SINGLE shared risk Severity scale low|med|high|critical, re-projected from the origin finding/risk severity (Report does NOT invent priority). followup_flow_ref links a queued follow-up flow ROW (§5).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -313,14 +350,8 @@
           "minLength": 1
         },
         "priority": {
-          "description": "Action priority. Mirrors the report severity scale's actionable levels (no INFO — an INFO-only item is not an action item).",
-          "type": "string",
-          "enum": [
-            "critical",
-            "high",
-            "medium",
-            "low"
-          ]
+          "$comment": "SINGLE shared risk scale (cross-cutting decision 2). Reuses the shared Severity $def low|med|high|critical — re-projected from the origin finding/risk severity, NOT an invented scale. priority token is 'med', not 'medium'.",
+          "$ref": "./_defs.schema.json#/$defs/Severity"
         },
         "owner": {
           "description": "Optional assignee (README 'owner?').",
@@ -334,15 +365,18 @@
         }
       }
     },
-    "SpikeVerdict": {
-      "description": "Spike feasibility verdict (agent.md L42 'GO / NO-GO / CONDITIONAL'; reviewer criterion 4). Required on the spike branch only. CONDITIONAL carries the condition.",
+    "FeasibilityVerdict": {
+      "description": "Spike feasibility verdict (README 'feasibility_verdict'; reviewer Spike criterion). Field name unified to feasibility_verdict and enum lowercase go|no_go|conditional (cross-cutting decision 3). Required on the spike branch only. CONDITIONAL carries conditions[]. rationale + evidence_ref are required (the prototype-observation basis the production rule mandates).",
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "verdict"
+        "verdict",
+        "rationale",
+        "evidence_ref"
       ],
       "properties": {
         "verdict": {
+          "$comment": "Lowercase go|no_go|conditional (cross-cutting decision 3).",
           "type": "string",
           "enum": [
             "go",
@@ -350,10 +384,23 @@
             "conditional"
           ]
         },
-        "condition": {
-          "description": "Required-when-CONDITIONAL elaboration of what must hold for GO. Optional otherwise.",
+        "rationale": {
+          "description": "prototype 관찰 → verdict 근거 (required). Why this GO/NO_GO/CONDITIONAL.",
           "type": "string",
           "minLength": 1
+        },
+        "conditions": {
+          "description": "Conditions that must hold — REQUIRED when verdict=conditional (충족돼야 할 조건). Omitted otherwise.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "evidence_ref": {
+          "$comment": "§5 RowRef to the Implement(prototype) result row — the prototype basis of the verdict. x-m2-validator: resolves to the prototype Implement row.",
+          "description": "RowRef to the Implement(prototype) result row backing the verdict (required — verdict의 prototype 근거).",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
         }
       },
       "if": {
@@ -361,13 +408,94 @@
           "verdict": {
             "const": "conditional"
           }
-        }
+        },
+        "required": ["verdict"]
       },
       "then": {
         "required": [
           "verdict",
-          "condition"
+          "rationale",
+          "evidence_ref",
+          "conditions"
         ]
+      }
+    },
+    "EmptyDetails": {
+      "description": "result=empty_clean payload (principle 3: legitimately-empty verdict, NOT error — clean review / empty exploration). reason + evidence required; evidence points at the fact that 'clean' is real, not a missing/malformed input. suggested_action is optional (e.g. exploration reframe).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "evidence"
+      ],
+      "properties": {
+        "reason": {
+          "description": "왜 보고할 내용이 합법적으로 없는가 (e.g. 'clean: no issues found').",
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "$comment": "Points at the Ground/Investigate fact that makes 'clean' a fact, not a deficit. Either a §5 RowRef or a read-with-provenance manifest.",
+          "description": "Evidence that 'clean' is a fact (a Ground/Investigate fact ref), not a missing input. RowRef or source_manifest.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "row_ref"],
+              "properties": {
+                "kind": { "const": "row_ref" },
+                "row_ref": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "source_manifest"],
+              "properties": {
+                "kind": { "const": "source_manifest" },
+                "source_manifest": { "$ref": "./_defs.schema.json#/$defs/SourceManifest" }
+              }
+            }
+          ]
+        },
+        "suggested_action": {
+          "description": "Optional follow-up hint (exploration 등). none = no follow-up; reframe_request = suggest re-framing the request.",
+          "type": "string",
+          "enum": ["none", "reframe_request"]
+        }
+      }
+    },
+    "EscalateDetails": {
+      "description": "result=escalate payload (principle 1: synthesis itself blocked). reason + failure_origin + evidence. Report does NOT diagnose — failure_origin names the nearest origin the input precondition points at. failure_origin is a REPORT-LOCAL enum [upstream, investigate, decide, implement] — 'upstream' is NOT in the shared FailureOrigin $def (which is Verify's routing enum), so it is defined locally here (cross-cutting decision 4 / the report mismatch resolution).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "failure_origin",
+        "evidence"
+      ],
+      "properties": {
+        "reason": {
+          "description": "왜 sound deliverable 합성 불가.",
+          "type": "string",
+          "minLength": 1
+        },
+        "failure_origin": {
+          "$comment": "Report-local enum, NOT the shared FailureOrigin $def — 'upstream' is a generic-origin value the shared enum lacks. upstream = generic/missing upstream; investigate/decide/implement = the concrete producer the precondition points at.",
+          "description": "Nearest origin of the synthesis-blocking input fault (Report does not deeply diagnose). upstream = generic missing/malformed upstream (e.g. code-flow / missing flow_type); investigate = findings source missing; decide = decision/design source missing; implement = prototype result missing (spike).",
+          "type": "string",
+          "enum": [
+            "upstream",
+            "investigate",
+            "decide",
+            "implement"
+          ]
+        },
+        "evidence": {
+          "description": "What is missing/malformed (a ref or description of the missing/malformed field).",
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "Task": {
@@ -464,8 +592,8 @@
       }
     },
     "TaskList": {
-      "$comment": "plan-standalone Design synthesis (R19). task_count is a MEASURED count → CountClaim (R23), never a bare integer.",
-      "description": "R19 task list for plan-standalone (agent.md L29; decide.md L58). Carried verbatim/refined from Decide; this report is the terminal consumable plan. task_count is a CountClaim (R23) — a measured count of tasks, never a bare integer.",
+      "$comment": "plan-standalone Design synthesis (R19). task_count is a MEASURED count → CountClaim (R23), never a bare integer. Coexists with body.sections+body.next_step (cross-cutting decision 5).",
+      "description": "R19 task list for plan-standalone (agent.md L29; decide.md L58). Carried verbatim/refined from Decide; this report is the terminal consumable plan. The MACHINE-consumable half of the plan_standalone deliverable; the human-readable design document lives in body.sections + body.next_step. task_count is a CountClaim (R23) — a measured count of tasks, never a bare integer.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -488,8 +616,8 @@
       }
     },
     "SubFlowSummaries": {
-      "$comment": "Compound top-level aggregation. sub_flow_count is a MEASURED count → CountClaim (R23).",
-      "description": "Compound flow top-level summary (README L7). Aggregates each sub-flow's terminal result row. sub_flow_count is a CountClaim (R23). Each entry references the sub-flow's row (§5 RowRef).",
+      "$comment": "Compound top-level aggregation. sub_flow_count is a MEASURED count → CountClaim (R23). Coexists with based_on.sub_flow_refs + body.summary (cross-cutting decision 5).",
+      "description": "Compound flow top-level summary (README L7). Aggregates each sub-flow's terminal result row. The MACHINE-consumable half of the compound deliverable; body.summary is the human-readable top-level summary and based_on.sub_flow_refs the provenance ref list. sub_flow_count is a CountClaim (R23). Each entry references the sub-flow's row (§5 RowRef) and records its terminal_result.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -505,7 +633,8 @@
             "additionalProperties": false,
             "required": [
               "flow_ref",
-              "outcome"
+              "outcome",
+              "terminal_result"
             ],
             "properties": {
               "flow_ref": {
@@ -517,6 +646,17 @@
                 "description": "One-line outcome of the sub-flow.",
                 "type": "string",
                 "minLength": 1
+              },
+              "terminal_result": {
+                "$comment": "Reflect's terminal-classification enum reused (cross-flow consistency).",
+                "description": "Sub-flow terminal classification (README Compound input shape 'terminal_result: completed | abandoned | suspended').",
+                "type": "string",
+                "enum": ["completed", "abandoned", "suspended"]
+              },
+              "verdict_ref": {
+                "$comment": "§5 — present when the sub-flow produced its own Report (e.g. a Spike sub-flow's go/no_go).",
+                "description": "Optional RowRef to the sub-flow's own report row (Spike GO/NO_GO etc).",
+                "$ref": "./_defs.schema.json#/$defs/RowRef"
               },
               "source_tool": {
                 "$comment": "R26 provenance floor on each aggregated item.",
@@ -535,6 +675,11 @@
     }
   },
   "x-m2-validator-contracts": [
+    {
+      "field": "result (discriminant)",
+      "rule": "P1 terminal-artifact branch — output shape matches result",
+      "check": "result=synthesized ⇒ body.summary present+non-empty and the report_type per-flow minimum-bar met; result=empty_clean ⇒ empty_details present and the empty is a legitimate verdict (empty_details.evidence traces to a real Ground/Investigate fact, NOT a missing input — principle 3); result=escalate ⇒ escalate_details present and NO request_upstream_deepen emitted (principle 2)."
+    },
     {
       "field": "findings[].verify_probe",
       "rule": "R20: re-execute verify_probe.command, compare to expected_result",
@@ -556,14 +701,24 @@
       "check": "NO 'no unverified remain' check (legacy reviewer criterion 3 / agent.md L57 DELETED per enforcement.md L41). Verify is the single gate. Whether unverified:false is honest = irreducible floor."
     },
     {
-      "field": "based_on.{investigate_ref,decide_ref,ground_ref}",
+      "field": "action_items[].priority",
+      "rule": "priority re-projected from origin severity (single risk scale)",
+      "check": "Each action_item priority resolves to the origin finding/risk severity (Severity scale low|med|high|critical); Report did not invent a new priority. Untraceable priority = dangling-evidence FAIL."
+    },
+    {
+      "field": "based_on.{investigate_ref,decide_ref,ground_ref,sub_flow_refs}",
       "rule": "§5 RowRef resolution",
-      "check": "Each ref resolves to an existing step_runs row of the expected step_name within this flow; not a file path."
+      "check": "Each ref resolves to an existing step_runs/flow row of the expected step within this flow; not a file path. sub_flow_refs present for compound."
     },
     {
       "field": "action_items[].followup_flow_ref",
       "rule": "§5 RowRef resolution + Decide.followup_flows linkage",
       "check": "When present, resolves to an existing queued flow/work_item row (README Activity 3 Decide.followup_flows connection)."
+    },
+    {
+      "field": "feasibility_verdict.evidence_ref",
+      "rule": "§5 RowRef resolution — prototype basis",
+      "check": "Resolves to the Implement(prototype) result row of this Spike flow. A verdict not grounded in a real prototype row = FAIL (verdict 추측 금지)."
     },
     {
       "field": "declared_next_step.declared_next_step",
@@ -588,7 +743,7 @@
     {
       "field": "report_type (flow ↔ step presence)",
       "rule": "non-code terminal only (README L60-62)",
-      "check": "Report exists ONLY in non-code flows; a code flow producing a report (or failure_origin=report) is rejected by Verify. report_type must match the orchestrator's active flow_type."
+      "check": "Report exists ONLY in non-code flows; a code flow producing a report (or failure_origin=report) is rejected by Verify. report_type must match the orchestrator's active flow_type; a code-flow / missing-or-malformed flow_type ⇒ result=escalate, failure_origin=upstream (NO report_type guess)."
     }
   ],
   "unevaluatedProperties": false

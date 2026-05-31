@@ -105,7 +105,7 @@ proceed를 *우발적*으로만 도달시켰다. 이 계약은 proceed를 다른
 - `sub_flow_identification` (Compound 전용)
 - `triage_mismatch?` (Triage 오류 의심 시 surface — reclassify 트리거; **production rule 아래 명시**)
 - `verification_proof`
-- `tool_status` (ED MCP 가용성 분기 — M3 degrade-as-branch; 아래 Failure & degrade handling)
+- `ed_availability` (ED MCP 가용성 분기 — M3 degrade-as-branch; Measured(ed_snapshot_version) | Omitted; 아래 Failure & degrade handling)
 
 ### impact_map / constraints / risk_surface 스키마
 
@@ -113,8 +113,9 @@ proceed를 *우발적*으로만 도달시켰다. 이 계약은 proceed를 다른
 flow_id: ...
 based_on_ground: <ground 산출물 hash>            # = Ground.task_subgraph.ed_snapshot_version (precondition으로 존재 assert)
 
-tool_status:                                     # M3 degrade-as-branch: ED MCP(주요 도구) 상태
-  ed_query: Measured | Omitted                   # Measured=정상 traversal / Omitted=ED 부재→mechanical error (아래)
+ed_availability:                                 # M3 degrade-as-branch: ED MCP(주요 도구) 상태
+  # Measured.value.ed_snapshot_version=정상 traversal / Omitted=ED 부재→mechanical error (아래)
+  # Measured | Omitted
 
 impact_map:
   primary_areas: [{ node, change_kind, source: ed_traversal }]
@@ -159,7 +160,7 @@ ground_unknowns_addressed:
 ```yaml
 (Compound only) sub_flow_identification: [{ flow_type, scope, rationale }]   # 식별만, 분해/순서는 Decide
 
-triage_mismatch?: { suspected_flow_type, evidence, confidence: low|med|high }   # production rule 아래
+triage_mismatch?: { suspected_flow_type, evidence, source_tool }   # production rule 아래 (confidence 필드 없음 — schema 정합)
 
 verification_proof: { ed_queries, web_fetches?, file_reads }
 ```
@@ -259,7 +260,7 @@ mechanical error다. (이건 intake stale-detection을 Investigate에 새로 부
 
 **(1) ED MCP (PRIMARY 도구) 부재/오류/timeout — principle 1: 주요 도구 → escalate:**
 - ED MCP는 Activity 1(Impact 추적)의 핵심이다. 부재/오류/timeout이면 Investigate는 *자기 일을 못 한다*.
-- `tool_status.ed_query = Omitted` (M3 degrade-as-branch로 *상태를 표기*) + **mechanical error 출력**
+- `ed_availability = Omitted` (M3 degrade-as-branch로 *상태를 표기*) + **mechanical error 출력**
   (`failure_origin=investigate` — 자기 주요 도구 실패; unknown-disposition.md L24 `tool_unavailable →
   escalate`와 일치).
 - 이 경우 `compatibility_verdict`를 **생산하지 않는다** — 빈 impact_map을 proceed/no_op로 위장하지 않는다
@@ -311,7 +312,7 @@ investigate_error:
   미사용(principle 2)
 - **Compound aggregate no_op 일관성** (신규): Compound가 no_op이면 sub_flow_verdicts result가 *전부* no_op인지 검증(V14); mixed(일부 no_op + 일부 non-no_op)이면 no_op sub-flow가 *버려지지 않고* partial_proceed면 `partial_scope_handling.no_op_set`에, proceed면 `sub_flow_verdicts`에 result=no_op로 기록됐는지(V14b) — no_op sub-flow가 blocked_set/proceed_set에 잘못 들어가면 **fail**
 - **needs_clarification 재invoke cap 일관성** (신규): result=needs_clarification 재invoke가 누적 3회 cap을 넘지 않는지; 3회 미해소 시 RETRY_EXHAUSTED halt(Reflect abandoned)로 라우팅됐는지 — 추가 needs_clarification로 무한 재invoke되면 **fail**. (이 경로는 mechanical error 아니므로 `failure_origin` 값을 산출하지 않아야 함)
-- `tool_status.ed_query` 가 실제 ED 사용/부재와 일치 (Omitted인데 verdict 산출 시 fail — principle 1·3)
+- `ed_availability` 가 실제 ED 사용/부재와 일치 (Omitted인데 verdict 산출 시 fail — principle 1·3)
 - 옵션·설계 prose 없음 (Decide 영역 침범 금지)
 
 ## Adaptive Depth
@@ -640,7 +641,7 @@ Auth 자체는 Investigate 책임 아님 — 외부 도구가 credential 받음.
 | 필수 Ground 필드 부재 vs present-but-empty 미구분 | PC4 (필드 존재 assert) + Validity 표 전제("필드 존재 시만 평가") | P8, principle 3 |
 | silent fact-vs-fact contradiction 처분 경로 없음 | unknown matrix 보강: Investigate 발견 모순 → risk_surface(+needs_clarification 승격), 해소는 안 함 | principle 1·3 |
 | STALE Ground intake 미방어 | PC2(hash 존재 assert) + stale *판정*은 Decide/Verify 위임 명시(boundary) | P8 (boundary 준수) |
-| ED MCP(주요 도구) 부재 처리 없음 (P2 류) | Failure & degrade (1): tool_status Omitted + mechanical error escalate | P2, principle 1 |
+| ED MCP(주요 도구) 부재 처리 없음 (P2 류) | Failure & degrade (1): ed_availability Omitted + mechanical error escalate | P2, principle 1 |
 | proceed(success) 분기 미명시 | Result enum & branches 절: proceed/partial_proceed를 1급 success 분기로 선언 | P1 |
 | (2nd-order) V2 unconditional이 V13 partial_proceed를 삼킴 + partial_proceed mechanical predicate 부재 | issue.scope_confined 필드 추가 + V2를 V2a(flow-wide→blocked)/V2b(scope-confined→partial_proceed)로 분기 + V13을 V2b 충족으로 mechanical 정의 + precedence(V2가 result 강제 아닌 scope 판정만) | P1 |
 | (2nd-order) Compound mixed no_op/proceed sub-flow 출력 슬롯 없음 (no_op_set 부재) | partial_scope_handling.no_op_set 추가 + V14b(mixed: non-no_op이 result 결정, no_op sub-flow는 no_op_set/sub_flow_verdicts에 보존) | P7, principle 3 |

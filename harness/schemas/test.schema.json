@@ -2,13 +2,101 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://blazewrit.dev/harness/schemas/test.schema.json",
   "title": "blazewrit harness — Test step structured_output (RED tests + coverage/profile/migration-validate)",
-  "description": "OUTPUT schema for the Test step. Test writes FAILING (RED) tests that verify Spec ACs; in Bug Fix it reproduces; in Performance it profiles/measures; in Migration it validates. TARGET RUNTIME: grammar-constrained generation (M1 = SHAPE; the model literally cannot emit a wrong shape/enum/missing-required field). Truth-bearing fields (RED-confirmed counts, profile baselines, migration dry-run, AC traceability, declared next step) are closed by SIBLING M2 validator_contracts listed in x-validator-contract annotations and in the step manifest — grammar enforces SHAPE only. INPUT CONTRACT: exactly one of (Spec | Decide) — modeled as the `input` meta field, a oneOf discriminated by `input_kind` so grammar enforces exactly-one-of. §5: every cross-step ref (based_on, bug_ref) is a Postgres RowRef, never a file path. R23: every measured count is a CountClaim. M3: every tool-dependent fact (RED confirmation, firebat scan, perf baseline, migration dry-run) is a Measured|Omitted discriminated union. R13: `unverified` is a KEEP-polarity floor flag (the legacy test.md L40 'No [UNVERIFIED] remain' rule is DELETED — Verify is the single gate).",
+  "description": "OUTPUT schema for the Test step. Test writes FAILING (RED) tests that verify Spec ACs; in Bug Fix it reproduces; in Performance it profiles/measures; in Migration it validates. TARGET RUNTIME: grammar-constrained generation (M1 = SHAPE; the model literally cannot emit a wrong shape/enum/missing-required field). Truth-bearing fields (RED-confirmed counts, profile baselines, migration dry-run, AC traceability, declared next step) are closed by SIBLING M2 validator_contracts listed in x-validator-contract annotations and in the step manifest — grammar enforces SHAPE only. INPUT CONTRACT: exactly one of (Spec | Decide) — modeled as the `input` meta field, a oneOf discriminated by `input_kind` so grammar enforces exactly-one-of. §5: every cross-step ref (based_on, bug_ref) is a Postgres RowRef, never a file path. R23: every measured count is a CountClaim. M3: every tool-dependent fact (RED confirmation, firebat scan, perf baseline, migration dry-run) is a Measured|Omitted discriminated union. R13: `unverified` is a KEEP-polarity floor flag (the historical (now-removed) 'No [UNVERIFIED] remain' rule is DELETED — Verify is the single gate).",
 
   "type": "object",
   "additionalProperties": false,
-  "required": ["input", "tests_added", "tests_written_count", "red_confirmed_count", "based_on", "unverified"],
+  "required": ["input", "result", "tests_written_count", "red_confirmed_count", "based_on", "unverified"],
+
+  "allOf": [
+    {
+      "$comment": "P1: behavior-test flows must carry a non-empty primary behavior-test block. When result ∈ {red, unexpected_green}, at least one of tests_added / coverage_added must be present and non-empty (derived per-test status drives result). measured/no_op flows fill other blocks instead.",
+      "if": {
+        "properties": { "result": { "enum": ["red", "unexpected_green"] } },
+        "required": ["result"]
+      },
+      "then": {
+        "anyOf": [
+          { "required": ["tests_added"], "properties": { "tests_added": { "minItems": 1 } } },
+          { "required": ["coverage_added"], "properties": { "coverage_added": { "minItems": 1 } } }
+        ]
+      }
+    },
+    {
+      "$comment": "result=measured (Performance/Migration) requires the measuring primary block.",
+      "if": {
+        "properties": { "result": { "const": "measured" } },
+        "required": ["result"]
+      },
+      "then": {
+        "anyOf": [
+          { "required": ["profile"] },
+          { "required": ["migration_validation"] }
+        ]
+      }
+    },
+    {
+      "$comment": "result=no_op requires no_op_details (legitimately-zero output verdict, not escalate).",
+      "if": {
+        "properties": { "result": { "const": "no_op" } },
+        "required": ["result"]
+      },
+      "then": { "required": ["no_op_details"] }
+    }
+  ],
 
   "properties": {
+
+    "result": {
+      "$comment": "P1+P-residual: the whole result-verdict field, DERIVED from the flow's primary output block (tests_added / coverage_added / profile / migration_validation — NOT tests_added alone). This is the deliberate Investigate-pattern backport (success branches, not just failures). In-scope FAILURES (preconditions, runner-absent, migration dry_run failed|partial, caps) are NOT result values — they route through the separate `escalate` branch with failure_origin.",
+      "description": "Test result verdict. 'red' = at least one written tests_added/coverage_added item has status=RED (→ Test⇄Implement loop). 'unexpected_green' = all filled behavior-test/coverage items are status=unexpected_green (→ signal Verify, not escalate). 'measured' = Performance profile measured or Migration dry_run outcome=ok (→ signal Verify). 'no_op' = legitimately-zero output (well-formed empty AC / Decide-driven 0-derivation) carrying no_op_details. Migration dry_run failed|partial and other in-scope failures do NOT map here — they escalate (failure_origin=test).",
+      "type": "string",
+      "enum": ["red", "unexpected_green", "measured", "no_op"]
+    },
+
+    "no_op_details": {
+      "$comment": "Required when result=no_op (enforced by root allOf). Reuses the Investigate no_op_details shape. A verdict (legitimately-zero output), NOT an escalate.",
+      "description": "Details for result=no_op (legitimately-zero output). reason = why there is justly nothing to write/measure; evidence = the upstream fact ref grounding the empty-by-design conclusion; suggested_action = abandon | reframe_request.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "evidence", "suggested_action"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence": {
+          "description": "Upstream fact ref grounding the justly-empty conclusion.",
+          "type": "string",
+          "minLength": 1
+        },
+        "suggested_action": {
+          "type": "string",
+          "enum": ["abandon", "reframe_request"]
+        }
+      }
+    },
+
+    "escalate": {
+      "$comment": "Mechanical-error / in-scope-failure terminal carrier — present INSTEAD of a result verdict path's success blocks (preconditions PC, test-runner absent, migration dry_run failed|partial, caps mid-activity). failure_origin reuses _defs FailureOrigin restricted to the Test-reachable origins {spec, decide, test, cap_exceeded}. NOT request_upstream_deepen (Decide-only, principle 2). When `escalate` is present the success result blocks (tests_added/coverage_added/profile/migration_validation) may be omitted; `result` still records the closest verdict context if derivable, else the orchestrator routes purely on `escalate`.",
+      "description": "OPTIONAL escalate carrier for Test's in-scope failures (mechanical errors): missing/malformed upstream (failure_origin=spec|decide), test-runner absent or migration dry_run failed|partial (failure_origin=test), or caps blown mid-activity (failure_origin=cap_exceeded). reason + evidence (ref or file:line) diagnose it. Routed out-of-band by the orchestrator; never via request_upstream_deepen.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failure_origin", "reason"],
+      "properties": {
+        "failure_origin": {
+          "description": "Which step the in-scope failure is attributed to. Test-reachable subset of _defs FailureOrigin: spec/decide (missing-or-malformed upstream), test (runner absent / migration dry_run failed|partial), cap_exceeded (caps blown).",
+          "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+        },
+        "reason": {
+          "description": "Human-readable diagnosis of the mechanical error.",
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "description": "Evidence for the failure (a RowRef-style ref or a file:line pointer).",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
 
     "input": {
       "$comment": "Input contract: exactly one of (Spec | Decide). Modeled as a oneOf discriminated by input_kind so grammar enforces exactly-one-of (R1/M1). The actual upstream rows are RowRefs in based_on; this meta records WHICH single input drove the step and its row.",
@@ -32,7 +120,7 @@
           "properties": {
             "input_kind": { "const": "decide" },
             "decide_ref": {
-              "description": "RowRef to the driving Decide step_runs row (option_selection / decision_record) for Spec-less chains.",
+              "description": "RowRef to the driving Decide step_runs row for Spec-less chains. The real Decide fields read are mode-dependent: mode=record → decision/rationale; mode=plan → options_considered/chosen; mode=design → chosen_architecture/requirements/policies (the legacy `option_selection`/`decision_record` field names do NOT exist in the Decide schema — P3/P8 correction).",
               "$ref": "./_defs.schema.json#/$defs/RowRef"
             }
           }
@@ -41,14 +129,20 @@
     },
 
     "tests_added": {
-      "$comment": "Core output. tests_added[{file_path, test_name, ac_ref, status:RED}]. status is a const enum (RED only) — grammar forbids any other value. Each item carries its RED-confirmation evidence (M3 degradable: the test run / firebat scan can fail/timeout/be absent), a provenance source_tool (R26 floor), and the R13 unverified KEEP-polarity flag.",
-      "description": "The RED tests this step wrote. Each entry is a single failing test traced to the AC (or reproduction/coverage target) it verifies. status is fixed to 'RED' (Test writes RED; Implement turns GREEN). ac_ref is the within-Spec AC identifier (e.g. 'AC-001') the test verifies — it is a SPEC-INTERNAL id, not a Postgres row (the Spec row is in based_on.spec_ref). M2 (test-reviewer/AC traceability): every Spec AC has at least one tests_added entry whose ac_ref names it; reverse, every ac_ref resolves to a real AC in the spec_ref row.",
+      "$comment": "Core output for behavior-test flows. tests_added[{file_path, test_name, ac_ref?, status:RED|unexpected_green, unexpected_green_reason?}]. status is DERIVED from actual execution: RED = ran and failed; unexpected_green = ran and passed (a first-class normal outcome, NOT escalate). minItems removed and conditionally required only when result ∈ {red, unexpected_green} (see top-level allOf) — measured/no_op/coverage-only flows fill other blocks. Each item carries optional RED-confirmation evidence (M3 degradable), a provenance source_tool (R26 floor), and the R13 unverified KEEP-polarity flag.",
+      "description": "The behavior tests this step wrote. Each entry is a single test traced to the AC (or reproduction/coverage target) it verifies. status is DERIVED from the actual test run: 'RED' = executed and observed failing (Implement turns GREEN); 'unexpected_green' = executed and observed passing (RED was intended but it passed — a normal outcome: already_satisfied / not_reproducible / coverage_over_existing / p0_retroactive). ac_ref (OPTIONAL) is the within-Spec AC identifier (e.g. 'AC-001') for Spec-driven tests, or the reproduction/coverage/derivation target for Decide-driven tests; unexpected_green/no_op cases may legitimately lack an AC id. M2 (test-reviewer/AC traceability): every Spec AC has at least one tests_added entry whose ac_ref names it; reverse, every ac_ref resolves to a real AC in the spec_ref row.",
       "type": "array",
-      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["file_path", "test_name", "ac_ref", "status", "source_tool", "unverified"],
+        "required": ["file_path", "test_name", "status", "source_tool", "unverified"],
+        "allOf": [
+          {
+            "$comment": "unexpected_green_reason is required iff status=unexpected_green.",
+            "if": { "properties": { "status": { "const": "unexpected_green" } } },
+            "then": { "required": ["unexpected_green_reason"] }
+          }
+        ],
         "properties": {
           "file_path": {
             "description": "Path to the test file written (a real on-disk READ/WRITE path — code under git, NOT a §5 workflow-artifact RowRef; tests are versioned source files per DECISIONS §5 'code + spec/ADR = file (git)').",
@@ -61,17 +155,24 @@
             "minLength": 1
           },
           "ac_ref": {
-            "description": "The acceptance-criterion identifier this test verifies (Spec-internal id, e.g. 'AC-001'). For non-Spec flows (reproduce/coverage) this names the reproduction or coverage target the test traces to. M2 (R-traceability): must resolve to a real AC/target in the input row.",
+            "description": "OPTIONAL. The acceptance-criterion identifier this test verifies (Spec-internal id, e.g. 'AC-001'). For non-Spec flows (reproduce/coverage) this names the reproduction or coverage target the test traces to. unexpected_green/no_op cases may legitimately lack an AC id. M2 (R-traceability): when present must resolve to a real AC/target in the input row.",
             "type": "string",
             "minLength": 1
           },
           "status": {
-            "description": "Fixed to 'RED' — Test produces only failing tests. Grammar forbids any other value; Implement (GREEN) owns the transition.",
-            "const": "RED"
+            "description": "Per-test run polarity, DERIVED from actual execution (not self-asserted). 'RED' = ran and failed (Implement turns GREEN); 'unexpected_green' = ran and passed (RED intended but it passed — a first-class normal outcome, signals Verify, not escalate). When 'unexpected_green', unexpected_green_reason is required.",
+            "type": "string",
+            "enum": ["RED", "unexpected_green"]
+          },
+          "unexpected_green_reason": {
+            "$comment": "Required-when status=unexpected_green (enforced by the item-level if/then below). Enumerates the legitimate reasons a RED-intended test passes.",
+            "description": "Why this test came up GREEN despite RED intent. Required when status=unexpected_green. 'already_satisfied' = AC already met; 'not_reproducible' = bug did not reproduce (already fixed); 'coverage_over_existing' = coverage test over already-GREEN code; 'p0_retroactive' = Bug Fix P0 retroactive test written after the emergency fix merged GREEN.",
+            "type": "string",
+            "enum": ["already_satisfied", "not_reproducible", "coverage_over_existing", "p0_retroactive"]
           },
           "red_confirmation": {
             "$comment": "M3 DEGRADE — confirming RED requires RUNNING the test; that run can fail/timeout/be unavailable (firebat absent). Absence is a first-class branch (Measured|Omitted), NOT a null or placeholder. Measured.value carries the observed failing outcome.",
-            "description": "Evidence that running this test actually failed (RED confirmed). M3 Measured|Omitted discriminated union on `status`: 'measured' = the test was executed and observed failing (value carries the runner outcome); 'omitted' = the run could not be performed (e.g. test runner/firebat tool_failed/timeout/unavailable — R22 first-class absence). x-validator-contract (M2/R20-adjacent): orchestrator re-executes the test and asserts it fails (a self-asserted 'it's RED' is not truth).",
+            "description": "Evidence from actually running this test (the observed run polarity). M3 Measured|Omitted discriminated union on `status`: 'measured' = the test was executed and its outcome observed (value.failed=true ⇒ RED; value.failed=false ⇒ unexpected_green); 'omitted' = the run could not be performed (e.g. test runner/firebat tool_failed/timeout/unavailable — R22 first-class absence). x-validator-contract (M2/R20-adjacent): orchestrator re-executes the test and asserts the recorded outcome (a self-asserted polarity is not truth).",
             "type": "object",
             "required": ["status"],
             "oneOf": [
@@ -84,8 +185,8 @@
                     "required": ["failed", "command"],
                     "properties": {
                       "failed": {
-                        "description": "true = the test was observed to FAIL (RED). A RED test that does NOT fail is a contract violation (M2: re-execute and confirm).",
-                        "const": true
+                        "description": "Observed run polarity: true = the test FAILED (RED); false = the test PASSED (unexpected_green). M2 re-executes and confirms the recorded value matches the item's status (failed=true ⇔ status=RED, failed=false ⇔ status=unexpected_green).",
+                        "type": "boolean"
                       },
                       "command": {
                         "description": "Exact command run to confirm RED (e.g. 'bun test path/to/file').",
@@ -108,9 +209,49 @@
             "$ref": "./_defs.schema.json#/$defs/SourceTool"
           },
           "unverified": {
-            "$comment": "R13 floor, KEEP polarity. NO 'no unverified remain' forbid (legacy test.md L40 DELETED). Verify is the single gate.",
+            "$comment": "R13 floor, KEEP polarity. NO 'no unverified remain' forbid (historical 'No [UNVERIFIED] remain' rule DELETED). Verify is the single gate.",
             "description": "R13 KEEP-polarity floor flag. true = a claim about this test (e.g. it covers the AC's behavior, or a training-data-based assertion) was not verified by Test itself and MUST propagate downstream to Verify. Never forbidden true at this intermediate step.",
             "type": "boolean"
+          }
+        }
+      }
+    },
+
+    "coverage_added": {
+      "$comment": "Activity 3 (Refactor / Test flows). First-class PRIMARY output for coverage flows — participates in result derivation exactly like tests_added (any item status=RED ⇒ result=red; all unexpected_green ⇒ result=unexpected_green). A coverage-only flow MUST NOT be misclassified as no_op.",
+      "description": "OPTIONAL — Refactor/Test coverage flows. Coverage tests added over previously-uncovered areas. Coverage over already-GREEN code legitimately yields status=unexpected_green(coverage_over_existing). Same per-item run-polarity semantics as tests_added; folded into result derivation.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file_path", "area", "status"],
+        "allOf": [
+          {
+            "$comment": "unexpected_green_reason is required iff status=unexpected_green.",
+            "if": { "properties": { "status": { "const": "unexpected_green" } } },
+            "then": { "required": ["unexpected_green_reason"] }
+          }
+        ],
+        "properties": {
+          "file_path": {
+            "description": "Path to the coverage test file written (git-versioned code, not a §5 RowRef).",
+            "type": "string",
+            "minLength": 1
+          },
+          "area": {
+            "description": "The previously-uncovered area this test covers.",
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "description": "Per-coverage-test run polarity, DERIVED from execution: 'RED' = ran and failed; 'unexpected_green' = ran and passed (coverage over already-GREEN code is the normal coverage_over_existing case).",
+            "type": "string",
+            "enum": ["RED", "unexpected_green"]
+          },
+          "unexpected_green_reason": {
+            "description": "Why this coverage test came up GREEN. Required when status=unexpected_green (typically 'coverage_over_existing').",
+            "type": "string",
+            "enum": ["already_satisfied", "not_reproducible", "coverage_over_existing", "p0_retroactive"]
           }
         }
       }
@@ -133,7 +274,7 @@
       "description": "OPTIONAL — Bug Fix flow. The test that reproduces the bug (RED; Implement's fix turns it GREEN). Present only on Bug Fix chains. test_path is a real on-disk test file path (git-versioned code); bug_ref is a §5 RowRef to the upstream row describing the bug (Decide decision_record / Investigate). M2 (test-reviewer): the reproduction test actually reproduces the bug.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["test_path", "bug_ref"],
+      "required": ["test_path", "bug_ref", "reproduced"],
       "properties": {
         "test_path": {
           "description": "On-disk path of the reproduction test file (git-versioned code, not a workflow RowRef).",
@@ -143,6 +284,10 @@
         "bug_ref": {
           "description": "§5 RowRef to the upstream row that defines the bug (Decide/Investigate step_runs row). NEVER a file path.",
           "$ref": "./_defs.schema.json#/$defs/RowRef"
+        },
+        "reproduced": {
+          "description": "Whether the reproduction test actually reproduced the bug. true = bug reproduced (RED). false = bug NOT reproduced (already fixed) → the corresponding tests_added entry has status=unexpected_green(not_reproducible).",
+          "type": "boolean"
         }
       }
     },
@@ -152,10 +297,15 @@
       "description": "OPTIONAL — Performance flow. The profiling measurement: which metric, its measured baseline, and the target. Present only on Performance chains. baseline is M3-degradable (perf tooling can be ABSENT/FAIL/timeout — R22 first-class absence), and when measured it is a CountClaim (a measured number, not a bare integer — R23). target is the goal the benchmark asserts against (an M2/R20 verify_probe-style threshold, not itself a measurement).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["metric", "baseline", "target"],
+      "required": ["metric", "unit", "baseline", "target", "comparator"],
       "properties": {
         "metric": {
           "description": "The metric being profiled (e.g. 'p95_latency_ms', 'rss_mb', 'throughput_rps').",
+          "type": "string",
+          "minLength": 1
+        },
+        "unit": {
+          "description": "REQUIRED measurement unit for `metric` and the baseline/target values (e.g. 'ms', 'MB', 'ops/s').",
           "type": "string",
           "minLength": 1
         },
@@ -175,9 +325,14 @@
           ]
         },
         "target": {
-          "$comment": "R20 — a target is a re-runnable assertion (command + expected_result), not a measurement.",
-          "description": "The performance target the benchmark must eventually meet, expressed as an R20 VerifyProbe (command + expected_result). SHAPE only; M2 re-executes the probe against the implementation (Verify), not Test. Test writes the RED benchmark; it does NOT pass yet.",
+          "$comment": "R20 — a target is a re-runnable assertion (command + expected_result), not a measurement. The `comparator` sibling encodes the baseline→target direction the expected_result is checked against.",
+          "description": "The performance target the benchmark must eventually meet, expressed as an R20 VerifyProbe (command + expected_result). SHAPE only; M2 re-executes the probe against the implementation (Verify), not Test. Test writes the RED benchmark; it does NOT pass yet. The comparator field gives the threshold direction (baseline→target).",
           "$ref": "./_defs.schema.json#/$defs/VerifyProbe"
+        },
+        "comparator": {
+          "description": "Threshold direction for baseline→target (e.g. p95 latency lte target). One of lte|gte|lt|gt|eq.",
+          "type": "string",
+          "enum": ["lte", "gte", "lt", "gt", "eq"]
         }
       }
     },
@@ -209,9 +364,14 @@
                   "required": ["outcome", "command"],
                   "properties": {
                     "outcome": {
-                      "description": "Dry-run verdict: did the migration apply cleanly and reverse cleanly?",
+                      "description": "Dry-run verdict: did the migration apply cleanly and reverse cleanly? 'ok' = dry-run passed → result=measured; 'failed'|'partial' = the migration script itself is broken (Test's in-scope failure) → NOT mapped to a result; escalate(failure_origin=test) with dry_run_detail.",
                       "type": "string",
                       "enum": ["ok", "failed", "partial"]
+                    },
+                    "dry_run_detail": {
+                      "description": "Diagnostic text for a failed|partial dry-run (accompanies the escalate). Omitted on outcome=ok.",
+                      "type": "string",
+                      "minLength": 1
                     },
                     "command": {
                       "description": "Exact dry-run command executed (e.g. 'bun run migrate --dry-run').",
@@ -270,7 +430,7 @@
 
     "unverified": {
       "$comment": "R13 floor at step level, KEEP polarity. Aggregate flag that any tests_added[].unverified is true (or a step-level training-data assertion is unverified). NO 'no unverified remain' forbid — Verify is the single gate.",
-      "description": "R13 KEEP-polarity floor flag (step level). true = this Test output carries at least one unverified claim that MUST propagate to Verify. DESIGNED to persist (enforcement.md L41 authoritative); never forbidden true here. The legacy test.md L40 'No [UNVERIFIED] remain' self-validation rule is DELETED — Verify is the single gate that resolves unverified claims.",
+      "description": "R13 KEEP-polarity floor flag (step level). true = this Test output carries at least one unverified claim that MUST propagate to Verify. DESIGNED to persist (enforcement.md L41 authoritative); never forbidden true here. The historical (now-removed) 'No [UNVERIFIED] remain' self-validation rule is DELETED — Verify is the single gate that resolves unverified claims.",
       "type": "boolean"
     },
 

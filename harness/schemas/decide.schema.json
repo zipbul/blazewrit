@@ -44,7 +44,7 @@
           "description": "Why this decision — grounded in Ground/Investigate FACTS (reviewer: 'ground·investigate 사실에 근거'). REQUIRED in every mode. Carries provenance: source_tool names which Ground/Investigate origin the reason rests on (R26 floor).",
           "type": "object",
           "additionalProperties": false,
-          "required": ["statement", "source_tool"],
+          "required": ["statement", "grounded_in", "source_tool"],
           "properties": {
             "statement": { "type": "string", "minLength": 1 },
             "grounded_in": {
@@ -510,7 +510,7 @@
     {
       "rule": "R6",
       "field": "decision.mode",
-      "check": "M2 REQUIRED: orchestrator computes the FORCED mode from Investigate schema fields (count(compatibility_verdict.issues where severity>=medium)>=2 -> plan; any(risk_surface.severity=high) AND declared=record -> plan; impact_map.affected_files_count>=5 AND declared=record -> plan; architecture_impact.has_architecture_level==true -> design). Assert emitted `mode` == computed forced mode. Mode upgrade triggers evaluated ONLY when compatibility_verdict.result in {proceed, partial_proceed}; otherwise Decide must not have executed at all."
+      "check": "M2 REQUIRED: orchestrator computes the FORCED mode from Investigate schema fields (count(compatibility_verdict.issues where severity>=medium)>=2 -> plan; any(risk_surface.severity in {high, critical}) AND declared=record -> plan; impact_map.affected_files_count>=5 AND declared=record -> plan; architecture_impact.has_architecture_level==true -> design). Assert emitted `mode` == computed forced mode. Mode upgrade triggers evaluated ONLY when compatibility_verdict.result in {proceed, partial_proceed}; otherwise Decide must not have executed at all."
     },
     {
       "rule": "R6/mode-depth",

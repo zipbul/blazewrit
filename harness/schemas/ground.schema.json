@@ -6,6 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "ground_result",
     "flow_id",
     "captured_at",
     "schema_version",
@@ -20,7 +21,206 @@
     "freshness",
     "verification_proof"
   ],
+  "allOf": [
+    {
+      "$comment": "P1 escalate relaxation: on ground_result.status=escalate Ground does NOT produce the normal Output (정상 [Output] 미산출 또는 부분) — task_subgraph is emitted as its Omitted branch (R22, never truly absent under additionalProperties:false) and volatile_state/freshness are relaxed from the top-level required set. On ok/degraded_pass the full measured output is required.",
+      "if": {
+        "properties": {
+          "ground_result": {
+            "properties": {
+              "status": {
+                "const": "escalate"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "$comment": "escalate: keep task_subgraph required (its Omitted branch represents the omission), but drop volatile_state/freshness from required — they may be absent or partial.",
+        "required": [
+          "ground_result",
+          "flow_id",
+          "captured_at",
+          "schema_version",
+          "input_refs",
+          "channel",
+          "flow_type",
+          "depth",
+          "task_subgraph",
+          "unknowns",
+          "conflicts",
+          "verification_proof"
+        ]
+      }
+    },
+    {
+      "$comment": "freshness.git_head_start/git_head_end are conditionally required ONLY when volatile_state.git.git_state=repo (prose [git capture states]): when git_state ∈ {no_repo,empty_repo,git_unavailable} head_start/head_end are omitted + omitted_fields recorded and racing_changes=false.",
+      "if": {
+        "required": [
+          "volatile_state"
+        ],
+        "properties": {
+          "volatile_state": {
+            "required": [
+              "git"
+            ],
+            "properties": {
+              "git": {
+                "properties": {
+                  "git_state": {
+                    "const": "repo"
+                  }
+                },
+                "required": [
+                  "git_state"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "freshness": {
+            "required": [
+              "git_head_start",
+              "git_head_end",
+              "racing_changes"
+            ]
+          }
+        }
+      }
+    }
+  ],
   "properties": {
+    "ground_result": {
+      "$comment": "P1 — Ground's single most-emphasized design element: the discriminated success+failure result enum, reusing Investigate's compatibility_verdict.result shape. status=ok|degraded_pass|escalate. degrade_reasons required-non-empty when degraded_pass; escalate_detail required when escalate (failure_origin restricted to the shared FailureOrigin values Ground may attribute: ground | cap_exceeded). The reviewer gates directly on ground_result.status. This closes the 'success branch undefined' hole.",
+      "description": "Ground's top-level discriminated result (P1 — success branch declared alongside degrade/escalate in one enum). status=ok (all primary activities normal), degraded_pass (ENHANCEMENT-grade losses only — conditional volatile absent/timeout, racing residue, git_state≠repo, unrecognized flow_type fallback), escalate (PRIMARY loss / mechanical error — ED MCP absent/error/timeout, input-precondition violation, malformed active_flow_state → failure_origin=ground; OR step budget exhausted → failure_origin=cap_exceeded). x-validator-contract (M2): degrade_reasons non-empty when degraded_pass; escalate_detail present when escalate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "description": "Discriminant. ok | degraded_pass | escalate.",
+          "type": "string",
+          "enum": [
+            "ok",
+            "degraded_pass",
+            "escalate"
+          ]
+        },
+        "degrade_reasons": {
+          "$comment": "Required-non-empty when status=degraded_pass (reviewer: 'degraded_pass면 degrade_reasons 비어있지 않음'). Each reason names the ENHANCEMENT-grade loss that demoted the run.",
+          "description": "Why the run is degraded (conditional volatile absent/timeout, racing residue, git_state≠repo, unrecognized flow_type fallback). REQUIRED and non-empty when status=degraded_pass.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "escalate_detail": {
+          "$comment": "Required when status=escalate. failure_origin restricted to the two origins Ground attributes: 'ground' (Ground cannot do its job — ED absent/precondition/malformed) and 'cap_exceeded' (step budget exhausted — orchestrator-level halt, NO auto-reinvoke). Both are members of the shared FailureOrigin enum.",
+          "description": "Escalate carrier (required when status=escalate). failure_origin ∈ {ground, cap_exceeded}; reason states what failed; evidence references the input ref / tool_call that proves it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "failure_origin",
+            "reason",
+            "evidence"
+          ],
+          "properties": {
+            "failure_origin": {
+              "description": "Which origin Ground attributes the escalate to. Restricted to {ground, cap_exceeded} (shared FailureOrigin enum).",
+              "allOf": [
+                {
+                  "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+                }
+              ],
+              "enum": [
+                "ground",
+                "cap_exceeded"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evidence": {
+              "description": "Input ref or tool_call ref proving the escalate (e.g. attempted ed_query ref, or the partial-progress activity list on cap_exceeded).",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "degraded_pass"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "degrade_reasons"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "escalate"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "escalate_detail"
+            ]
+          }
+        }
+      ]
+    },
+    "omitted_fields": {
+      "$comment": "R22 carrier. Every conditional/degradable schema key omitted from this output is recorded here with {field, reason, source_tool} — the mechanism every key-omission/degrade depends on (reviewer: 'omit된 schema key마다 omitted_fields에 1행'). Optional at the grammar level (present only when something was omitted); the M2 reviewer enforces non-empty-when-any-key-omitted and forbids value:null / comment-only key markers.",
+      "description": "R22 key-omission carrier. One row per schema key that tool/data absence forced Ground to omit (e.g. perf_baseline skipped, git head_* on git_state≠repo, ed_snapshot_version when task_subgraph Omitted). x-validator-contract (M2): every omitted conditional key has exactly one row here; no value:null / '# OMITTED' placeholders (R22).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "reason",
+          "source_tool"
+        ],
+        "properties": {
+          "field": {
+            "description": "Schema field path that was omitted (e.g. 'perf_baseline', 'volatile_state.git.head_start', 'freshness.ed_snapshot_version').",
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_tool": {
+            "$ref": "./_defs.schema.json#/$defs/SourceTool"
+          }
+        }
+      }
+    },
     "flow_id": {
       "$comment": "§5: the owning flow row id (Postgres flows.id), not a file path.",
       "description": "The flow this Ground run belongs to. §5 RowRef (Postgres flows.id) — legacy prose 'flow_id: <id>' is a row ref, never a file.",
@@ -189,8 +389,8 @@
           "$ref": "#/$defs/VolatileLint"
         },
         "git": {
-          "$comment": "git is local non-degradable factual state — always measured, never Omitted (a repo with no commits still has a head_start of the empty tree / unborn-branch sentinel). Not a DegradableMeasurement.",
-          "description": "Git working-tree + log state (branch, dirty, head_start, head_end, recent_commits). Non-degradable: git is always present locally. recent_commits each carry sha + provenance.",
+          "$comment": "git is a FACTUAL-STATE discriminant ([git capture states]), NOT 'always a repo'. git_state ∈ {repo, no_repo, empty_repo, git_unavailable}. Only git_state=repo carries branch/dirty/head_start/head_end/recent_commits; the other states omit those keys (+ omitted_fields row) and demote the run to degraded_pass. The reviewer gates 'git_state 부재 = FAIL'.",
+          "description": "Git capture state. Discriminated on git_state: repo (git repo with ≥1 commit) carries branch/dirty/head_start/head_end/recent_commits + source_tool; no_repo (working dir is not a git repo) / empty_repo (repo with 0 commits, no HEAD) / git_unavailable (git binary absent/unrunnable) carry only git_state + source_tool, omit the head_* / recent_commits keys (recorded in omitted_fields), and the run becomes degraded_pass. Not a fake 'always present' measurement — non-repo/empty/no-binary are real factual states surfaced (not escalate, since git is not a PRIMARY tool).",
           "$ref": "#/$defs/VolatileGit"
         },
         "perf_baseline": {
@@ -527,65 +727,102 @@
       ]
     },
     "VolatileGit": {
-      "$comment": "git — NON-degradable factual state (always present). recent_commits each carry sha + source_tool provenance. new commit COUNT (if surfaced) would be a CountClaim, but the prose lists recent_commits as a list, not a count, so no CountClaim here.",
-      "description": "Git working-tree + log state. branch, dirty(bool), head_start, head_end, recent_commits (each with sha + provenance source_tool). Not a DegradableMeasurement — git is always available locally.",
+      "$comment": "git — FACTUAL-STATE discriminant ([git capture states]), NOT 'always a committed repo'. git_state ∈ {repo, no_repo, empty_repo, git_unavailable}. ONLY git_state=repo requires branch/dirty/head_start/head_end/recent_commits (each commit carries sha + source_tool provenance); the other three states require only git_state + source_tool and the head_*/recent_commits keys are omitted (recorded in omitted_fields) — the run is then degraded_pass. recent_commits is a list, not a count, so no CountClaim.",
+      "description": "Git capture state, discriminated on git_state. git_state=repo (git repo with ≥1 commit): branch, dirty(bool), head_start, head_end, recent_commits (each with sha + provenance source_tool). git_state ∈ {no_repo (working dir not a git repo), empty_repo (repo with 0 commits / no HEAD), git_unavailable (git binary absent/unrunnable)}: head_*/recent_commits keys are OMITTED (+ omitted_fields row), racing_changes comparison skipped (racing_changes=false), run demoted to degraded_pass. git is a factual state, not a PRIMARY tool, so non-repo/empty/no-binary are surfaced (degrade), never escalate.",
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "branch",
-        "dirty",
-        "head_start",
-        "head_end",
-        "recent_commits",
+        "git_state",
         "source_tool"
       ],
-      "properties": {
-        "branch": {
-          "type": "string",
-          "minLength": 1
-        },
-        "dirty": {
-          "description": "Working-tree dirty flag (uncommitted changes present).",
-          "type": "boolean"
-        },
-        "head_start": {
-          "type": "string",
-          "minLength": 1
-        },
-        "head_end": {
-          "type": "string",
-          "minLength": 1
-        },
-        "recent_commits": {
-          "description": "Recent commits from git log. Each carries sha + provenance.",
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "sha",
-              "source_tool"
-            ],
-            "properties": {
-              "sha": {
-                "type": "string",
-                "minLength": 1
-              },
-              "subject": {
-                "type": "string"
-              },
-              "source_tool": {
-                "$ref": "./_defs.schema.json#/$defs/SourceTool"
+      "oneOf": [
+        {
+          "$comment": "git_state=repo — full capture required.",
+          "additionalProperties": false,
+          "required": [
+            "git_state",
+            "branch",
+            "dirty",
+            "head_start",
+            "head_end",
+            "recent_commits",
+            "source_tool"
+          ],
+          "properties": {
+            "git_state": {
+              "const": "repo"
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dirty": {
+              "description": "Working-tree dirty flag (uncommitted changes present).",
+              "type": "boolean"
+            },
+            "head_start": {
+              "type": "string",
+              "minLength": 1
+            },
+            "head_end": {
+              "type": "string",
+              "minLength": 1
+            },
+            "recent_commits": {
+              "description": "Recent commits from git log. Each carries sha + provenance. Present only when git_state=repo.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "sha",
+                  "source_tool"
+                ],
+                "properties": {
+                  "sha": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "source_tool": {
+                    "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                  }
+                }
               }
+            },
+            "source_tool": {
+              "$comment": "Provenance floor for the git facts as a whole.",
+              "description": "Provenance for the git capture (e.g. 'git status'/'git log' command).",
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
             }
           }
         },
-        "source_tool": {
-          "$comment": "Provenance floor for the git facts as a whole.",
-          "description": "Provenance for the git capture (e.g. 'git status'/'git log' command).",
-          "$ref": "./_defs.schema.json#/$defs/SourceTool"
+        {
+          "$comment": "git_state ∈ {no_repo, empty_repo, git_unavailable} — head_*/recent_commits keys OMITTED (recorded in omitted_fields), run degraded_pass.",
+          "additionalProperties": false,
+          "required": [
+            "git_state",
+            "source_tool"
+          ],
+          "properties": {
+            "git_state": {
+              "description": "Non-repo factual state: no_repo / empty_repo / git_unavailable. head_*/recent_commits omitted.",
+              "type": "string",
+              "enum": [
+                "no_repo",
+                "empty_repo",
+                "git_unavailable"
+              ]
+            },
+            "source_tool": {
+              "description": "Provenance for the git-state detection (e.g. 'git rev-parse' result).",
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
+            }
+          }
         }
-      }
+      ]
     },
     "VolatilePerfBaseline": {
       "$comment": "Conditional (Performance). M3 union. p50/p95/p99/throughput are measured timings, not COUNTS — left as numbers (CountClaim is for counts-of-things, these are latency/throughput measurements). Modeled as Measured with provenance.",
@@ -868,8 +1105,8 @@
       ],
       "properties": {
         "dim": {
-          "$comment": "'referent' is the one named dimension (prose 'unknowns[{dim: referent, reason: unresolved}]'); others are free (e.g. ed_ambiguous, ed_inferred, capture_failure, suspended_similar).",
-          "description": "Dimension of the unknown. 'referent' carries the referent_unresolved case; other values name the source (ed_ambiguous / ed_inferred / capture_failure / timeout / suspended_similar / ...).",
+          "$comment": "FACTUAL-tag dimension (P6 — NOT an Investigate disposition token). Known values (the [unknowns.dim FACTUAL tag enum] table): referent, ed_ambiguous, ed_inferred, ed_drift, capture_failure, timeout, inaccessible, racing_changes, suspended_similar, external_unknown, unrecognized_flow. Kept open (type:string, not a closed enum) because new FACTUAL dimensions may be added — prose 'open-ish' — provided each item is self-describing via reason + source_tool.",
+          "description": "Factual dimension of the unknown (open-ish — new factual dimensions may be added; each item must stay self-describing via reason + source_tool). Known values: referent (request entity absent from ED graph — the referent_unresolved case, reason='unresolved'), ed_ambiguous (ED AMBIGUOUS edge), ed_inferred (ED INFERRED low-confidence edge), ed_drift (ED reports card↔code drift one-sided — single-source uncertainty), capture_failure (volatile command failed, non-timeout), timeout (volatile command timed out), inaccessible (permission/access denied), racing_changes (head_start≠head_end after retry), suspended_similar (similar-area suspended prior exists), external_unknown (external lib/API unknown), unrecognized_flow (flow_type matched no profile row — universal-only fallback). NOT an Investigate disposition token.",
           "type": "string",
           "minLength": 1
         },

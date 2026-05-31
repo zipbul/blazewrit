@@ -71,7 +71,7 @@ emberdeck(create_card + codeLinks)는 Spec의 **enhancement** 도구지 primary 
 
 - `spec_card_id`는 `Measured | Omitted` (M3 degrade) 형태다.
   - emberdeck attached + (Design일 때) intent card 존재 → `{ status: measured, value: <card id>, code_links?: [...] }`.
-  - emberdeck unattached/실패/timeout, **또는** Decide mode가 plan/record라 intent card가 없음 → `{ status: omitted, reason: unavailable|tool_failed|not_applicable, source_tool: "emberdeck" }`.
+  - emberdeck unattached/실패/timeout, **또는** Decide mode가 plan/record라 intent card가 없음 → `{ status: omitted, reason: unavailable|tool_failed|timeout|not_applicable, source_tool: "emberdeck" }`.
 - **null·placeholder·`# 강제` 금지** (R22). 부재의 유일한 합법 표현은 구조 완전한 Omitted 객체다. **(P2: enhancement 부재 = 정의된 omitted branch, silence 아님)**
 - spec_card_id가 omitted여도 `result`는 여전히 **proceed**일 수 있다 — spec card는 게이트가 아니다. (대조: ED=Ground primary→escalate, firebat=Implement/Verify 게이트→escalate. emberdeck@Spec은 enhancement→degrade.) **(principle 1)**
 
@@ -117,6 +117,7 @@ acceptance_criteria:            # ≥1 강제 (빈 AC로 proceed 불가)
     measurement   # ↓ verify_probe 형태로 정의 (P6)
     edge_cases    # ↓ cardinality 정의 (P6)
     verify_probe: { command, expected_result }   # R20 — measurement의 기계 실행 형태
+    policy_ref?   # optional — 이 AC가 추적하는 Decide policy/requirement로의 free-text pointer (coverage 추적 보조; M2/reviewer cross-check)
     source_tool   # provenance: 이 AC가 추출된 Decide 원천 (design-document|plan-chosen|record-decision)
     unverified    # R13 KEEP 극성 — Spec이 직접 검증 못 한 AC는 true로 propagate
 code_architecture:
@@ -138,7 +139,7 @@ tasks:                          # ≥1 강제
     parallel_marker # bool — R33
 spec_card_id:                   # M3 degrade — Measured | Omitted (P2)
   # measured: { status: measured, value: <card id>, code_links?: [...] }
-  # omitted:  { status: omitted, reason: unavailable|tool_failed|not_applicable, source_tool: emberdeck }
+  # omitted:  { status: omitted, reason: unavailable|tool_failed|timeout|not_applicable, source_tool: emberdeck }
 files_to_read?: [<path>]        # plan-as-prompt: Test/Implement가 읽을 실재 source path (READ 입력, §5 ref 아님)
 based_on: { decide_ref, investigate_ref?, ground_ref }   # §5 RowRef. decide_ref/ground_ref 필수
 declared_next_step              # R16 advisory — orchestrator가 expected_next_step 주입, M2 대조

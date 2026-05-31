@@ -336,6 +336,12 @@
       "enum": ["high", "medium", "low", "none"]
     },
 
+    "Disposition": {
+      "description": "Triage ambiguous-branch discriminant. clarify = re-invoke loop (orchestrator surfaces the question, re-invokes with the answer). escalate = terminal halt (reclassify cap reached / undecidable / upstream-deficient; orchestrator halts and escalates, no re-invoke).",
+      "type": "string",
+      "enum": ["clarify", "escalate"]
+    },
+
     "Depth": {
       "description": "Adaptive Step Depth — a step ran shallow or deep (Decide maps mode→depth separately).",
       "type": "string",

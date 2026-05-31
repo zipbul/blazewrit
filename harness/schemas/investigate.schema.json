@@ -37,12 +37,12 @@
         "check": "assert has_architecture_level == (new_modules.length>0 || public_api_changes.length>0) AND public_api_changes == {c.contract : c in external_surface, c.breaking==true}"
       },
       {
-        "id": "INV-M2-4-verdict-V1-V13",
-        "rule": "compatibility-verdict.md V1-V13 — V1 empty issues=>proceed; V2 any blocks_flow=>blocked; V3 (no V2) any requires_user=>needs_clarification; V4 else proceed; V5 dedup (root_cause hash+scope hash, max severity); V6 issues<=50 else issues_overflow; V7 type=other=>custom_type; V8 blocked=>blockers nonempty; V9 needs_clarification=>open_questions nonempty; V10 every issue has evidence; V11 no_op=>no_op_details complete; V12 result enum valid; V13 partial_proceed=>partial_scope_handling.",
+        "id": "INV-M2-4-verdict-V1-V14b",
+        "rule": "compatibility-verdict.md V1-V14b — V1 (empty issues AND entry_nodes nonempty)=>proceed; V2 splits on scope when any blocks_flow=true: V2a (any blocking issue project-wide OR blocking scope-union covers all affected area => blocked, all blocking issues scope_confined=false); V2b (all blocking issues scope-confined + proceed remainder>=1 => not blocked, defer to V13 partial_proceed, those issues scope_confined=true); V3 (no V2a) any requires_user=>needs_clarification; V4 else proceed; V5 dedup (root_cause hash+scope hash, max severity); V6 issues<=50 else issues_overflow; V7 type=other=>custom_type; V8 blocked=>blockers nonempty; V9 needs_clarification=>open_questions nonempty; V10 every issue has evidence; V11 no_op=>no_op_details complete; V12 result enum valid; V13 partial_proceed iff V2b (partial_scope_handling required); V14 (Compound) result=no_op iff sub_flow_verdicts all result=no_op; V14b (Compound mixed) some no_op + some non-no_op => result decided by non-no_op sub-flows, no_op sub-flows preserved in partial_scope_handling.no_op_set (partial_proceed) or sub_flow_verdicts (proceed), never blocked_set/proceed_set.",
         "fields": [
           "compatibility_verdict"
         ],
-        "check": "run V1..V13 over compatibility_verdict.issues and result branch; reject on any violation grammar cannot see (e.g. V2/V3 result implied by issue flags)"
+        "check": "run V1..V14b over compatibility_verdict.issues and result branch; assert V2a/V2b scope split via issue.scope_confined (V2a all blocking scope_confined=false flow-wide; V2b all blocking scope_confined=true + proceed remainder>=1 -> partial_proceed); for Compound assert V14/V14b sub_flow_verdicts aggregation and no_op_set routing; reject on any violation grammar cannot see"
       },
       {
         "id": "INV-M2-5-evidence-rowrefs",
@@ -135,18 +135,43 @@
   },
   "type": "object",
   "additionalProperties": false,
+  "$comment": "Two terminal shapes (README 'Mechanical error 분기', P8/principle 1·3): the NORMAL interpretation output (carries the 5-state compatibility_verdict + impact_map/risk_surface/etc.) OR a MECHANICAL-ERROR output (investigate_error) emitted on input-precondition violation (PC1-PC5) or PRIMARY-tool (ED MCP) failure — which produces NO compatibility_verdict and does NOT masquerade as proceed/no_op. The oneOf below is keyed on the presence of investigate_error.",
   "required": [
     "flow_id",
     "based_on",
     "based_on_ground",
-    "depth",
-    "impact_map",
-    "constraints",
-    "risk_surface",
-    "architecture_impact",
-    "compatibility_verdict",
-    "ground_unknowns_addressed",
-    "verification_proof"
+    "depth"
+  ],
+  "oneOf": [
+    {
+      "$comment": "NORMAL output branch — full interpretation. investigate_error MUST be absent.",
+      "required": [
+        "impact_map",
+        "constraints",
+        "risk_surface",
+        "architecture_impact",
+        "compatibility_verdict",
+        "ground_unknowns_addressed",
+        "verification_proof"
+      ],
+      "properties": {
+        "investigate_error": false
+      }
+    },
+    {
+      "$comment": "MECHANICAL-ERROR branch — investigate_error REQUIRED; compatibility_verdict and the other interpretation outputs MUST be absent (no empty verdict disguised as proceed/no_op).",
+      "required": [
+        "investigate_error"
+      ],
+      "properties": {
+        "compatibility_verdict": false,
+        "impact_map": false,
+        "constraints": false,
+        "risk_surface": false,
+        "architecture_impact": false,
+        "ground_unknowns_addressed": false
+      }
+    }
   ],
   "properties": {
     "flow_id": {
@@ -700,6 +725,14 @@
                     "minLength": 1
                   }
                 },
+                "no_op_set": {
+                  "description": "Compound mixed only (V14b) — sub_flow_ids whose result=no_op (legitimately-empty; NOT blocked_set/proceed_set, Decide does not process them).",
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
                 "followup_required": {
                   "type": "boolean"
                 }
@@ -808,24 +841,6 @@
         }
       }
     },
-    "request_upstream_deepen": {
-      "description": "Optional M3-adjacent boundary signal — Investigate may NOT read project-internal code; if Ground detail is insufficient it requests a Ground deep re-invoke instead of reaching in (README L114). Carries the reason + the Ground row to deepen.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "ground_ref",
-        "reason"
-      ],
-      "properties": {
-        "ground_ref": {
-          "$ref": "./_defs.schema.json#/$defs/RowRef"
-        },
-        "reason": {
-          "type": "string",
-          "minLength": 1
-        }
-      }
-    },
     "external_research": {
       "description": "Optional — external-research.md findings (WebFetch/WebSearch/Context7) used as INTERPRETATION AID (not project-internal capture). Each finding is DEGRADABLE: an external source can be inaccessible/rate-limited/paywalled/auth-required — those are Omitted branches (R22), not nulls. claim_class drives provenance depth.",
       "type": "array",
@@ -878,6 +893,51 @@
     "unverified": {
       "description": "R13 floor field — KEEP polarity. Marks investigation claims the step could not itself verify; DESIGNED to persist downstream until Verify (the single gate). NO 'no unverified remain' forbid exists.",
       "$ref": "./_defs.schema.json#/$defs/UnverifiedFlag"
+    },
+    "investigate_error": {
+      "description": "MECHANICAL-ERROR terminal output (README 'Failure & degrade handling', P8/principle 1·3). Emitted on input-precondition violation (PC1-PC5) or PRIMARY-tool (ED MCP) absence/error/timeout — OUTSIDE the 5-state compatibility_verdict. When present, NO compatibility_verdict is produced (the root oneOf forbids it), so a missing/degenerate input is never disguised as proceed/no_op.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "failure_origin",
+        "reason",
+        "evidence"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Which class of mechanical error terminated the step.",
+          "type": "string",
+          "enum": [
+            "precondition_violation",
+            "primary_tool_unavailable"
+          ]
+        },
+        "failure_origin": {
+          "description": "Which upstream/self origin the error is attributed to. Subset of the shared FailureOrigin enum used by Investigate's mechanical-error escalate paths: ground/triage on input preconditions, investigate on its own PRIMARY tool. (README keeps this to 3 values; cap_exceeded halts are an orchestrator-level cap concern, not an investigate_error origin.)",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+            },
+            {
+              "enum": [
+                "ground",
+                "triage",
+                "investigate"
+              ]
+            }
+          ]
+        },
+        "reason": {
+          "description": "Which assert/tool failed (specific).",
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "description": "§5 RowRef to the Ground/Triage artifact row or the tool-probe result that evidences the failure.",
+          "$ref": "./_defs.schema.json#/$defs/RowRef"
+        }
+      }
     }
   },
   "$defs": {
@@ -979,6 +1039,10 @@
         },
         "blocks_flow": {
           "description": "true => contributes to blocked (V2). M2 INV-M2-4 derives the result.",
+          "type": "boolean"
+        },
+        "scope_confined": {
+          "description": "Only meaningful when blocks_flow=true. true => the block is confined to a bounded scope (proceed remainder exists => partial_proceed candidate, V2b); false/absent => flow-wide block (=> blocked, V2a). Mechanically derived per V2/V13 — the load-bearing V2a/V2b discriminant the reviewer checks.",
           "type": "boolean"
         },
         "suggested_followup": {

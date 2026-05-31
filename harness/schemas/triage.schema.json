@@ -35,13 +35,13 @@
           "required": ["matched_rows", "confidence", "complexity_signal"],
           "properties": {
             "matched_rows": {
-              "description": "The signal-table SIGNAL-ROW id(s) this classification matched. §5: these are Postgres RowRefs (signal-table row ids), NEVER file paths. A single-row match (or strict superset) yields confidence=high; compound (verb/target>=2) may list 2+ rows. Empty is not allowed for a proceed — a proceed must cite at least one matched signal row (the basis for the flow_type).",
+              "description": "The signal-table SIGNAL-ROW id(s) this classification matched. These are signal-table LITERAL ids (S0..S16) from the Triage Signal Table — append-only string ids naming WHICH signal row matched (e.g. 'S1','S16'), NOT Postgres step_runs RowRefs and NEVER file paths. A single-row match (or strict superset) yields confidence=high; compound (verb/target>=2) may list 2+ rows. Empty is not allowed for a proceed — a proceed must cite at least one matched signal row (the basis for the flow_type).",
               "type": "array",
               "minItems": 1,
-              "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
+              "items": { "$ref": "#/$defs/SignalRowId" }
             },
             "confidence": {
-              "$comment": "Shared Confidence enum (high|medium|low). high = exactly 1 signal row matched (or strict superset). medium = matched but input mildly ambiguous (clarifications used). low = rarely emitted (Triage prefers ambiguous when no dominant row).",
+              "$comment": "Shared Confidence enum (high|medium|low) — all three are reachable, legitimately-produced proceed values. high = exactly 1 signal row matched (or strict superset). medium = matched but input mildly ambiguous (clarifications used to confirm a single row). low = dominant-but-weak proceed: a single dominant row classifies, but the match is weak — either prior_evidence supports the SAME flow_type yet the current input alone is marginal, OR a reclassify (reclassify_count>=1) narrowly corrects the prior classification. low signals downstream (esp. Investigate) that re-examination room remains; it is NOT the no-dominant-row case (that stays ambiguous).",
               "$ref": "./_defs.schema.json#/$defs/Confidence"
             },
             "complexity_signal": {
@@ -68,15 +68,19 @@
       }
     },
     {
-      "$comment": "BRANCH 3 — ambiguous: multiple signal rows matched with no superset, OR reclassify_count>=3 forced escalation. Carries exactly ONE routing-blocking question.",
+      "$comment": "BRANCH 3 — ambiguous: multiple signal rows matched with no superset (disposition=clarify), OR reclassify_count>=3 forced terminal escalation (disposition=escalate). The REQUIRED `disposition` enum is THE real discriminant closing H1 — terminal escalation is now an enum FIELD the orchestrator routes on (clarify -> re-invoke loop; escalate -> terminal halt), not a magic question string-match. Carries exactly ONE routing-blocking question (clarify) or one-line escalate reason (escalate).",
       "title": "ambiguous",
       "type": "object",
       "unevaluatedProperties": false,
-      "required": ["result", "question"],
+      "required": ["result", "disposition", "question"],
       "properties": {
         "result": { "const": "ambiguous" },
+        "disposition": {
+          "$comment": "Shared Disposition enum (clarify|escalate). clarify = multiple non-superset rows; orchestrator surfaces `question` and re-invokes (loop). escalate = terminal: reclassify cap reached (reclassify_count>=3) or otherwise undecidable/upstream-deficient; orchestrator HALTS the flow and escalates, no re-invoke (loop prevention). This is the real enum discriminant H1/principle-3 depends on.",
+          "$ref": "./_defs.schema.json#/$defs/Disposition"
+        },
         "question": {
-          "description": "ONE routing-blocking clarification question (priority: verb > target > urgency > concern_count). When reclassify_count>=3 the input-field cap rule FORCES this branch with the fixed escalation text 'reclassify cap reached, manual intervention required' — orchestrator then halts the flow and escalates (no re-invoke; loop prevention). The cap-forced escalation is an INPUT-driven rule the grammar cannot see (it depends on the injected reclassify_count); it is an M2 validator_contract, not a schema keyword.",
+          "description": "ONE routing-blocking clarification question when disposition=clarify (priority: verb > target > urgency > concern_count), OR a one-line escalation reason when disposition=escalate. When reclassify_count>=3 the input-field cap rule FORCES disposition=escalate (the reclassify-cap path emits ambiguous{disposition:escalate}) — orchestrator then halts the flow and escalates (no re-invoke; loop prevention). The cap-forced escalation is an INPUT-driven rule the grammar cannot see (it depends on the injected reclassify_count); it is an M2 validator_contract gating disposition, not a schema keyword.",
           "type": "string",
           "minLength": 1
         }
@@ -101,20 +105,20 @@
 
   "$defs": {
     "FlowType": {
-      "$comment": "The 16 flow types from the Triage Signal Table (the authoritative source). README declares the proceed value as 'feature | bugfix | ... | compound' (snake_case). DECISIONS §10 flows.flow_type enum is illustrative ('feature','bugfix',...) — the signal table is canonical for the full set. P0 and Unreproducible are DISTINCT Bug Fix variants (separate signal-table rows), not the same flow. 'none'/free-conversation is NOT a flow_type — it is the separate `result:none` branch, so it is intentionally absent from this enum.",
+      "$comment": "The 16 flow types from the Triage Signal Table. The canonical machine source is the flow-file STEMS at legacy/.blazewrit/flows/<id>.md, which use HYPHENS (bugfix-p0, bugfix-unreproducible, plan-standalone; all others single-word). This enum is the generated projection of those stems; README/DECISIONS §10 display names are human-facing. P0 and Unreproducible are DISTINCT Bug Fix variants (separate signal-table rows / separate flow files), not the same flow. 'none'/free-conversation is NOT a flow_type — it is the separate `result:none` branch, so it is intentionally absent from this enum.",
       "description": "Triage flow_type — one of the 16 first-class flows the Signal Table maps to. Compound = verb/target>=2 (multiple blockers / multi-phase). Used only inside the proceed branch.",
       "type": "string",
       "enum": [
         "feature",
         "bugfix",
-        "bugfix_p0",
-        "bugfix_unreproducible",
+        "bugfix-p0",
+        "bugfix-unreproducible",
         "refactor",
         "performance",
         "migration",
         "test",
         "chore",
-        "plan_standalone",
+        "plan-standalone",
         "review",
         "release",
         "retro",
@@ -122,14 +126,20 @@
         "exploration",
         "compound"
       ]
+    },
+    "SignalRowId": {
+      "$comment": "Signal-table literal row id (Triage Signal Table). S1..S16 map to the 16 flow_types (proceed); S0 ('No actionable signal') is the non-flow row that maps to result=none. These are append-only signal-table ids, NOT Postgres step_runs RowRefs and NOT file paths.",
+      "description": "A Triage Signal Table row id, S0..S16. Used in classification_metadata.matched_rows to name which signal row(s) the classification matched.",
+      "type": "string",
+      "pattern": "^S(0|[1-9]|1[0-6])$"
     }
   },
 
   "x-validator-contract": [
     {
       "field": "classification_metadata.matched_rows[]",
-      "rule": "Each element is a real signal-table row id (RowRef). M2: assert each id resolves to an existing signal-table row; grammar only enforces the string shape, not row existence.",
-      "check": "row_exists"
+      "rule": "Each element is a signal-table LITERAL id (S0..S16), NOT a Postgres step_runs row. M2: assert each id resolves to an existing Signal Table row; grammar enforces only the S-id string shape (pattern), not row existence.",
+      "check": "signal_row_exists"
     },
     {
       "field": "result (ambiguous branch) vs input.reclassify_count",

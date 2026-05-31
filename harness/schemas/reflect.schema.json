@@ -7,21 +7,23 @@
   "additionalProperties": false,
   "required": [
     "step",
+    "result",
     "self_ref",
     "classification",
     "based_on",
-    "what_worked",
-    "what_failed",
-    "unexpected",
-    "patterns_discovered",
-    "prior_learning_comparison",
-    "tier2_promotions",
     "iterations"
   ],
   "properties": {
     "step": {
       "description": "Step discriminant. Always 'reflect' for this schema.",
       "const": "reflect"
+    },
+
+    "result": {
+      "$comment": "P1 RESULT DISCRIMINANT. Reuses the Investigate compatibility_verdict.result pattern (discriminated enum + per-result routing). 'skipped_suspended' is NOT here: suspended never reaches Reflect, so that value is an orchestrator-internal control signal, never emitted in this structured_output (README Result Enum note).",
+      "description": "P1 RESULT ENUM & BRANCHES. The primary discriminant driving the orchestrator routing table. 'completed_reflection' = 4 sections substance-pass + Tier archive done (success branch). 'reflect_incomplete' = cap 3 exhausted, substance floor not passed (Cap-Exhaustion terminal; carries incomplete_details). 'precondition_escalated' = input-precondition missing/malformed (P8) → escalate. 'archive_escalated' = primary Tier 1 Postgres archive failure → escalate. NOTE: 'skipped_suspended' (completion_status=suspended) is NOT emitted here — Reflect does not execute on suspended, so that is an orchestrator-internal control signal outside this structured_output.",
+      "type": "string",
+      "enum": ["completed_reflection", "reflect_incomplete", "precondition_escalated", "archive_escalated"]
     },
 
     "self_ref": {
@@ -90,7 +92,7 @@
 
     "prior_learning_comparison": {
       "$comment": "M3 DEGRADE — reads prior runs (legacy '.blazewrit/flow-history/', now Postgres rows). On the FIRST flow there are no priors => Omitted branch, NOT an empty/over-typed value (R22).",
-      "description": "M3 DEGRADE (Measured | Omitted). Pass 3 prior-learning comparison: reads PRIOR flow runs (legacy '.blazewrit/flow-history/' → §5 Postgres step_runs rows) and compares this flow's learning against them. This is tool/data-dependent and can be ABSENT — e.g. the first flow has no prior runs, or the prior-run query fails/times out — so absence is a first-class Omitted branch (reason tool_absent/timeout/not_applicable), never a null or an empty array masquerading as 'compared to nothing'. The measured branch carries the prior rows consulted (RowRefs) and the deltas found.",
+      "description": "M3 DEGRADE (measured | cold_start | Omitted). Pass 3 prior-learning comparison: reads PRIOR flow runs (legacy '.blazewrit/flow-history/' → §5 Postgres step_runs rows) and compares this flow's learning against them. THREE first-class branches: (1) 'measured' = priors existed and were compared (carries prior_run_refs + deltas); (2) 'cold_start' = NO prior history existed (first-ever run, or no matching Tier 2 rule) — this is a LEGITIMATE baseline-establishing outcome, NOT an absence/escalate: prior history absence is the normal first-run state, so this run establishes the baseline (principle 3: empty history is a legal result, not a missing tool); (3) Omitted = the prior-run query itself FAILED/timed-out (a real tool failure, reason tool_absent/timeout). cold_start (no priors yet) is distinct from Omitted (the lookup tool broke) — never collapse the legitimate first-run into a tool-failure Omitted, and never emit a null or empty array masquerading as 'compared to nothing'.",
       "oneOf": [
         {
           "type": "object",
@@ -135,6 +137,20 @@
             }
           }
         },
+        {
+          "$comment": "cold_start = no prior history (first-ever run / no matching Tier 2 rule). NOT an Omitted tool-failure: it is a legitimate baseline-establishing outcome (principle 3). baseline_statement records what baseline this run sets.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "baseline_statement"],
+          "properties": {
+            "status": { "const": "cold_start" },
+            "baseline_statement": {
+              "description": "What baseline this first run establishes (e.g. 'no prior baseline — this run establishes baseline'). Substance floor: non-filler.",
+              "type": "string",
+              "minLength": 24
+            }
+          }
+        },
         { "$ref": "./_defs.schema.json#/$defs/Omitted" }
       ]
     },
@@ -146,17 +162,18 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["rules_file", "write_mode", "topic", "pattern_ref", "occurrence_count", "deduped_against"],
+        "$comment": "topic + pattern_ref are always required. rules_file / occurrence_count / deduped_against are required only for an actually-written promotion (append|create); a 'deferred' item (Tier 2 write contention/IO failure) carries NO successfully-written rules_file and instead records the pending state — see the allOf branch below. The primary learning is preserved in Tier 1 either way (degrade, not escalate).",
+        "required": ["write_mode", "topic", "pattern_ref"],
         "properties": {
           "rules_file": {
-            "$comment": "§5 SOLE file-path exception — a real on-disk .claude/rules/<topic>.md path.",
-            "description": "The Tier 2 file written. RulesFilePath ('.claude/rules/<topic>.md') — the single file output in the whole harness.",
+            "$comment": "§5 SOLE file-path exception — a real on-disk .claude/rules/<topic>.md path. Present only when the write succeeded (write_mode append|create), absent for deferred.",
+            "description": "The Tier 2 file written. RulesFilePath ('.claude/rules/<topic>.md') — the single file output in the whole harness. Required for append|create; OMITTED for a deferred (failed/contended) write.",
             "$ref": "./_defs.schema.json#/$defs/RulesFilePath"
           },
           "write_mode": {
-            "description": "Dedup outcome: 'append' = identical pattern already had a rule file, evidence appended (append-only); 'create' = no existing rule matched, new file created.",
+            "description": "Dedup/write outcome: 'append' = identical pattern already had a rule file, evidence appended (append-only); 'create' = no existing rule matched, new file created; 'deferred' = Tier 2 file write contended/failed (lock/IO error), so the promotion is recorded as PENDING in Tier 1 (primary learning preserved) — a degraded branch, NOT an escalate. The orchestrator retries the deferred write on next idle.",
             "type": "string",
-            "enum": ["append", "create"]
+            "enum": ["append", "create", "deferred"]
           },
           "topic": {
             "description": "The <topic> slug of the rule file (matches the rules_file path stem).",
@@ -178,8 +195,29 @@
             "description": "The existing '.claude/rules/' files searched during dedup (README Dedup Rule). Empty when no rule files existed yet. M2 validator: if write_mode='create', assert no entry here matched the same pattern (no duplicate rule created).",
             "type": "array",
             "items": { "$ref": "./_defs.schema.json#/$defs/RulesFilePath" }
+          },
+          "deferred_reason": {
+            "$comment": "Present only when write_mode=deferred — why the Tier 2 file write could not complete (lock contention / IO error).",
+            "description": "Why the Tier 2 write was deferred (lock contention / IO failure). The promotion is recorded PENDING in Tier 1 (tier2_write_pending) and retried later; primary learning is not lost. Used only for write_mode=deferred.",
+            "type": "string",
+            "minLength": 1
           }
-        }
+        },
+        "allOf": [
+          {
+            "$comment": "A WRITTEN promotion (append|create) carries the real file path + measured count + dedup audit.",
+            "if": { "properties": { "write_mode": { "enum": ["append", "create"] } } },
+            "then": { "required": ["rules_file", "occurrence_count", "deduped_against"] }
+          },
+          {
+            "$comment": "A DEFERRED promotion has no successfully-written file; rules_file is forbidden and deferred_reason is required. The pattern_ref still ties it to the discovered pattern so the pending write can be retried.",
+            "if": { "properties": { "write_mode": { "const": "deferred" } } },
+            "then": {
+              "required": ["deferred_reason"],
+              "not": { "required": ["rules_file"] }
+            }
+          }
+        ]
       }
     },
 
@@ -195,14 +233,101 @@
       "$comment": "R13 floor — KEEP polarity. Reflect may carry unverified learnings; the flag propagates. NO 'no unverified remain' forbid.",
       "description": "R13 UNVERIFIED FLAG (floor, KEEP polarity). Optional: whether some of this reflection's learnings are themselves unverified. Designed to PERSIST — NEVER forbidden true. Reflect is terminal and is NOT the unverified gate (Verify is); Reflect merely records.",
       "$ref": "./_defs.schema.json#/$defs/UnverifiedFlag"
+    },
+
+    "incomplete_details": {
+      "$comment": "Cap-Exhaustion terminal (P5). Required ONLY when result=reflect_incomplete. Silent pass forbidden: the failure is reported explicitly.",
+      "description": "CAP-EXHAUSTION DETAIL (result=reflect_incomplete). After max 3 iterations without passing the substance floor, Reflect reports the failure explicitly instead of silently passing a hollow output. failing_sections lists which of the 4 sections stayed filler; iterations_used is the passes run (= 3 at cap); reason states why. Partial raw is still archived with status=incomplete and excluded from Tier 2 promotion.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failing_sections", "iterations_used", "reason"],
+      "properties": {
+        "failing_sections": {
+          "description": "Which of the 4 required sections failed the substance floor.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": ["what_worked", "what_failed", "unexpected", "patterns_discovered"]
+          }
+        },
+        "iterations_used": {
+          "description": "Refinement passes run before giving up (= 3 at the cap).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "reason": {
+          "description": "Why the substance floor could not be met.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+
+    "escalate": {
+      "$comment": "Post-flow escalate channel. Required when result ∈ {precondition_escalated, archive_escalated}. failure_origin is cap_exceeded (post-flow halt origin, NO auto-reinvoke) — Reflect runs after flow termination so it does NOT borrow the in-flow failure_origin=verify value, and does NOT add its own step value (Boundary: routing non-ownership). Reuses shared FailureOrigin $def.",
+      "description": "POST-FLOW ESCALATE (result ∈ {precondition_escalated, archive_escalated}). Carries failure_origin (always 'cap_exceeded' — the orchestrator-level halt origin, NO auto-reinvoke; Reflect runs post-termination and has no in-flow re-entry, so no ping-pong loop exists) and a reason. precondition_escalated covers missing/invalid completion_status, malformed (flow_id, flow_type), or a completed-flow step row that is malformed. archive_escalated covers Tier 1 (Postgres) archive failure — the primary output could not be persisted, so silent pass is forbidden.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failure_origin", "reason"],
+      "properties": {
+        "failure_origin": {
+          "$comment": "Constrained to cap_exceeded — the only post-flow halt origin Reflect emits (reuses shared FailureOrigin enum, no new value invented).",
+          "description": "Post-flow halt origin. Always 'cap_exceeded' (halt+escalate, NO auto-reinvoke). Drawn from the shared FailureOrigin enum but Reflect only ever emits cap_exceeded.",
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/FailureOrigin" }],
+          "const": "cap_exceeded"
+        },
+        "reason": {
+          "description": "Why Reflect escalated (precondition missing/malformed, or Tier 1 archive failure).",
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   },
+
+  "allOf": [
+    {
+      "$comment": "completed_reflection => the 4 substantive sections + Pass-3 comparison are required; the escalate/incomplete carriers are forbidden.",
+      "if": { "properties": { "result": { "const": "completed_reflection" } } },
+      "then": {
+        "required": [
+          "what_worked",
+          "what_failed",
+          "unexpected",
+          "patterns_discovered",
+          "prior_learning_comparison",
+          "tier2_promotions"
+        ],
+        "not": { "anyOf": [{ "required": ["incomplete_details"] }, { "required": ["escalate"] }] }
+      }
+    },
+    {
+      "$comment": "reflect_incomplete => incomplete_details required (Cap-Exhaustion); sections are NOT unconditionally required (some failed the floor); no escalate.",
+      "if": { "properties": { "result": { "const": "reflect_incomplete" } } },
+      "then": {
+        "required": ["incomplete_details"],
+        "not": { "required": ["escalate"] }
+      }
+    },
+    {
+      "$comment": "precondition_escalated / archive_escalated => escalate object required; no normal sections / incomplete_details obligation.",
+      "if": {
+        "properties": { "result": { "enum": ["precondition_escalated", "archive_escalated"] } }
+      },
+      "then": {
+        "required": ["escalate"],
+        "not": { "required": ["incomplete_details"] }
+      }
+    }
+  ],
 
   "$defs": {
 
     "Finding": {
-      "$comment": "One substantive learning item. R26 floor: source_tool REQUIRED. minLength on text = schema-side substance floor.",
-      "description": "A single learning finding inside a required section. text is the observation (minLength substance floor — the structure-check hook's machine-checkable part). source_tool (R26 irreducible floor) names where in the flow this was observed/which tool surfaced it — REQUIRED so no learning is unsourced. step_ref optionally pins the finding to the specific step_runs row it came from.",
+      "$comment": "One substantive learning item. R26 floor: source_tool REQUIRED. source_tool = the OBSERVATION-ORIGIN tool (which tool surfaced this learning), NOT the forbidden per-section cross-flow artifact citation (P5 over-reach). minLength on text = schema-side substance floor.",
+      "description": "A single learning finding inside a required section. text is the observation (minLength substance floor — the structure-check hook's machine-checkable part). source_tool (R26 irreducible floor) names WHICH TOOL surfaced this observation — REQUIRED so no learning is unsourced. NOTE (P5): this is the observation-origin tool, DISTINCT from the per-section artifact citation Reflect does NOT require (cross-flow provenance Reflect cannot supply — Investigate/Ground's job). step_ref optionally pins the finding to the specific step_runs row it came from (optional, not the forbidden mandatory citation).",
       "type": "object",
       "additionalProperties": false,
       "required": ["text", "source_tool"],
