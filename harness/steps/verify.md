@@ -93,7 +93,7 @@ pass_record:
 ```yaml
 degrade_note:
   degraded_tool: pyreez
-  reason: tool_unavailable | tool_timeout
+  reason: tool_unavailable | tool_timeout | mandatory_but_unavailable   # mandatory_but_unavailable = high-risk flow인데 강제 pyreez 부재 (verdict는 여전히 degraded_pass)
   mitigation: "internal multi-pass(mechanical+goal-backward+adversarial)로 verdict 도출 — cross-verify leg 부재"
   quality_floor: "verdict는 pyreez 없이도 well-defined; cross-verify 완화는 없음(약화)"   # P5 정직 강등
 ```
@@ -102,19 +102,39 @@ degrade_note:
 
 > 이전 README는 3-4 pass를 *나열*만 하고 결합 함수가 없었다. 결정 함수를 명시한다.
 
-1. **any-fail → fail**: 어느 pass라도 명확한 결함을 surface하면 `result=fail`. `failure_origin`은 결함이 귀착하는 step (아래 [Failure routing](#failure-routing)).
+1. **any-fail → fail**: 어느 pass라도 명확한 결함을 surface하고 **그것이 특정 step(들)에 귀착 가능**하면 `result=fail`. `failure_origin`은 결함이 귀착하는 step (아래 [Failure routing](#failure-routing)). (귀착 불가한 diffuse 결함은 fail이 아니라 [Self-misjudgment](#self-misjudgment-detection-r2)의 `unattributable_goal_failure` → blocked.)
 2. **all-pass → pass**: 모든 실행된 pass가 통과하면 `result=pass`.
 3. **pyreez 부재로 cross-verify pass가 *생략*된 경우**(omitted) — 나머지 pass 전부 통과면 `result=degraded_pass` (fail 아님; P2 원칙①).
 4. **Pass 3 adversarial이 Pass 1 mechanical을 *뒤집을* 만한 증거를 surface한 경우** — mechanical이 PASS여도 aggregation은 *fail로 본다*. 단 그 증거가 (a) 특정 step에 귀착하면 `result=fail` + 해당 `failure_origin`; (b) **Verify 자신의 판단을 의심**하게 만들면 (pyreez 불일치 또는 자기 mechanical 결과를 신뢰 못 함) → [Self-misjudgment](#self-misjudgment-detection-r2) 경로 = `result=blocked` + `escalation(failure_origin=verify)`. (P1: "self-suspicion의 결과 verdict"가 이전엔 미정의 — 여기서 blocked/verify-escalate로 확정.)
 5. **Compound flow**: sub-flow별 verdict를 모으되 동일 any-fail/all-pass 규칙을 *전체*에 적용 — 어느 sub-flow fail이면 flow fail.
 
+### Trigger precedence (P1: 동시-발화 결정성)
+
+> 위 규칙은 *개별* 트리거만 정의했다. 한 invocation에서 result-결정 트리거가 *여럿 동시* 참일 수 있다 (예: mechanical이 `failure_origin=implement` 결함을 surface AND firebat=error AND pyreez=disagreement). 그때 emit할 단일 `result`를 **결정적으로** 고른다. 더 낮은 번호가 이긴다 (first-match wins) — Verify가 *자기 일을 못 하는* 조건이 *downstream에 귀착하는 깨끗한 판정*보다 우선한다 (원칙①·③: 자기 게이트가 깨졌으면 그 위에서 내린 fail 귀착 자체를 신뢰할 수 없으므로 producer step으로 misroute 금지).
+
+1. **retry_exhausted** — producer⇄reviewer cycle cap / (flow_id,step) 5-누적-fail / global `cap_exceeded` 도달 → `result=retry_exhausted` (다른 어떤 트리거보다 우선; 이미 cap 소진이면 재진입 자체 무의미).
+2. **blocked (input-precondition fault)** — [Input preconditions](#input-preconditions) 결손/기형 → `result=blocked`. (chain/입력이 malformed면 그 위 모든 pass 결과가 신뢰 불가.)
+3. **blocked (gate-tool mechanical error)** — firebat/emberdeck `error`/timeout → `result=blocked` + `escalation(failure_origin=verify)`. (게이트가 verdict를 못 냄 → mechanical leg이 신뢰 불가 → 그 위 fail 귀착도 보류.)
+4. **blocked (stale-2nd)** — [Stale ED 2nd Attempt](#stale-ed-2nd-attempt) 조건 → `result=blocked` + `escalation(failure_origin=ground)`.
+5. **blocked (self-misjudgment)** — pyreez `disagreement` 또는 aggregation rule 4b 또는 `post_hoc_signal` → `result=blocked` + `escalation(failure_origin=verify)`.
+6. **fail** — 위가 모두 거짓이고 어느 pass라도 step-귀착 결함 surface → `result=fail` (rule 1/4a).
+7. **degraded_pass** — 위가 모두 거짓이고 pyreez만 부재(omitted)로 cross-verify leg 생략, 나머지 통과 → `result=degraded_pass` (rule 3).
+8. **pass** — 위가 모두 거짓 → `result=pass` (rule 2).
+
+(pyreez-부재 vs other-fail collision은 이 순서로 자동 해소: fail(6)이 degraded_pass(7)보다 우선이므로 "다른 pass가 fail이면 degraded_pass 아님"이 rule 3의 "나머지 pass 전부 통과면"과 정합.)
+
 ## Failure routing
 
-`result=fail`일 때 출력:
+`result=fail`일 때 출력하는 `failure_origin` 객체. (P1: `pass_record`처럼 self-describing envelope를 가진다 — orchestrator가 객체만으로 flow_id/version에 상관할 수 있게. PASS는 식별자를 들고 FAIL은 안 드는 비대칭 제거.)
 
 ```
-fail →
-  failure_origin: triage | ground | investigate | decide | spec | test | implement | report
+failure_origin_obj →
+  flow_id                                # pass_record와 동일 식별자
+  flow_type
+  schema_version: 1
+  verified_at: ISO8601
+  source_version: { ed_snapshot_version: <hash> }   # freshness 상관 (pass_record.source_version과 동형)
+  failure_origin: triage | ground | investigate | decide | spec | test | implement | report | multiple
   reason: specific issue description
   evidence: file:line | artifact reference
 ```
@@ -143,6 +163,7 @@ Verify가 *자기 판단*을 의심하는 조건 (→ `result=blocked` + `escala
 
 - **pyreez cross-verify가 *반대 verdict*** (PASS vs FAIL 불일치) — pyreez *disagreement*. (P2: 이건 degrade가 아니라 *불일치* → `failure_origin=verify` escalate, NEEDS_CONTEXT. pyreez 부재와 구분.)
 - Pass 3 adversarial이 Pass 1 mechanical을 *뒤집을* 만한데 특정 step에 귀착 안 됨 (aggregation rule 4b).
+- **임의의 pass(goal-backward 포함)가 명확한 결함을 surface하나 (a) 특정 single step에 귀착 불가 *그리고* (b) `multiple`로 여러 step에 분해 불가** (diffuse goal-not-met — 전체 flow가 목적을 못 냈는데 어느 step 탓인지 Verify가 정당화 못 함). 이건 4b의 일반 case다: step locus 없는 결함은 Verify가 producer를 *추측*해 misroute하지 않고 → `result=blocked` + `escalation(failure_origin=verify, reason=unattributable_goal_failure)`로 user/caller escalate. (원칙: 귀착 못 할 결함을 임의 step에 떠넘기지 않음 — in-lane.)
 - **`post_hoc_signal`** 수신 (Inputs에 선언된 채널): user_reject | downstream_failure | external_regression. flow가 이미 PASS였는데 외부 신호가 그 판정을 반박 → Verify가 자기 과거 판정을 의심.
 
 → orchestrator는 `failure_origin=verify`를 **자동 재invoke 하지 않음** — `NEEDS_CONTEXT`로 user/caller escalate (무한 self-route 방지). (제어신호 소유권 원칙②: Verify는 `request_upstream_deepen`을 *쓰지 않는다* — 그건 Decide 전용. 모든 degenerate/모호 upstream은 기존 `failure_origin` escalate로만 라우팅.)
@@ -173,8 +194,8 @@ Verify가 *자기 판단*을 의심하는 조건 (→ `result=blocked` + `escala
 |---|---|
 | `present` + 결과 `consensus ∈ {agreement, mixed}` | cross_verify leg = pass, 정상 aggregation |
 | `present` + 결과 `consensus = disagreement` | **pyreez 불일치 → `result=blocked` + `escalation(failure_origin=verify)`** = self-misjudgment (P2: disagreement는 degrade가 *아님*) |
-| `absent` / `error` / `timeout` | **degraded 분기**: cross_verify leg = omitted → `result=degraded_pass` (나머지 pass 통과 시) + `degrade_note`. (P2/P5: enhancement 부재 → degraded_pass, 침묵·collapse 아님) |
-| high-risk flow가 아님 | pyreez 미강제 — 처음부터 omitted 처리, `result=pass` 그대로 (degrade 아님; cross-verify가 애초 필수 아니므로) |
+| **high-risk flow** + `absent` / `error` / `timeout` | **degraded 분기**: cross_verify leg = omitted → `result=degraded_pass` (나머지 pass 통과 시) + `degrade_note`. (P2/P5 원칙①: pyreez는 *강제여도* enhancement다 — "강제"는 *시도 의무*이지 *성공 전제*가 아니다. 도구 부재는 escalate 아니라 degrade. `degrade_note.reason`에 `mandatory_but_unavailable` 표기해 low-risk-omitted와 *구분*은 하되 verdict는 동일 `degraded_pass`.) |
+| **not high-risk flow** + `absent` / `error` / `timeout` | pyreez 미강제 — 처음부터 omitted 처리, `result=pass` 그대로 (degrade 아님; cross-verify가 애초 필수 아니므로). |
 
 ### "No reviewer / quality guaranteed" 강등 (P5)
 
@@ -226,13 +247,18 @@ Max iterations(producer⇄reviewer cycle cap, 또는 (flow_id,step) 5-누적-fai
 
 ```yaml
 escalation:
+  flow_id                                # self-describing envelope (failure_origin 객체·pass_record와 동형 — escalate도 객체만으로 flow 상관 가능)
+  flow_type
+  schema_version: 1
+  verified_at: ISO8601
+  source_version: { ed_snapshot_version: <hash> }
   cause: verify_self_misjudgment | gate_tool_unavailable | stale_2nd_attempt | input_precondition_fault | retry_cap | cap_exceeded
-  failure_origin: verify | ground | cap_exceeded   # 자동 재invoke 안 하는 origin (ground = stale_2nd_attempt 경로)
+  failure_origin?: verify | ground       # *step-id 도메인만* (verify=self-misjudgment, ground=stale_2nd_attempt). 자동 재invoke 안 함. **cap 계열(cause ∈ {retry_cap, cap_exceeded})은 단일 step에 귀착 안 되므로 failure_origin 생략** — cap 의미는 `cause`가 운반 (failure_origin enum을 cause 값으로 오염시키지 않음; field-type 일관).
   reason
   evidence
 ```
 
-→ Reflect 분류: `cap_exceeded`/`retry_exhausted` → `abandoned` (학습 누적). `verify` self-misjudgment escalate(NEEDS_CONTEXT) → `suspended` (Reflect 미실행).
+→ Reflect 분류: `cause ∈ {cap_exceeded, retry_cap}` (또는 `result=retry_exhausted`) → `abandoned` (학습 누적). `failure_origin=verify` self-misjudgment escalate(NEEDS_CONTEXT) → `suspended` (Reflect 미실행).
 
 ## Stale ED 2nd Attempt
 

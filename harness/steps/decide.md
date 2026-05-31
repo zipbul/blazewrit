@@ -26,6 +26,7 @@ Decide는 *결정 활동 시작 전에* 필수 upstream 필드의 **존재 + 정
 | `Investigate.risk_surface` | array of `{ area, severity ∈ {low,med,high,critical}, ... }` (빈 array 허용) |
 | `Investigate.impact_map.affected_files_count` | non-negative int (R6 mechanical force 입력) |
 | `Investigate.architecture_impact.has_architecture_level` | bool (R6 force 입력) |
+| `Investigate.architecture_impact.public_api_changes` | array of symbol (빈 array 허용 — Investigate L133 실재 필드; §5 비강제 tiebreak `.length` 입력) |
 | `Investigate.based_on_ground` | Ground 산출물 ref 해소 가능 |
 | `Ground` 출력, `Triage` 출력 | 존재 + ref 해소 가능 |
 
@@ -124,9 +125,11 @@ mode: record | plan | design
 decision_record: <한 줄 권위 진술>          # 모든 mode 필수
 reason: { statement, grounded_in: [investigate/ground row refs], source_tool }   # 모든 mode 필수, 사실 근거
 based_on: { investigate_ref, ground_ref }    # 모든 mode 필수 (provenance)
+# source_tool (이 파일 전역): R26 provenance floor — 항목을 *생산한* 도구/출처의 이름 (non-empty string). 닫힌 enum이 아니라 도구/출처 식별자다.
+#   값 예: Decide 자기-추론 origin은 record-decision|plan-chosen|design-document, 외부 도구는 pyreez|emberdeck|WebFetch|WebSearch 등. fabricated 금지(R22) — 실제 생산 출처만.
 depth: shallow | deep                         # record→shallow / plan·design→deep (mode와 일치)
 declared_next_step: <R16 advisory>            # orchestrator가 expected_next_step 주입·대조
-unverified: <bool>                            # R13 floor, KEEP polarity (Verify로 propagate)
+unverified: <bool>                            # R13 floor, KEEP polarity (Verify로 propagate). 기본 false; Design pyreez 미실행(not_run)/불확정(inconclusive) degrade 분기에서만 true (L220/L222). Record/Plan은 cross-verify 미대상 → 항상 false (단일 producing 규칙, 아래 참조)
 followup_flows?: [ ... ]                       # ★ 모든 mode 가용 (아래 "Followup queuing slot" 참조)
 ```
 
@@ -154,7 +157,7 @@ followup_flows?: [{ type: bugfix|refactor|feature, scope_ref, scope_hash }]   # 
 **산출** (공통 필드 + ):
 ```yaml
 mode: plan
-options_considered: [{ id, approach, trade_offs, est_effort }]   # N ≥ 2
+options_considered: [{ id, approach, trade_offs, est_effort }]   # N ≥ 2. est_effort ∈ {low, medium, high} (상대 effort 척도, 단일 권위 enum — 자유문자열 아님)
 chosen: { option_id, rationale }                                  # option_id ∈ options_considered.id
 sequencing?: [{ step, depends_on }]   # Compound sub-flow 순서, Migration cycle 순서 등
 followup_flows?: [{ type, scope_ref, scope_hash }]   # ★ partial_proceed.blocked_set 큐잉 (아래 참조)
@@ -173,8 +176,9 @@ mode: design
 options_deliberated: { measured: [...] } | { omitted: { reason, source_tool } }   # pyreez degrade 분기 (아래 도구 참조)
 design_document: { architecture, policies, user_flows, requirements }              # 4 sub-part 모두 필수
 intent_card: { measured: { card_id } } | { omitted: { reason, source_tool } }      # emberdeck degrade 분기
-adr: { title, context, decision, consequences, status }                            # R34
-cross_verify_required: <bool>                                                       # R5 high-stakes trigger
+adr: { title, context, decision, consequences, status }                            # R34. status ∈ {proposed, accepted, deprecated, superseded} (ADR lifecycle, 단일 권위 enum)
+cross_verify_required: <bool>                                                       # R5 high-stakes trigger (= true면 cross-verify 실행 의무)
+cross_verify_result: agree | disagree | inconclusive | not_run                      # R5 cross-verify 결과 (Design 전용, 아래 산출 규칙). disagree = 자기-오판 신호(L221/L266). 기본 not_run
 task_list?: [ ... ]
 gate_rules?: [{ condition, action }]        # Compound top-level 한정 — sub-flow 사이 gate 평가용
 sub_flow_sequence?: [{ sub_flow_ref, flow_type, depends_on }]   # Compound top-level 한정
@@ -216,9 +220,10 @@ followup_flows:
 
 - Decide의 **primary "tool"은 LLM 결정 추론 그 자체** — Investigate/Ground 산출물을 읽고 결정을 내리는 것은 외부 MCP에 의존하지 않는다. 따라서 Record/Plan의 옵션 비교는 도구 없이도 가능하다.
 - **pyreez = enhancement 도구** (옵션 deliberation / cross-verify). pyreez 부재/error/timeout 시 → **degraded 분기**, escalate 아님 (principle 1: enhancement 부재 → degraded_pass):
+  - **`cross_verify_result` 산출 규칙 (Design 전용, 단일 권위)**: `cross_verify_required == true`(Design high-stakes)이고 pyreez가 *동작*하면 Decide는 cross-verify를 *실행*하고 그 결과를 `cross_verify_result`로 **반드시 기록**한다 — pyreez 판정이 결정과 일치=`agree`, 정반대=`disagree`, 불확정=`inconclusive`. pyreez가 *미실행*(부재/error/timeout, 또는 `cross_verify_required == false`)이면 `cross_verify_result: not_run`. 이것이 enum `{agree, disagree, inconclusive, not_run}`의 유일한 producing 규칙이며, 다른 값을 발명하지 않는다.
   - `options_deliberated`를 **Omitted 분기**로 산출: `{ omitted: { reason: "pyreez unavailable", source_tool: "pyreez" } }` (R22 — null/placeholder 생성 금지, 1급 degrade 분기. M3 Measured|Omitted).
   - Decide는 LLM 자체 추론으로 결정을 *진행*하되 `unverified=true` 설정 + `cross_verify_result: not_run` 기록 (Verify가 단일 게이트로 cross-verify 미수행을 인지).
-  - **Design mode high-stakes에서 pyreez 불일치**(`cross_verify_result == disagree`, 즉 도구가 *동작했고* 결정과 충돌)는 degrade가 아니라 → **failure_origin=verify escalate** (자기-오판 신호, principle 1: enhancement가 *반대 신호*를 주면 escalate). 단순 부재(not_run)와 구분한다.
+  - **Design mode high-stakes에서 pyreez 불일치**(`cross_verify_result == disagree`, 즉 도구가 *동작했고* 결정과 충돌)는 degrade가 아니라 → **failure_origin=verify escalate** (자기-오판 신호, principle 1: enhancement가 *반대 신호*를 주면 escalate). 단순 부재(not_run)/불확정(inconclusive)과 구분한다 — `agree`/`inconclusive`/`not_run`은 escalate 아님(`inconclusive`는 결정 일치도 충돌도 아니므로 degraded 진행, `unverified=true` 유지).
 - **emberdeck (ED) = enhancement 도구** (intent card 생성). ED 부재/error 시 → `intent_card`를 **Omitted 분기**(`{ omitted: { reason, source_tool: "emberdeck" } }`)로 산출. 설계 자체는 성립하므로 degraded_pass — fabricated card id 금지 (R22). Design은 card 미생성으로 *halt 하지 않는다*; Spec/후속이 card 없이 진행하거나 orchestrator가 card 재생성 큐잉.
 - **외부 리서치(WebFetch/WebSearch) = enhancement** — 부재 시 degraded (해당 source 없이 결정), escalate 아님.
 
@@ -262,8 +267,10 @@ orchestrator가 해당 step을 depth=deep로 재invoke.
 | 필수 필드 존재하나 빈 값 (issues=[], risk=[], affected=0) | 합법 verdict (principle 3: 빈-합법) | 정상 진행. record(자명) 또는 force/tiebreak대로. escalate 아님. |
 | `compatibility_verdict.result ∈ {blocked, needs_clarification, no_op}` | upstream verdict | **Decide 미실행** (orchestrator mechanical halt). upgrade trigger override 불가. |
 | `compatibility_verdict.result == partial_proceed` | 부분 진행 | proceed_set 실행 + blocked_set → `followup_flows` 큐잉. |
-| pyreez/emberdeck/외부리서치 부재·error (enhancement) | degraded (principle 1) | Omitted 분기 산출, `unverified=true`. escalate 아님. |
-| Design pyreez `cross_verify_result == disagree` | 도구 불일치(반대 신호) | **failure_origin=verify escalate** (자기-오판). 단순 부재와 구분. |
+| pyreez/emberdeck/외부리서치 부재·error (enhancement, Design) | degraded (principle 1) | Omitted 분기 산출, `cross_verify_result=not_run`, `unverified=true`. escalate 아님. |
+| Design pyreez `cross_verify_result == disagree` | 도구 불일치(반대 신호) | **failure_origin=verify escalate** (자기-오판). 단순 부재(not_run)/불확정(inconclusive)와 구분. |
+| Design pyreez `cross_verify_result == agree\|inconclusive` | cross-verify 동작·비충돌 | 정상/degraded 진행. `agree`→`unverified=false` 가능, `inconclusive`→`unverified=true` 유지. escalate 아님. |
+| Record/Plan mode 정상 산출 (cross-verify 미대상) | 합법 산출 | `unverified=false` (기본). escalate 아님. |
 | Investigate `triage_mismatch` surface | 오분류 의심 | `result: reclassify_required`. reclassify cap 3. |
 | shallow Ground/Investigate로 결정 불가 | 정보 부족 | `result: request_upstream_deepen` (Decide 전용). cap 1. |
 
@@ -294,6 +301,10 @@ Step Depth Policy 참조. Decide는 mode 자체가 depth (Record=shallow / Plan=
 - Record: 결정+근거 1쌍 이상 (decision_record + reason).
 - Plan: 옵션 N≥2 비교 + 선택 이유(chosen.option_id ∈ options_considered) + 우선순위(sequencing).
 - Design: design_document (architecture+policy+userflow+req 4 모두) + intent_card(또는 Omitted 분기 — ED 부재 시 정당) + adr + cross_verify_required.
+- **adr.status enum 검증**: `adr.status ∈ {proposed, accepted, deprecated, superseded}` (enum 밖 값 reject).
+- **cross_verify_result 정합성** (Design): 값이 enum `{agree, disagree, inconclusive, not_run}` 안에 있는지 + producing 규칙 일치 — `cross_verify_required==true`이고 pyreez 동작 시 `cross_verify_result ∈ {agree, disagree, inconclusive}`(not_run이면 fail: 동작했는데 미기록), pyreez 미실행/`cross_verify_required==false`면 `not_run`이어야 함. `disagree`이면 산출이 `failure_origin=verify escalate` 경로로 갔는지 확인(disagree인데 정상 decision 산출 시 fail).
+- **est_effort enum 검증** (Plan): `options_considered[].est_effort ∈ {low, medium, high}`.
+- **unverified 정합성**: Record/Plan은 `unverified==false`, Design은 cross_verify_result에 일치(not_run/inconclusive→true, agree→false 가능). polarity 위반 reject.
 - 모든 mode: decision_record + reason 필수, ground·investigate 사실에 근거 (reason.grounded_in 실 row 해소).
 - **followup_flows dedup** (`type` + `scope_hash`) — 모든 mode에서 검사.
 - **partial_proceed 커버리지**: `compatibility_verdict.result == partial_proceed`인데 `partial_scope_handling.blocked_set`이 비어있지 않으면, 그 blocked_set이 `followup_flows`로 큐잉됐는지 확인 (누락 시 fail).

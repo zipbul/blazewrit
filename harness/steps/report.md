@@ -81,6 +81,11 @@ report:
 `result=synthesized`일 때 산출되는 terminal artifact의 전체 모양. README 원본의 success-shape를 보존·확장 (Spike verdict + sub_flow_refs 추가):
 
 ```yaml
+body:                                          # deliverable 본문 (free-form narrative). report_type별 minimum-bar의 "content/summary/design+next step"가 담기는 *유일* slot. 아래 "body 생산 규칙"
+  summary                                       # required when result=synthesized — top-level narrative (모든 report_type)
+  sections?: [{ heading, content }]             # 선택적 구조화 본문 (plan_standalone의 design document 등)
+  next_step?                                    # report_type=plan_standalone일 때 *필수* (minimum-bar "next step 명시")
+
 findings:                                      # report_type별 minimum은 "Empty/degenerate input" 절
   - id                                         # invocation-scoped unique
     statement                                  # narrative claim
@@ -89,7 +94,7 @@ findings:                                      # report_type별 minimum은 "Empt
 
 action_items:                                  # Decide.followup_flows에서 파생 (Report가 새 flow 생성 안 함)
   - description
-    priority: low | med | high | critical      # (P6/principle: 동일 단일 척도. 아래 "Severity & priority")
+    priority: low | med | high | critical      # (P6/principle: 동일 단일 척도. 출처: origin finding/risk severity 재투영. 아래 "Severity & priority")
     owner?
     followup_flow_ref?                          # Decide.followup_flows 항목 ref (orchestrator가 큐잉)
 
@@ -107,6 +112,14 @@ based_on:
 ```
 
 **feasibility_verdict 생산 규칙 (P1: Activities가 verdict를 *실제로* 만들도록)**: Activity 2(Synthesize)에서 report_type=spike이면 Report는 Implement(prototype) 결과(Inputs)를 읽어 GO/NO_GO/CONDITIONAL 중 하나를 *반드시* 산출한다. prototype 결과가 명확한 feasibility 신호를 주면 GO 또는 NO_GO, 부분 충족·미해결 조건이 남으면 CONDITIONAL(+conditions). prototype 결과가 *부재/기형*이면(precondition fault) verdict을 *추측하지 않고* `result=escalate, failure_origin=implement` (principle 3: missing ≠ 합법적 verdict). 이는 flows/README.md "Non-Implementation Flow Completion Criteria" 표(Spike = "Report exists + feasibility verdict (GO/NO-GO/CONDITIONAL)")를 만족시키는 유일 산출 경로.
+
+**body 생산 규칙 (P1: minimum-bar deliverable를 담는 slot — 닫음: content/summary/design+next-step 무자리)**: `result=synthesized`이면 Activity 2(Synthesize)는 narrative 합성 산출을 *항상* `body.summary`에 담는다 (모든 report_type 공통 top-level). report_type별 추가 요건은 같은 slot 안에서 충족된다 — *별도 출력 채널을 만들지 않는다* (boundary: 본문은 Report 합성물, findings/action_items와 동일 객체):
+- `report_type=exploration` minimum-bar "content 존재" = `body.summary` 비어있지 않음 (findings/action_items 0이어도 충족; "Empty/degenerate input" 절).
+- `report_type=compound` minimum-bar "top-level summary" = `body.summary`(요약) + `based_on.sub_flow_refs`(provenance). 둘 다 필수.
+- `report_type=plan_standalone` minimum-bar "design document + next step" = `body.sections`(design document) + `body.next_step`(다음 단계) 둘 다 필수. Decide(Design) 산출을 narrative로 옮길 뿐 *새 설계를 만들지 않는다* (boundary: 설계 *생성*은 Decide). Decide(Design) 산출이 부재/기형이면 `result=escalate, failure_origin=decide` (verdict 추측 금지와 동일 원칙).
+- review/retro/spike는 본문이 findings/action_items/feasibility_verdict로 충분하므로 `body.summary`만 채우고 sections/next_step은 생략 가능.
+
+**priority 생산 규칙 (닫음: action_items.priority 무출처 — boundary)**: `action_items[].priority`는 Decide가 *결정*하는 값이 아니다 (Decide.followup_flows는 `{type, scope_ref, scope_hash}`만 carry — priority 필드 없음). Report는 새 우선순위를 *발명하지 않고*, Activity 3(Severity 분류)의 *동일한 classification 행위*로 priority를 부여한다: 각 action_item의 priority = 그 action_item을 발생시킨 **origin finding/risk의 severity를 재투영** (동일 `low|med|high|critical` 척도). origin finding이 없는 action_item(followup-only)은 연결된 `followup_flow_ref`(→ Decide.followup_flows.scope_ref가 가리키는 Investigate finding/risk_surface row)의 `severity`를 재사용한다 (Decide가 새 severity를 만드는 게 아니라 Investigate의 단일 척도 row를 따라감). 둘 다 추적 불가하면 priority를 *추측하지 않고* 그 action_item은 evidence 없는 claim과 동일 처리("Dangling/missing evidence_ref" 분기). 이는 Activity 3(Report의 classification lane)에 머물며 Decide의 *결정·sequencing 우선순위*(decide.md "옵션 비교 + 선택 + sequencing")를 침범하지 않는다 — Report는 *triage 라벨*만 재투영하고 *순서를 정하지 않는다* (boundary: Activity 4가 명시한 "Decide가 낸 것을 *참조*"와 일관).
 
 ### Severity & priority — 단일 척도 (닫음: severity/priority enum 무정의 — P6, principle 6)
 
@@ -164,10 +177,10 @@ Investigate.findings가 비었거나(Exploration/Retro의 *합법적* outcome) D
 |---|---|---|
 | `review` | 모든 finding에 severity tag. (finding이 *합법적으로* 0개 = clean review) | findings 0 + upstream 정형 → `result=empty_clean`, empty_details(reason="clean: no issues found", evidence) |
 | `retro` | **≥1 action_item** | action_item 0 강제 불가 시: upstream에 학습거리가 *진짜* 없으면 `empty_clean`은 **불가** — Retro는 minimum 1을 요구하므로 Report가 합성할 action_item이 없으면 `result=escalate, failure_origin=decide`(Decide가 followup/학습을 못 냄). 단순 도장 금지 |
-| `exploration` | content 존재 (no minimum structure) | findings/action_items 0이어도 narrative content 있으면 `synthesized`. content조차 없으면 `empty_clean`(suggested: reframe) |
+| `exploration` | content 존재 = `body.summary` 비어있지 않음 (no minimum structure) | findings/action_items 0이어도 `body.summary` 있으면 `synthesized`. `body.summary`조차 없으면 `empty_clean`(suggested: reframe) |
 | `spike` | Report 존재 + feasibility_verdict (GO/NO_GO/CONDITIONAL) | findings 0이어도 verdict는 *필수* — verdict 없으면 `escalate`(failure_origin=implement). verdict 있으면 `synthesized` |
-| `plan_standalone` | design document 존재 + next step 명시 | Decide(Design) 산출이 정형 존재해야 — 부재면 `escalate, failure_origin=decide` |
-| `compound` | top-level summary + sub_flow_refs | sub_flow_results 부재/기형이면 `escalate, failure_origin=upstream`. 모든 sub-flow가 abandoned/no_op이어도 그 사실 자체가 합법적 summary → `synthesized` |
+| `plan_standalone` | design document(`body.sections`) + next step(`body.next_step`) 둘 다 존재 | Decide(Design) 산출이 정형 존재해야 — 부재면 `escalate, failure_origin=decide` |
+| `compound` | top-level summary(`body.summary`) + sub_flow_refs(`based_on.sub_flow_refs`) | sub_flow_results 부재/기형이면 `escalate, failure_origin=upstream`. 모든 sub-flow가 abandoned/no_op이어도 그 사실 자체가 합법적 summary → `body.summary`에 명시하고 `synthesized` |
 
 ### empty_clean 산출 모양
 
@@ -190,6 +203,10 @@ report:
   produced_at: ISO8601
 
   # result=synthesized | empty_clean (성공 분기)
+  body?:                                                 # result=synthesized일 때 필수 (deliverable 본문 slot — content/summary/design+next-step)
+    summary                                              # 모든 report_type 공통 top-level narrative
+    sections?: [{ heading, content }]                    # plan_standalone design document 등
+    next_step?                                           # plan_standalone일 때 필수
   findings?:                                             # report_type별 minimum 적용
     - id, statement, severity, evidence_ref
   action_items?:
@@ -217,8 +234,9 @@ report:
 
 - `result` discriminant이 명시됐는가 (synthesized | empty_clean | escalate) — 산출 모양이 분기와 일치 (P1)
 - findings에 severity(low|med|high|critical 단일 척도) + evidence_ref가 있는가 — severity 미부여/enum 밖 = FAIL (P6)
-- action items의 priority가 동일 단일 척도인가
-- report_type별 최소 완료 바 충족 (review=severity tag, retro=≥1 action item, spike=feasibility_verdict 존재, plan_standalone=next step 명시, exploration=content, compound=sub_flow_refs)
+- action items의 priority가 동일 단일 척도인가 + origin finding/risk severity에서 재투영됐는가 (Report가 새 priority를 *발명*하지 않음 — "priority 생산 규칙"; 무출처면 FAIL)
+- `result=synthesized`이면 `body.summary`가 존재+비어있지 않은가 (모든 report_type 공통; 없으면 FAIL — deliverable 본문 미충족)
+- report_type별 최소 완료 바 충족 — *필드로 검사* (review=finding severity tag, retro=≥1 action item, spike=feasibility_verdict 존재, plan_standalone=`body.sections` + `body.next_step` 존재, exploration=`body.summary` 비어있지 않음, compound=`body.summary` + `based_on.sub_flow_refs` 존재)
 - **Spike**: feasibility_verdict.verdict ∈ {GO, NO_GO, CONDITIONAL} 존재 (없으면 FAIL — terminal artifact 미충족)
 - claims이 검증됐는가 (evidence_ref 추적 가능; unverified는 propagate된 채 허용 — Verify가 단일 게이트)
 - `result=empty_clean`이 *합법적 빔*인가 *결손 도장*인가 검사 (empty_details.evidence 추적) — principle 3
@@ -231,7 +249,8 @@ report:
 |---|---|
 | 사실 캡처 | Ground |
 | 해석·findings 생성 | Investigate |
-| 결정·옵션·followup_flows *생성* | Decide |
+| 결정·옵션·followup_flows *생성* + sequencing/결정 우선순위 | Decide (Report는 action_item priority를 *origin severity 재투영*만 — 새 순서·결정 안 함) |
+| 설계 *생성* (design document 내용) | Decide(Design) (Report는 plan_standalone에서 그 산출을 `body.sections`로 *옮길* 뿐) |
 | 코드 변경 | Implement (Report은 비코드) |
 | Flow-level 목표 검증 + failure 라우팅 | Verify (Report는 escalate를 *신호*만, 라우팅 안 함 — principle/boundary) |
 | 후속 flow 큐잉 | Orchestrator (Report는 followup_flow_ref를 *참조*만) |
