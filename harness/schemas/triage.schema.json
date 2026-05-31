@@ -148,13 +148,18 @@
     },
     {
       "field": "flow_type vs classification_metadata.matched_rows[]",
-      "rule": "The emitted flow_type must be consistent with the matched signal rows (the signal->flow mapping in the Signal Table). compound requires verb/target>=2 (>=2 distinct matched signal intents); bugfix_p0 wins over bugfix on strict superset. Grammar fixes the enum value but cannot verify it matches the cited rows — M2 re-derives flow_type from matched_rows.",
+      "rule": "The emitted flow_type must be consistent with the matched signal rows (the signal->flow mapping in the Signal Table). compound requires verb/target>=2 (>=2 distinct matched signal intents); bugfix-p0 wins over bugfix on strict superset. Grammar fixes the enum value but cannot verify it matches the cited rows — M2 re-derives flow_type from matched_rows.",
       "check": "flow_type_matches_signal_rows"
     },
     {
       "field": "classification_metadata.confidence vs matched_rows.length",
       "rule": "confidence=high requires exactly one matched signal row (or a strict superset). If multiple non-superset rows matched, the correct output is the ambiguous branch, not proceed(low). M2 cross-checks confidence against the match cardinality.",
       "check": "confidence_consistent_with_match_cardinality"
+    },
+    {
+      "field": "classification_metadata.complexity_signal (proceed branch)",
+      "rule": "When result=proceed, classification_metadata.complexity_signal MUST be one of {high, medium, low} — NEVER 'none'. 'none' is the absence sentinel for non-proceed results (where classification_metadata does not exist) and is mutually exclusive with high/medium/low; it can never legitimately appear on a proceed. The shared ComplexitySignal enum keeps 'none' (other contexts need it), so grammar (M1) cannot exclude one member from the shared $ref — this proceed-only restriction is a sibling M2 code check.",
+      "check": "proceed_complexity_signal_not_none"
     }
   ]
 }

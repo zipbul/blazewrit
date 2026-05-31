@@ -71,7 +71,7 @@ report:
 | result | 의미 | 산출 | Orchestrator 처리 |
 |---|---|---|---|
 | `synthesized` | sound deliverable 합성됨 (정상 성공) | 아래 **Success terminal-artifact object** 전체 | Verify step 진입 (terminal artifact가 row로 존재) |
-| `empty_clean` | 보고할 내용이 *합법적으로* 없음 (principle 3: legitimately empty — verdict이지 error 아님) | report_type별 minimum을 충족하는 minimal artifact + `empty_details` | Verify 진입 (Exploration "no minimum structure" 충족) |
+| `empty_clean` | 보고할 내용이 *합법적으로* 없음 (principle 3: legitimately empty — verdict이지 error 아님) | minimal artifact(`empty_details` 중심) — report_type별 minimum-content bar는 *면제*(그 bar는 `synthesized`만 게이팅). 따라서 `body.summary`가 비거나 부재해도 됨 | Verify 진입 (Exploration "no minimum structure" 충족) |
 | `escalate` | Report 자기 scope 내에서 sound deliverable 합성 *불가* (principle 1: 보조 입력이 아니라 합성 자체가 막힘) | `escalate_details` (아래) | **NEEDS_CONTEXT** — 기존 경로로 user/caller escalate. Report는 failure_origin을 *진단*하지 않고 `failure_origin=upstream`(또는 입력별 구체 origin)만 신호; orchestrator가 5-누적-fail halt cap 안에서 producer⇄reviewer 재진입 라우팅 |
 
 > **principle 1 (tool-absence)**: Report의 PRIMARY 입력은 도구가 아니라 *upstream artifact*다(Report는 MCP 도구에 의존하지 않는 순수 합성 step). 따라서 P2(자기 도구 부재) 분기는 Report에 해당 없음 — Report에는 escalate-할 "주요 도구"가 없다. upstream artifact 부재/기형이 Report의 escalate 트리거다("Input preconditions"). **(boundary: Report는 Verify식 failure_origin *라우팅*을 갖지 않는다 — escalate를 *신호*만 하고 orchestrator의 기존 NEEDS_CONTEXT 경로로 위임한다.)**
@@ -179,6 +179,8 @@ Activity 5는 "모든 claim에 evidence_ref"를 *불변식*으로 요구한다. 
 Investigate.findings가 비었거나(Exploration/Retro의 *합법적* outcome) Decide가 followup_flows를 안 냈을 때의 동작. 여기서 핵심은 **"빈-합법(verdict) vs 빈-결손(escalate)" 구분**(principle 3) + **report_type별 최소 완료 바**(flows/README.md "Non-Implementation Flow Completion Criteria" 표 권위 인용).
 
 ### report_type별 최소 완료 바 (단일 flat schema가 아니라 분기별 minimum)
+
+> **이 minimum-content bar는 `result=synthesized`만 게이팅한다.** `result=empty_clean`은 이 bar에서 *면제* — empty_clean은 `empty_details` 중심 minimal artifact로 충족되며 per-report_type minimum(예: exploration의 `body.summary` 비어있지 않음)을 만족할 필요가 없다. 아래 표의 "최소 완료 바" 칸은 *synthesized* 산출에 적용되고, "빈 입력 시" 칸이 empty_clean/escalate 분기를 정의한다.
 
 | report_type | 최소 완료 바 (권위: flows/README.md 표) | 빈 입력 시 |
 |---|---|---|

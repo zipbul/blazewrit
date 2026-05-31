@@ -41,10 +41,9 @@
           ]
         },
         "body": {
-          "description": "Deliverable body slot (README 'body 생산 규칙'). The SOLE narrative slot for content/summary/design+next-step. summary is required (top-level narrative for every report_type, present+non-empty when result=synthesized). sections carries optional structured body (plan_standalone design document). next_step is required for plan_standalone (minimum-bar 'next step').",
+          "description": "Deliverable body slot (README 'body 생산 규칙'). The SOLE narrative slot for content/summary/design+next-step. summary is required+non-empty ONLY when result=synthesized (gated by the outer-branch if/then below); on result=empty_clean summary may be absent/empty — empty_clean is EXEMPT from the per-report_type minimum-content bar (that bar gates synthesized), so an exploration-empty case carries empty_details without a non-empty body.summary. sections carries optional structured body (plan_standalone design document). next_step is required for plan_standalone (minimum-bar 'next step').",
           "type": "object",
           "additionalProperties": false,
-          "required": ["summary"],
           "properties": {
             "summary": {
               "description": "Top-level narrative synthesis: what was investigated/reviewed and the key conclusion (README Activity 2 Synthesize). Required+non-empty for every report_type on the synthesized branch (the deliverable's lede). exploration minimum-bar 'content 존재' = this non-empty.",
@@ -139,6 +138,20 @@
           },
           "then": {
             "required": ["empty_details"]
+          }
+        },
+        {
+          "$comment": "synthesized ⇒ body.summary present+non-empty (the deliverable's lede + per-report_type minimum-content bar). empty_clean is EXEMPT — it may carry an empty/absent body.summary alongside empty_details (README L187 exploration-empty path). summary.minLength:1 on the property handles non-emptiness; this if/then handles presence only on the synthesized branch.",
+          "if": {
+            "properties": { "result": { "const": "synthesized" } },
+            "required": ["result"]
+          },
+          "then": {
+            "properties": {
+              "body": {
+                "required": ["summary"]
+              }
+            }
           }
         }
       ],

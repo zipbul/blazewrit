@@ -529,7 +529,8 @@
             "enum": [
               "pyreez_opposite_verdict",
               "adversarial_overturns_mechanical",
-              "post_hoc_external_signal"
+              "post_hoc_external_signal",
+              "unattributable_goal_failure"
             ]
           }
         }

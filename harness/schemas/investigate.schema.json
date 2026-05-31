@@ -159,7 +159,7 @@
       }
     },
     {
-      "$comment": "MECHANICAL-ERROR branch — investigate_error REQUIRED; compatibility_verdict and the other interpretation outputs MUST be absent (no empty verdict disguised as proceed/no_op).",
+      "$comment": "MECHANICAL-ERROR branch — investigate_error REQUIRED; compatibility_verdict and the other interpretation outputs MUST be absent (no empty verdict disguised as proceed/no_op). When kind=primary_tool_unavailable (ED MCP absence/error/timeout), ed_availability MUST be present and pinned to the Omitted branch (README Failure & degrade (1): the PRIMARY-tool failure sets ed_availability=Omitted) — grammar-enforced via the if/then below.",
       "required": [
         "investigate_error"
       ],
@@ -170,6 +170,34 @@
         "risk_surface": false,
         "architecture_impact": false,
         "ground_unknowns_addressed": false
+      },
+      "if": {
+        "properties": {
+          "investigate_error": {
+            "properties": {
+              "kind": {
+                "const": "primary_tool_unavailable"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        },
+        "required": [
+          "investigate_error"
+        ]
+      },
+      "then": {
+        "required": [
+          "ed_availability"
+        ],
+        "properties": {
+          "ed_availability": {
+            "$comment": "PRIMARY-tool failure => ED unusable => ed_availability MUST be the Omitted branch (not Measured/absent). Reuses the shared Omitted $def.",
+            "$ref": "./_defs.schema.json#/$defs/Omitted"
+          }
+        }
       }
     }
   ],

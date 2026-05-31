@@ -48,8 +48,9 @@
           "properties": {
             "statement": { "type": "string", "minLength": 1 },
             "grounded_in": {
-              "description": "RowRefs to the specific Ground/Investigate rows whose facts justify this decision (§5: Postgres row ids, never file paths).",
+              "description": "RowRefs to the specific Ground/Investigate rows whose facts justify this decision (§5: Postgres row ids, never file paths). At least one — a decision not grounded in any fact is rejected (reviewer: 'reason.grounded_in 실 row 해소').",
               "type": "array",
+              "minItems": 1,
               "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
             },
             "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
@@ -423,8 +424,8 @@
               }
             },
             {
-              "$comment": "MODE = design. Full design: design_document(architecture+policy+userflow+req) + intent_card + ADR(R34) + cross_verify(R5) required; optional task_list + Compound gate_rules/sub_flow_sequence. Plan/Record-only props forbidden.",
-              "required": ["mode", "design_document", "intent_card", "adr", "cross_verify_required"],
+              "$comment": "MODE = design. Full design: design_document(architecture+policy+userflow+req) + intent_card + ADR(R34) + cross_verify(R5) required; options_deliberated (Measured|Omitted, always present per R22 degrade) + cross_verify_result (always recorded; not_run when pyreez not run) also required; optional task_list + Compound gate_rules/sub_flow_sequence. Plan/Record-only props forbidden.",
+              "required": ["mode", "design_document", "intent_card", "adr", "cross_verify_required", "options_deliberated", "cross_verify_result"],
               "properties": {
                 "mode": { "const": "design" },
                 "options_considered": false,

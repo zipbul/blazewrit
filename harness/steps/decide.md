@@ -299,7 +299,7 @@ Step Depth Policy 참조. Decide는 mode 자체가 depth (Record=shallow / Plan=
 - mode 일치 (declared+force 결과 vs 산출물 mode). M2: 산출 `mode` == R6가 계산한 forced mode.
 - **force precedence 적용 확인**: 동시 force 시 Design > Plan > Record 규칙대로 mode 확정됐는지 (§4).
 - Record: 결정+근거 1쌍 이상 (decision_record + reason).
-- Plan: 옵션 N≥2 비교 + 선택 이유(chosen.option_id ∈ options_considered) + 우선순위(sequencing).
+- Plan: 옵션 N≥2 비교 + 선택 이유(chosen.option_id ∈ options_considered) + 우선순위(`sequencing?` — optional ordering; 존재 시 depends_on 존재성/acyclic 검증, 필수 아님 — schema/Plan-yaml의 optional이 권위).
 - Design: design_document (architecture+policy+userflow+req 4 모두) + intent_card(또는 Omitted 분기 — ED 부재 시 정당) + adr + cross_verify_required.
 - **adr.status enum 검증**: `adr.status ∈ {proposed, accepted, deprecated, superseded}` (enum 밖 값 reject).
 - **cross_verify_result 정합성** (Design): 값이 enum `{agree, disagree, inconclusive, not_run}` 안에 있는지 + producing 규칙 일치 — `cross_verify_required==true`이고 pyreez 동작 시 `cross_verify_result ∈ {agree, disagree, inconclusive}`(not_run이면 fail: 동작했는데 미기록), pyreez 미실행/`cross_verify_required==false`면 `not_run`이어야 함. `disagree`이면 산출이 `failure_origin=verify escalate` 경로로 갔는지 확인(disagree인데 정상 decision 산출 시 fail).

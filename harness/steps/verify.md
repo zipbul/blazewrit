@@ -95,7 +95,7 @@ degraded_tools:                          # non-empty (degraded면 ≥1 도구 de
   - tool: pyreez
     omission:                            # M3 Omitted branch
       status: omitted
-      reason: unavailable | timeout | not_applicable   # tool_unavailable→unavailable, tool_timeout→timeout
+      reason: tool_absent | tool_failed | timeout | unavailable | not_applicable   # canonical Omitted enum: absent→tool_absent, error→tool_failed, tool_unavailable→unavailable, tool_timeout→timeout
       source_tool: <probe origin>
     mandatory_but_unavailable: true      # high-risk flow인데 강제 pyreez 부재 — low-risk-omitted와 구분 (verdict는 여전히 degraded_pass; "강제"는 시도 의무이지 성공 전제 아님 — P5)
 source_version:                          # freshness 재검 (race detection) — optional
@@ -169,7 +169,7 @@ Verify가 *자기 판단*을 의심하는 조건 (→ `result=blocked` + `escala
 - **pyreez cross-verify가 *반대 verdict*** (PASS vs FAIL 불일치) — pyreez `cross_verify_result=disagree`. (P2: 이건 degrade가 아니라 *불일치* → `failure_origin=verify` escalate, NEEDS_CONTEXT. pyreez 부재와 구분.)
 - Pass 3 adversarial이 Pass 1 mechanical을 *뒤집을* 만한데 특정 step에 귀착 안 됨 (aggregation rule 4b).
 - **임의의 pass(goal-backward 포함)가 명확한 결함을 surface하나 (a) 특정 single step에 귀착 불가 *그리고* (b) `multiple`로 여러 step에 분해 불가** (diffuse goal-not-met — 전체 flow가 목적을 못 냈는데 어느 step 탓인지 Verify가 정당화 못 함). 이건 4b의 일반 case다: step locus 없는 결함은 Verify가 producer를 *추측*해 misroute하지 않고 → `result=blocked` + `escalation(failure_origin=verify, reason=unattributable_goal_failure)`로 user/caller escalate. (원칙: 귀착 못 할 결함을 임의 step에 떠넘기지 않음 — in-lane.)
-- **`post_hoc_signal`** 수신 (Inputs에 선언된 채널): user_reject | downstream_failure | external_regression. flow가 이미 PASS였는데 외부 신호가 그 판정을 반박 → Verify가 자기 과거 판정을 의심.
+- **`post_hoc_signal`** 수신 (Inputs에 선언된 채널): user_reject | downstream_failure | external_regression. flow가 이미 PASS였는데 외부 신호가 그 판정을 반박 → Verify가 자기 과거 판정을 의심. (이 세 kind는 audit record의 `self_misjudgment_check.triggers`에서 단일 토큰 `post_hoc_external_signal`로 기록된다 — kind granularity는 입력 신호에만 보존되고 trigger 토큰으로 echo하지 않는다.)
 
 → orchestrator는 `failure_origin=verify`를 **자동 재invoke 하지 않음** — `NEEDS_CONTEXT`로 user/caller escalate (무한 self-route 방지). (제어신호 소유권 원칙②: Verify는 `request_upstream_deepen`을 *쓰지 않는다* — 그건 Decide 전용. 모든 degenerate/모호 upstream은 기존 `failure_origin` escalate로만 라우팅.)
 

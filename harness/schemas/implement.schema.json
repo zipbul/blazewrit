@@ -256,7 +256,7 @@
       "$ref": "./_defs.schema.json#/$defs/StepName"
     },
     "failure_origin": {
-      "description": "Escalate-branch routing field (shared FailureOrigin enum: implement|spec|decide|test|ground|investigate|cap_exceeded). REQUIRED whenever result != 'implemented' (blocked / needs_setup_recovery / cap_exceeded branches — see the allOf conditional below). principle 2/3: Implement detects an upstream defect and routes via failure_origin (it does NOT emit request_upstream_deepen, which is Decide-only). cap_exceeded = step budget exhausted → orchestrator-level halt+escalate (no auto Implement⇄Reviewer reentry).",
+      "description": "Escalate-branch routing field. Reuses the shared FailureOrigin $def (M4 single-source primitive: triage|ground|investigate|decide|spec|test|implement|report|verify|cap_exceeded|multiple) for grammar shape, but only the Implement-reachable SUBSET {implement, spec, decide, test, ground, investigate, cap_exceeded} is a legitimate origin for THIS step — the other shared values (triage, report, verify, multiple) are NOT reachable from Implement and are constrained by the sibling M2 validator-contract, NOT by grammar (grammar keeps the shared $ref unchanged for M4). REQUIRED whenever result != 'implemented' (blocked / needs_setup_recovery / cap_exceeded branches — see the allOf conditional below). principle 2/3: Implement detects an upstream defect and routes via failure_origin (it does NOT emit request_upstream_deepen, which is Decide-only). cap_exceeded = step budget exhausted → orchestrator-level halt+escalate (no auto Implement⇄Reviewer reentry).",
       "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
     },
     "escalate_reason": {
@@ -405,7 +405,12 @@
     {
       "field": "based_on.spec_ref|decide_ref|test_ref",
       "rule": "R16/input-contract + §5 row existence",
-      "check": "M2: assert min 1 of (spec_ref|decide_ref) present (grammar's oneOf gives shape; code resolves the rows). Each RowRef must resolve to an existing step_runs row of the right step_name. test_ref required iff the flow chain names a Test step (reviewer per chain)."
+      "check": "M2: assert min 1 of (spec_ref|decide_ref) present (grammar's anyOf gives shape; code resolves the rows). Each RowRef must resolve to an existing step_runs row of the right step_name. test_ref required iff the flow chain names a Test step (reviewer per chain)."
+    },
+    {
+      "field": "failure_origin",
+      "rule": "Implement-reachable origin subset (M4 shared $def, M2-constrained)",
+      "check": "M2: failure_origin reuses the shared FailureOrigin enum for shape, but for Implement only {implement, spec, decide, test, ground, investigate, cap_exceeded} is a legitimate origin. Assert failure_origin ∈ that subset; the shared values triage|report|verify|multiple are unreachable from Implement and must be rejected here (grammar keeps the shared $ref for single-source, so this floor is code-enforced)."
     },
     {
       "field": "emergency_mode",

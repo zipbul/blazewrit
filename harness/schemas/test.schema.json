@@ -82,8 +82,11 @@
       "required": ["failure_origin", "reason"],
       "properties": {
         "failure_origin": {
-          "description": "Which step the in-scope failure is attributed to. Test-reachable subset of _defs FailureOrigin: spec/decide (missing-or-malformed upstream), test (runner absent / migration dry_run failed|partial), cap_exceeded (caps blown).",
-          "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
+          "description": "Which step the in-scope failure is attributed to. Test-reachable subset of _defs FailureOrigin: spec/decide (missing-or-malformed upstream), test (runner absent / migration dry_run failed|partial), cap_exceeded (caps blown). The shared FailureOrigin $def is reused (M4 single-source) but restricted by an enum allOf to the Test-reachable values only.",
+          "allOf": [
+            { "$ref": "./_defs.schema.json#/$defs/FailureOrigin" },
+            { "enum": ["spec", "decide", "test", "cap_exceeded"] }
+          ]
         },
         "reason": {
           "description": "Human-readable diagnosis of the mechanical error.",
@@ -271,7 +274,7 @@
 
     "reproduction": {
       "$comment": "Bug Fix flow only. {test_path, bug_ref}. bug_ref is a §5 RowRef (the Decide/bug-source row), NOT a file path.",
-      "description": "OPTIONAL — Bug Fix flow. The test that reproduces the bug (RED; Implement's fix turns it GREEN). Present only on Bug Fix chains. test_path is a real on-disk test file path (git-versioned code); bug_ref is a §5 RowRef to the upstream row describing the bug (Decide decision_record / Investigate). M2 (test-reviewer): the reproduction test actually reproduces the bug.",
+      "description": "OPTIONAL — Bug Fix flow. The test that reproduces the bug (RED; Implement's fix turns it GREEN). Present only on Bug Fix chains. test_path is a real on-disk test file path (git-versioned code); bug_ref is a §5 RowRef to the upstream Decide or Investigate step_runs row describing the bug (the legacy `decision_record` field name does NOT exist in the Decide schema — P3/P8 correction). M2 (test-reviewer): the reproduction test actually reproduces the bug.",
       "type": "object",
       "additionalProperties": false,
       "required": ["test_path", "bug_ref", "reproduced"],
@@ -282,7 +285,7 @@
           "minLength": 1
         },
         "bug_ref": {
-          "description": "§5 RowRef to the upstream row that defines the bug (Decide/Investigate step_runs row). NEVER a file path.",
+          "description": "§5 RowRef to the upstream row that defines the bug (the Decide or Investigate step_runs row describing the bug). NEVER a file path.",
           "$ref": "./_defs.schema.json#/$defs/RowRef"
         },
         "reproduced": {
