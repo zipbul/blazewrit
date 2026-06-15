@@ -5,13 +5,11 @@
   "description": "STEP 10 REFLECT — post-flow learning extraction (README legacy/steps/reflect). Runs ONLY on classification completed|abandoned; suspended => Reflect NOT executed, so this schema is never emitted for a suspended flow. M1 SHAPE (grammar-constrained generation): the 4 required substantive sections (what_worked / what_failed / unexpected / patterns_discovered) are forced present; minLength is the SCHEMA-SIDE substance FLOOR (the legacy 'Reflect structure check hook'), but the irreducible 'is it actually substantive / non-filler' judgment is NOT closable by grammar — it is an M2/floor concern (G6 review). §5 STORAGE LAW: Tier 1 raw Reflect output persists to Postgres step_runs jsonb (a RowRef self-id, NOT a flow-history file — legacy '.blazewrit/flow-history/<id>.json' is PRE-§5 and translated to a row ref). Tier 2 promotion is the SOLE legit file output: '.claude/rules/<topic>.md' (RulesFilePath, a Claude Code INPUT). based_on / prior-run refs = RowRefs. Reflect has NO reviewer and NO next-step (terminal): no DeclaredNextStep. Boundary: Reflect learns only — it does NOT change decisions (Decide), code (Implement), or write CLAUDE.md (User/Tier 3).",
   "type": "object",
   "additionalProperties": false,
+  "$comment": "Top-level required is UNCONDITIONAL across all four results, so it holds only the identity fields derivable even when input is malformed: step, result, self_ref. classification (enum completed|abandoned) and based_on (flow_ref + step_refs) are NOT here — a precondition_escalated fires precisely because completion_status is missing/invalid, the INPUT flow-identity is malformed, or a well-formed completion_status=suspended illegally reached the step body (reason invoked_on_suspended), making those very fields underivable. Note: that input flow-identity is the orchestrator-injected pair (flow_id, flow_type) where flow_type is an INPUT-ONLY precondition (the hyphenated flow-file stem feature|bugfix|...|compound) and is NOT a field of this structured_output — the output identity carried is based_on.flow_ref + classification, not flow_type. classification and based_on are required per-result only on completed_reflection|reflect_incomplete (see allOf then-blocks); on precondition_escalated they are FORBIDDEN (the malformed input makes them underivable, so a fabricated ref cannot be smuggled — the raw malformed identity goes in escalate.reason), while on archive_escalated they remain available (input was well-formed; only the archive write failed).",
   "required": [
     "step",
     "result",
-    "self_ref",
-    "classification",
-    "based_on",
-    "iterations"
+    "self_ref"
   ],
   "properties": {
     "step": {
@@ -33,8 +31,8 @@
     },
 
     "classification": {
-      "$comment": "README 'Reflect 분류'. Only completed|abandoned reach Reflect; suspended => Reflect NOT executed (no output), so it is NOT a valid value here.",
-      "description": "README Reflect-classification. The terminal classification of the reflected flow. ONLY 'completed' (all steps normal) or 'abandoned' (blocked / no_op / user abandonment / RETRY_EXHAUSTED) run Reflect. 'suspended' (NEEDS_CONTEXT or active-flow preempted) does NOT execute Reflect and is therefore EXCLUDED from this enum — grammar makes it impossible to emit a Reflect output for a suspended flow.",
+      "$comment": "README 'Reflect 분류'. Only completed|abandoned reach Reflect; suspended => Reflect NOT executed (no output), so it is NOT a valid value here. RECONCILIATION (completed vs Verify-FAIL): 'completed' = every step RAN to a terminal verdict (no step suspended/blocked mid-flow), NOT 'every step PASSED'. A code flow that ran end-to-end through Verify and Verify returned FAIL or RETRY_EXHAUSTED is still classification='completed' (the flow completed; its Verify confirmed a failure) and legitimately carries based_on.verify_result ∈ {FAIL, RETRY_EXHAUSTED} — this is the case that ENABLES the contradiction gate (deltas.kind=contradicts_prior / tier2_promotions[].outcome=contradicting need a Verify-confirmed opposite result). A bare FAIL (non-exhausted) lands in 'completed', not 'abandoned'; RETRY_EXHAUSTED reaches Reflect under EITHER classification (a flow abandoned ON retry-exhaustion is 'abandoned', a completed flow whose Verify recorded RETRY_EXHAUSTED is 'completed') — both carry the same verify_result fact, and the contradiction gate keys off verify_result, not classification.",
+      "description": "README Reflect-classification. The terminal classification of the reflected flow. ONLY 'completed' or 'abandoned' run Reflect. 'completed' = all steps RAN to a terminal verdict (this INCLUDES a code flow whose Verify returned FAIL/RETRY_EXHAUSTED — a Verify-confirmed failure is a legitimate completed-flow outcome, distinct from 'all steps passed'); 'abandoned' = blocked / no_op / user abandonment / RETRY_EXHAUSTED-driven abandonment. 'suspended' (NEEDS_CONTEXT or active-flow preempted) does NOT execute Reflect and is therefore EXCLUDED from this enum — grammar makes it impossible to emit a Reflect output for a suspended flow.",
       "type": "string",
       "enum": ["completed", "abandoned"]
     },
@@ -57,9 +55,10 @@
           "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
         },
         "verify_result": {
-          "description": "The flow's Verify outcome that conditioned this reflection.",
+          "$comment": "Present only for a code flow (README: '코드 flow일 때만 존재'). 'did_not_run' is the load-bearing abandoned-flow fact (Pass 1 degrade): Verify ran-not as an explicit recorded fact. This is DISTINCT from verify_result being absent (= non-code flow, Verify never applied). The contradiction-suppression logic branches on did_not_run, so it must be representable and not collapsed into mere absence.",
+          "description": "The flow's Verify outcome that conditioned this reflection. PASS|FAIL|RETRY_EXHAUSTED are the code-flow outcomes; 'did_not_run' is the explicit abandoned-flow fact that Verify did not run (Pass 1 degrade — load-bearing for contradiction-suppression). Property ABSENT = non-code flow (Verify never applied), which is distinct from the recorded 'did_not_run' fact.",
           "type": "string",
-          "enum": ["PASS", "FAIL", "RETRY_EXHAUSTED"]
+          "enum": ["PASS", "FAIL", "RETRY_EXHAUSTED", "did_not_run"]
         }
       }
     },
@@ -83,10 +82,10 @@
     },
 
     "patterns_discovered": {
-      "$comment": "Required substantive section #4. Each pattern carries occurrence_count (CountClaim, R23) — observed N times; 3+ across flows triggers Tier 2 promotion.",
-      "description": "REQUIRED SECTION 4/4. Recurring observations worth tracking. Each pattern additionally carries an occurrence_count (CountClaim, R23) — how many times the pattern has been observed across flows, MEASURED from the prior-run comparison, not a fabricated integer — because '3+ times' is the Tier 2 promotion trigger and that threshold must be backed by a counted command (e.g. a query over prior step_runs). promotion_eligible is the model's SHAPE-level signal that the threshold was met; the actual promotion act is recorded in tier2_promotions.",
+      "$comment": "Required substantive section #4 — but minItems:0 (a genuinely clean flow, especially a cold_start first-ever run, may have NO recurring cross-flow pattern to track; forcing >= 1 would mandate fabricating a backed pattern, contradicting the R23 anti-hallucination intent). Each pattern, when present, carries occurrence_count (CountClaim, R23) — observed N times; 3+ across flows triggers Tier 2 promotion.",
+      "description": "REQUIRED SECTION 4/4 — present (the key is required on completed_reflection) but MAY BE EMPTY (minItems:0): a flow with no recurring cross-flow observation legitimately yields zero patterns, and an empty array is the honest representation rather than a fabricated backed pattern (the other 3 narrative sections stay minItems:1; only this section can be empty). Recurring observations worth tracking. Each pattern, when present, additionally carries an occurrence_count (CountClaim, R23) — how many times the pattern has been observed across flows, MEASURED from a counted command, not a fabricated integer — because '3+ times' is the Tier 2 promotion trigger and that threshold must be backed by a counted command (e.g. a query over prior step_runs). The 3+ threshold is read directly from occurrence_count.value (there is no separate promotion-eligible flag); the actual promotion act is recorded in tier2_promotions.",
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": { "$ref": "#/$defs/DiscoveredPattern" }
     },
 
@@ -107,13 +106,17 @@
               "required": ["prior_run_refs", "deltas"],
               "properties": {
                 "prior_run_refs": {
-                  "description": "RowRefs to the prior step_runs/flows rows consulted (the §5 translation of reading flow-history files).",
+                  "$comment": "minItems:1 — 'measured' means priors EXISTED and were compared; an empty prior_run_refs would be 'compared to nothing', which the description forbids and which is exactly the cold_start branch's job. Zero priors MUST use cold_start, never an empty 'measured'.",
+                  "description": "RowRefs to the prior step_runs/flows rows consulted (the §5 translation of reading flow-history files). At least one — 'measured' is unreachable with zero priors (use cold_start instead).",
                   "type": "array",
+                  "minItems": 1,
                   "items": { "$ref": "./_defs.schema.json#/$defs/RowRef" }
                 },
                 "deltas": {
-                  "description": "How this flow's learning differs from / confirms prior learning. Each delta is provenance-bearing.",
+                  "$comment": "minItems:1 — a 'measured' comparison that yielded no delta against any prior is the cold_start/empty case, not a measured one; at least one delta must back the comparison.",
+                  "description": "How this flow's learning differs from / confirms prior learning. Each delta is provenance-bearing. At least one.",
                   "type": "array",
+                  "minItems": 1,
                   "items": {
                     "type": "object",
                     "additionalProperties": false,
@@ -121,7 +124,8 @@
                     "properties": {
                       "observation": { "type": "string", "minLength": 24 },
                       "kind": {
-                        "description": "Relationship to prior learning: a new finding, a confirmation (recurrence — feeds occurrence_count), or a contradiction (Tier 2 prune trigger).",
+                        "$comment": "x-validator-contract (M2 — grammar cannot couple this to based_on.verify_result): kind='contradicts_prior' may be emitted ONLY when the opposite result is Verify-confirmed, i.e. based_on.verify_result ∈ {FAIL, RETRY_EXHAUSTED} (a code-flow Verify that confirmed the failure). It is FORBIDDEN when based_on.verify_result is absent (non-code flow — Verify never applied) or = 'did_not_run' (abandoned flow Verify did not run): there is no Verify-confirmed contradicting fact, so the contradiction must NOT be recorded (README Tier 2 Lifecycle contradiction-gate). Such an observation is accumulated as its own pattern instead, never as a contradiction here. The same gate mirrors onto tier2_promotions[].outcome='contradicting'.",
+                        "description": "Relationship to prior learning: a new finding, a confirmation (recurrence — feeds occurrence_count), or a contradiction (Tier 2 prune trigger; 'contradicts_prior' is Verify-confirmation-gated — see $comment / README Tier 2 Lifecycle).",
                         "type": "string",
                         "enum": ["new", "confirms_prior", "contradicts_prior"]
                       },
@@ -157,12 +161,12 @@
 
     "tier2_promotions": {
       "$comment": "The SOLE legit file output: .claude/rules/<topic>.md (RulesFilePath). Dedup: found=>append, not-found=>create. Append-only, never rewrite.",
-      "description": "3-Tier distillation Tier 2 (Curated). Records each pattern promoted to '.claude/rules/<topic>.md' — the ONE workflow output that stays a FILE (RulesFilePath, a Claude Code INPUT; Postgres cannot inject it). May be empty (no pattern hit the 3+ threshold this flow). DEDUP RULE (README): before writing, Reflect searches existing rule files for the same pattern → found ⇒ write_mode 'append' (append evidence to the existing file) / not-found ⇒ write_mode 'create' (new file). Append-only — never rewrite. Each promotion's pattern_ref ties back to the patterns_discovered entry that justified it.",
+      "description": "3-Tier distillation Tier 2 (Curated). Records each pattern write to '.claude/rules/<topic>.md' — the ONE workflow output that stays a FILE (RulesFilePath, a Claude Code INPUT; Postgres cannot inject it). A write happens on EVERY patterns_discovered item starting at distinct-flow count=1 (not gated on 3+); the 3+ threshold is the candidate→active transition, surfaced by each item's resulting_status. May be empty only when there were no discovered patterns to record. DEDUP RULE (README): before writing, Reflect searches existing rule files for the same pattern → found ⇒ write_mode 'append' (append evidence to the existing file) / not-found ⇒ write_mode 'create' (new file at count=1, status candidate). Append-only — never rewrite. Each item also records resulting_status (candidate|active|deprecated) and outcome (supporting|contradicting) so the orchestrator sees the lifecycle transition. Each promotion's pattern_ref ties back to the patterns_discovered entry that justified it.",
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "$comment": "topic + pattern_ref are always required. rules_file / occurrence_count / deduped_against are required only for an actually-written promotion (append|create); a 'deferred' item (Tier 2 write contention/IO failure) carries NO successfully-written rules_file and instead records the pending state — see the allOf branch below. The primary learning is preserved in Tier 1 either way (degrade, not escalate).",
+        "$comment": "topic + pattern_ref are always required. rules_file / occurrence_count / deduped_against / resulting_status / outcome are required only for an actually-written promotion (append|create); a 'deferred' item (Tier 2 write contention/IO failure) carries NO successfully-written rules_file and instead records the pending state — see the allOf branch below. The primary learning is preserved in Tier 1 either way (degrade, not escalate).",
         "required": ["write_mode", "topic", "pattern_ref"],
         "properties": {
           "rules_file": {
@@ -181,19 +185,36 @@
             "minLength": 1
           },
           "pattern_ref": {
-            "description": "Index into patterns_discovered identifying which discovered pattern was promoted.",
+            "$comment": "Index into patterns_discovered. Grammar gives minimum:0 but CANNOT bound it by the sibling array's length. x-validator-contract (M2, on the completed_reflection branch — PATTERN_REF BOUND): 0 <= pattern_ref < len(patterns_discovered), so a promotion can never reference a non-existent discovered pattern.",
+            "description": "Index into patterns_discovered identifying which discovered pattern was promoted. M2-bounded: 0 <= pattern_ref < len(patterns_discovered) (grammar cannot couple the index to the other array's length).",
             "type": "integer",
             "minimum": 0
           },
           "occurrence_count": {
-            "$comment": "R23 — the '3+ times across flows' promotion threshold is a MEASURED count, never a bare integer. value MUST be >= 3 for a legitimate promotion (validator-enforced).",
-            "description": "R23 CountClaim. Times the pattern was observed across flows — the measured backing for the '3+' promotion threshold. Must be derived from the prior-run query stdout, not fabricated. M2 validator asserts value >= 3 (promotion threshold) AND value is derivable from source.raw_stdout.",
-            "$ref": "./_defs.schema.json#/$defs/CountClaim"
+            "$comment": "R23 — a MEASURED count, never a bare integer. A Tier 2 append/create write happens on EVERY observation starting at distinct-flow count=1 (README Tier 2 Promotion: not-found⇒create at count=1 status candidate; found⇒append, count increments). So value MUST be >= 1 (validator-enforced). The '3+' threshold is NOT a write gate — it is the candidate→active transition, surfaced by resulting_status, not by occurrence_count.",
+            "description": "R23 CountClaim. Distinct-flow times the pattern was observed across flows — the measured backing for the evidence-ledger count. Must be derived from the prior-run query stdout, not fabricated. M2 validator asserts value >= 1 (a write records evidence from the first occurrence) AND value is derivable from source.raw_stdout AND value EQUALS patterns_discovered[pattern_ref].occurrence_count.value (same ledger distinct-flow count per pattern_key — the COUNT IDENTITY contract on the completed_reflection branch; the two independently-emitted CountClaims for one pattern must agree). COUNT IDENTITY applies to this field ONLY on append|create (this property is FORBIDDEN on deferred — see the deferred allOf branch); a pattern covered solely by a deferred write has no occurrence_count here, so its count is carried by patterns_discovered[i].occurrence_count alone and the identity check is deferred until the pending write is retried. The 3+ promotion-to-active threshold is reported by resulting_status, NOT by this count. value >= 1 is now GRAMMAR-enforced via the minimum:1 override below, matching the DiscoveredPattern.occurrence_count floor so the two stay self-consistent (no longer M2-prose-only).",
+            "allOf": [
+              { "$ref": "./_defs.schema.json#/$defs/CountClaim" },
+              { "properties": { "value": { "minimum": 1 } } }
+            ]
+          },
+          "resulting_status": {
+            "$comment": "Tier 2 rule lifecycle status AFTER this write (README Tier 2 Lifecycle). candidate = ledger has < 3 distinct flows; active = this write first reached 3 distinct flows AND no contradicting evidence; deprecated = contradicting evidence accumulated. M2 validator (BIDIRECTIONAL at the threshold — grammar cannot couple status to occurrence_count.value): reaching 3 FORCES active, so when occurrence_count.value >= 3 AND outcome = 'supporting' AND no contradicting evidence in the ledger, resulting_status MUST be 'active' (NOT 'candidate'); conversely 'candidate' requires occurrence_count.value < 3, and 'active' requires occurrence_count.value >= 3 AND outcome != 'contradicting'. The candidate→active transition is the real meaning of the '3+' threshold. Required for an actual write (append|create), omitted for deferred.",
+            "description": "Tier 2 rule lifecycle status resulting from this write (candidate|active|deprecated), so the orchestrator's 'Tier 2 dedup/promote 반영' sees the transition. 'candidate' = under 3 distinct flows; 'active' = this write first reached the 3+ distinct-flow threshold with no contradiction (the promote signal); 'deprecated' = contradicting evidence accumulated. Present for append|create; absent for deferred.",
+            "type": "string",
+            "enum": ["candidate", "active", "deprecated"]
+          },
+          "outcome": {
+            "$comment": "Whether this evidence supports or contradicts the rule (README Tier 2 Lifecycle: outcome:contradicting appended on a Verify-confirmed opposite result). A contradicting outcome drives resulting_status to deprecated. Required for an actual write (append|create), omitted for deferred. x-validator-contract (M2, mirrors deltas.kind='contradicts_prior'): outcome='contradicting' may be emitted ONLY when based_on.verify_result ∈ {FAIL, RETRY_EXHAUSTED} (Verify-confirmed opposite result); FORBIDDEN when based_on.verify_result is absent (non-code flow) or = 'did_not_run' (abandoned, Verify not run) — no Verify-confirmed contradicting fact exists, so no rule may be deprecated.",
+            "description": "Whether the appended/created evidence is supporting or contradicting the rule. A 'contradicting' outcome (only on a Verify-confirmed opposite result) transitions the rule to deprecated. Present for append|create; absent for deferred.",
+            "type": "string",
+            "enum": ["supporting", "contradicting"]
           },
           "deduped_against": {
             "$comment": "Dedup audit: which existing rule files were searched before writing. Never create a duplicate rule.",
-            "description": "The existing '.claude/rules/' files searched during dedup (README Dedup Rule). Empty when no rule files existed yet. M2 validator: if write_mode='create', assert no entry here matched the same pattern (no duplicate rule created).",
+            "description": "The existing '.claude/rules/' files searched during dedup (README Dedup Rule). Empty when no rule files existed yet. uniqueItems: a given rule file is searched at most once, so a repeated path is malformed audit input. M2 validator: if write_mode='create', assert no entry here matched the same pattern (no duplicate rule created).",
             "type": "array",
+            "uniqueItems": true,
             "items": { "$ref": "./_defs.schema.json#/$defs/RulesFilePath" }
           },
           "deferred_reason": {
@@ -205,16 +226,16 @@
         },
         "allOf": [
           {
-            "$comment": "A WRITTEN promotion (append|create) carries the real file path + measured count + dedup audit.",
+            "$comment": "A WRITTEN promotion (append|create) carries the real file path + measured count (value >= 1) + dedup audit + resulting lifecycle status + supporting/contradicting outcome. x-validator-contract (M2, BIDIRECTIONAL at the 3+ threshold — grammar cannot couple status to occurrence_count.value): when occurrence_count.value >= 3 AND outcome='supporting' AND no contradicting evidence in the ledger, resulting_status MUST be 'active' (reaching 3 forces active, not candidate); 'candidate' requires occurrence_count.value < 3; resulting_status='active' requires occurrence_count.value >= 3 AND outcome != 'contradicting'; resulting_status='deprecated' requires outcome='contradicting'.",
             "if": { "properties": { "write_mode": { "enum": ["append", "create"] } } },
-            "then": { "required": ["rules_file", "occurrence_count", "deduped_against"] }
+            "then": { "required": ["rules_file", "occurrence_count", "deduped_against", "resulting_status", "outcome"] }
           },
           {
-            "$comment": "A DEFERRED promotion has no successfully-written file; rules_file is forbidden and deferred_reason is required. The pattern_ref still ties it to the discovered pattern so the pending write can be retried.",
+            "$comment": "A DEFERRED promotion has no successfully-written file: rules_file / resulting_status / outcome are forbidden (no write result exists yet) and deferred_reason is required. The pattern_ref still ties it to the discovered pattern so the pending write can be retried.",
             "if": { "properties": { "write_mode": { "const": "deferred" } } },
             "then": {
               "required": ["deferred_reason"],
-              "not": { "required": ["rules_file"] }
+              "not": { "anyOf": [{ "required": ["rules_file"] }, { "required": ["resulting_status"] }, { "required": ["outcome"] }] }
             }
           }
         ]
@@ -222,8 +243,8 @@
     },
 
     "iterations": {
-      "$comment": "Internal multi-pass: max 3 iterations until 4 sections substantive. This is a COUNT of executed passes => CountClaim is overkill (not a tool-stdout count); it is a self-reported control integer bounded 1..3.",
-      "description": "Internal multi-pass control. Number of refinement iterations run (Pass 1 fact collection → Pass 2 pattern extraction → Pass 3 prior comparison, looped up to max 3 until the 4 required sections are substantive). Bounded 1..3. This is an internal control integer (how many self-passes the agent ran), NOT a measurement of an external tool's stdout, so it is a plain bounded integer rather than a CountClaim.",
+      "$comment": "Internal multi-pass: max 3 iterations until 4 sections substantive. This is a COUNT of executed passes => CountClaim is overkill (not a tool-stdout count); it is a self-reported control integer bounded 1..3. Required on completed_reflection / reflect_incomplete / archive_escalated (the multi-pass actually ran); FORBIDDEN on precondition_escalated (the precondition fails BEFORE any pass runs). archive_escalated requires it because the multi-pass completed before the Tier 1 archive write failed, so a true count exists.",
+      "description": "Internal multi-pass control. Number of refinement iterations run (Pass 1 fact collection → Pass 2 pattern extraction → Pass 3 prior comparison, looped up to max 3 until the 4 required sections are substantive). Bounded 1..3. This is an internal control integer (how many self-passes the agent ran), NOT a measurement of an external tool's stdout, so it is a plain bounded integer rather than a CountClaim. Required on completed_reflection/reflect_incomplete/archive_escalated; forbidden on precondition_escalated (no pass executed before the precondition failure).",
       "type": "integer",
       "minimum": 1,
       "maximum": 3
@@ -243,16 +264,19 @@
       "required": ["failing_sections", "iterations_used", "reason"],
       "properties": {
         "failing_sections": {
-          "description": "Which of the 4 required sections failed the substance floor.",
+          "$comment": "patterns_discovered is EXCLUDED from this enum: it has a minItems:0 floor (an empty patterns_discovered is the legitimate honest no-pattern result, never a substance-floor failure), so it cannot mechanically 'fail the substance floor'. Only the 3 narrative sections (minItems:1 + Finding minLength:24) can fail the floor and thus be named here.",
+          "description": "Which of the 3 narrative required sections (what_worked|what_failed|unexpected) failed the substance floor. patterns_discovered is excluded — it has a minItems:0 floor and cannot mechanically fail. uniqueItems: each narrative section can fail at most once, so a repeated name is malformed (the M2 absence-biconditional keys off membership, so duplicates would make the 'accounted-for exactly once' bookkeeping ambiguous).",
           "type": "array",
           "minItems": 1,
+          "uniqueItems": true,
           "items": {
             "type": "string",
-            "enum": ["what_worked", "what_failed", "unexpected", "patterns_discovered"]
+            "enum": ["what_worked", "what_failed", "unexpected"]
           }
         },
         "iterations_used": {
-          "description": "Refinement passes run before giving up (= 3 at the cap).",
+          "$comment": "x-validator-contract (M2 — grammar cannot couple two sibling subtrees): on reflect_incomplete, incomplete_details.iterations_used MUST equal the top-level iterations AND both MUST equal 3 (cap-exhaustion means the multi-pass ran the full 3 passes and still failed the floor). A stale/contradictory pair (e.g. iterations=2 vs iterations_used=3, or iterations_used<3 while claiming cap-exhaustion) is rejected by the validator.",
+          "description": "Refinement passes run before giving up. On reflect_incomplete this MUST equal the top-level iterations and both MUST be 3 (cap exhausted) — M2-validated; grammar cannot couple the two sibling fields.",
           "type": "integer",
           "minimum": 1,
           "maximum": 3
@@ -267,10 +291,10 @@
 
     "escalate": {
       "$comment": "Post-flow escalate channel. Required when result ∈ {precondition_escalated, archive_escalated}. failure_origin is cap_exceeded (post-flow halt origin, NO auto-reinvoke) — Reflect runs after flow termination so it does NOT borrow the in-flow failure_origin=verify value, and does NOT add its own step value (Boundary: routing non-ownership). Reuses shared FailureOrigin $def.",
-      "description": "POST-FLOW ESCALATE (result ∈ {precondition_escalated, archive_escalated}). Carries failure_origin (always 'cap_exceeded' — the orchestrator-level halt origin, NO auto-reinvoke; Reflect runs post-termination and has no in-flow re-entry, so no ping-pong loop exists) and a reason. precondition_escalated covers missing/invalid completion_status, malformed (flow_id, flow_type), or a completed-flow step row that is malformed. archive_escalated covers Tier 1 (Postgres) archive failure — the primary output could not be persisted, so silent pass is forbidden.",
+      "description": "POST-FLOW ESCALATE (result ∈ {precondition_escalated, archive_escalated}). Carries failure_origin (always 'cap_exceeded' — the orchestrator-level halt origin, NO auto-reinvoke; Reflect runs post-termination and has no in-flow re-entry, so no ping-pong loop exists), a machine-distinguishable reason_code, and a human-readable reason. precondition_escalated covers (reason_code in order): 'missing_invalid_completion_status' (missing/invalid completion_status), 'malformed_flow_identity' (malformed input (flow_id, flow_type)), 'malformed_step_row' (a completed-flow step row that is malformed), OR 'invoked_on_suspended' (a well-formed completion_status=suspended reaching the step body — suspended should have been filtered upstream and is NOT a valid classification here, so escalating beats forcing a misclassification into completed/abandoned). archive_escalated covers Tier 1 (Postgres) archive failure (reason_code 'archive_write_failed') — the primary output could not be persisted, so silent pass is forbidden. The four precondition causes are now machine-distinguishable via reason_code instead of collapsing into one free string.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["failure_origin", "reason"],
+      "required": ["failure_origin", "reason_code", "reason"],
       "properties": {
         "failure_origin": {
           "$comment": "Constrained to cap_exceeded — the only post-flow halt origin Reflect emits (reuses shared FailureOrigin enum, no new value invented).",
@@ -278,8 +302,14 @@
           "allOf": [{ "$ref": "./_defs.schema.json#/$defs/FailureOrigin" }],
           "const": "cap_exceeded"
         },
+        "reason_code": {
+          "$comment": "MACHINE-DISCRIMINANT for the escalate cause (closes the contract hole where 4 precondition causes + archive failure collapsed into one free string). Enumerates the FIVE discriminable causes: the four precondition_escalated causes ('missing_invalid_completion_status' = precondition 1; 'invoked_on_suspended' = precondition 2, a well-formed completion_status=suspended illegally reaching the step body; 'malformed_flow_identity' = precondition 3, missing/malformed input (flow_id, flow_type); 'malformed_step_row' = a completed-flow step_runs row present-but-malformed) PLUS the archive_escalated cause ('archive_write_failed' = Tier 1 Postgres archive write failed). x-validator-contract (M2 — grammar cannot couple reason_code to result): on precondition_escalated, reason_code ∈ {missing_invalid_completion_status, invoked_on_suspended, malformed_flow_identity, malformed_step_row}; on archive_escalated, reason_code == 'archive_write_failed'. reason stays human-readable detail; reason_code is the auditable discriminant so (e.g.) a stale suspended invoke is recoverable from a missing completion_status.",
+          "description": "Machine-distinguishable escalate cause. precondition_escalated emits one of {missing_invalid_completion_status, invoked_on_suspended, malformed_flow_identity, malformed_step_row}; archive_escalated emits 'archive_write_failed' (M2 couples reason_code to result). The free-text 'reason' carries the human-readable detail (e.g. the raw malformed identity); reason_code makes the cause auditable.",
+          "type": "string",
+          "enum": ["missing_invalid_completion_status", "invoked_on_suspended", "malformed_flow_identity", "malformed_step_row", "archive_write_failed"]
+        },
         "reason": {
-          "description": "Why Reflect escalated (precondition missing/malformed, or Tier 1 archive failure).",
+          "description": "Human-readable detail of why Reflect escalated (e.g. the raw malformed (flow_id, flow_type), the IO error text). The machine-distinguishable cause is reason_code; this field is the free-text supplement.",
           "type": "string",
           "minLength": 1
         }
@@ -289,36 +319,72 @@
 
   "allOf": [
     {
-      "$comment": "completed_reflection => the 4 substantive sections + Pass-3 comparison are required; the escalate/incomplete carriers are forbidden.",
+      "$comment": "completed_reflection => the 4 substantive sections + Pass-3 comparison + iterations (the multi-pass ran) are required; the escalate/incomplete carriers are forbidden. FOUR x-validator-contracts (M2) close sibling-array couplings grammar cannot express (two independent arrays cannot be length/index-coupled in JSON Schema): (1) COVERAGE — for each index i in patterns_discovered there MUST be at least one tier2_promotions item with pattern_ref==i (write_mode append|create|deferred all count as covering that pattern), AND tier2_promotions is empty IFF patterns_discovered is empty (every discovered pattern produces ≥1 write on completed_reflection; degenerate-no-pattern is the only empty-both case — README Tier 2 Promotion); (2) PATTERN_REF BOUND — for every tier2_promotions item, 0 <= pattern_ref < len(patterns_discovered) (the index must point at a real discovered pattern; grammar gives minimum:0 but cannot bound it by the other array's length); (3) COUNT IDENTITY (NON-DEFERRED ONLY) — for each tier2_promotions item k with write_mode ∈ {append, create}, tier2_promotions[k].occurrence_count.value MUST equal patterns_discovered[pattern_ref].occurrence_count.value (one ledger distinct-flow count per pattern_key; the two independently-emitted CountClaims must agree, not just each be individually derivable). This contract is SCOPED OUT for deferred items: a deferred promotion FORBIDS occurrence_count (the Tier 2 write that would have stamped the ledger count never completed), so a pattern covered SOLELY by deferred writes carries no tier2-side count to compare — its count lives only in patterns_discovered[i].occurrence_count.value (always required on DiscoveredPattern), and the count-identity cross-check is DEFERRED until the orchestrator retries the pending write (at which point the retried append|create stamps occurrence_count and the identity is checked then). So a deferred-only-covered pattern is never count-unverified: its own DiscoveredPattern.occurrence_count carries the authoritative count meanwhile. (4) WRITE COHERENCE (per pattern_ref) — a single pattern is written AT MOST ONCE per Reflect run, so for each pattern_ref value there MUST be AT MOST ONE non-deferred (append|create) tier2_promotions item, AND a pattern_ref covered by a non-deferred (append|create) item MUST NOT ALSO be covered by a deferred item (and vice versa). The write either succeeded (one append|create, resulting_status active/candidate/deprecated) OR it was deferred (pending) — never both for the same pattern_key in one run. Grammar accepts two items sharing a pattern_ref with conflicting write_mode (e.g. one 'create'+resulting_status=active AND one 'deferred'), an incoherent dual 'created AND pending' state; COVERAGE only requires ≥1 covering item and PATTERN_REF only bounds the index, so this coherence (one terminal write-state per pattern per run) is the M2 floor that rejects the dual-state. (A pattern legitimately appears once total: append|create when the single atomic append-or-create write succeeds, deferred when it contended — see README Tier 2 Write contention.)",
       "if": { "properties": { "result": { "const": "completed_reflection" } } },
       "then": {
         "required": [
+          "classification",
+          "based_on",
           "what_worked",
           "what_failed",
           "unexpected",
           "patterns_discovered",
           "prior_learning_comparison",
-          "tier2_promotions"
+          "tier2_promotions",
+          "iterations"
         ],
         "not": { "anyOf": [{ "required": ["incomplete_details"] }, { "required": ["escalate"] }] }
       }
     },
     {
-      "$comment": "reflect_incomplete => incomplete_details required (Cap-Exhaustion); sections are NOT unconditionally required (some failed the floor); no escalate.",
+      "$comment": "reflect_incomplete => incomplete_details required (Cap-Exhaustion); the 3 NARRATIVE substantive sections (what_worked|what_failed|unexpected) are NOT unconditionally required (some failed the floor and are OMITTED); no escalate. patterns_discovered IS required (contract-hole close): it has a minItems:0 floor so it can never fail the substance floor and is never named in failing_sections — therefore on reflect_incomplete it is NOT optional/unaccounted but REQUIRED (possibly empty), so whatever partial pattern observations survived are preserved in the Tier 1 raw archive (status=incomplete) even though NO Tier 2 promotion happens (see tier2_promotions forbid below). Pass 3 STILL RAN (the multi-pass loop reached the cap, it did not halt before Pass 3), so prior_learning_comparison IS required. tier2_promotions is FORBIDDEN: an incomplete reflection is excluded from Tier 2 promotion (status=incomplete is not a promotion candidate — README Cap-Exhaustion), so no promotion may be smuggled in. The completed_reflection 'every pattern => a tier2 write' invariant is SUSPENDED here: even if patterns_discovered is present-and-non-empty (a section that passed the floor while others failed), status=incomplete excludes promotion, so zero writes is intended, not a broken invariant — the patterns persist in Tier 1 (status=incomplete) and a later completed flow re-observing the same pattern_key accumulates them then. x-validator-contract (M2, BICONDITIONAL): a narrative section (what_worked|what_failed|unexpected — patterns_discovered is NOT a failable section, see incomplete_details.failing_sections) is ABSENT IFF it is listed in incomplete_details.failing_sections. Both directions are enforced: (forward) for each name in failing_sections the correspondingly-named top-level section MUST be ABSENT (a failed section is OMITTED, never emitted empty/filler — README: failed sections are entirely omitted); (inverse) every absent narrative section MUST appear in failing_sections (no narrative section may be silently missing without being accounted for — e.g. what_worked omitted while failing_sections=['what_failed'] only is REJECTED). Any section that IS present MUST have passed the substance floor. JSON Schema cannot key a 'not required' off the contents of failing_sections, so this presence/absence biconditional is enforced by the M2 validator, not grammar. ADDITIONAL x-validator-contract (M2): top-level iterations == incomplete_details.iterations_used AND both == 3 (cap-exhaustion ran the full 3 passes) — grammar cannot couple the two sibling fields, so the validator rejects any stale/contradictory pair or a sub-3 count claiming cap-exhaustion.",
       "if": { "properties": { "result": { "const": "reflect_incomplete" } } },
       "then": {
-        "required": ["incomplete_details"],
-        "not": { "required": ["escalate"] }
+        "required": ["classification", "based_on", "patterns_discovered", "incomplete_details", "prior_learning_comparison", "iterations"],
+        "not": { "anyOf": [{ "required": ["escalate"] }, { "required": ["tier2_promotions"] }] }
       }
     },
     {
-      "$comment": "precondition_escalated / archive_escalated => escalate object required; no normal sections / incomplete_details obligation.",
+      "$comment": "precondition_escalated => escalate object required; no normal sections / incomplete_details obligation. An escalate means reflection produced NO learning (precondition failed before any pass), so the substantive reflection sections are FORBIDDEN — they cannot smuggle fabricated learning. 'iterations' is also FORBIDDEN here: the precondition check fails BEFORE the multi-pass runs (no pass executed), so emitting iterations>=1 would fabricate a pass that did not execute. (archive_escalated is handled in a SEPARATE branch — its multi-pass DID run, so its iterations forbid differs.) The IDENTITY refs based_on (flow_ref + step_refs) and classification are ALSO FORBIDDEN here: precondition_escalated fires precisely because completion_status is missing/invalid (precondition 1), the input flow-identity is malformed (precondition 3), or a well-formed completion_status=suspended reached the step body (precondition 2, reason invoked_on_suspended — suspended is not a valid classification here), making well-formed based_on/classification underivable from the very malformed/illegal input — forbidding them closes the garbage-out path where a fabricated based_on.flow_ref could be smuggled from the rejected identity (the raw malformed identity belongs in escalate.reason, not in an asserted-truthful ref).",
       "if": {
-        "properties": { "result": { "enum": ["precondition_escalated", "archive_escalated"] } }
+        "properties": { "result": { "const": "precondition_escalated" } }
       },
       "then": {
         "required": ["escalate"],
-        "not": { "required": ["incomplete_details"] }
+        "not": {
+          "anyOf": [
+            { "required": ["incomplete_details"] },
+            { "required": ["what_worked"] },
+            { "required": ["what_failed"] },
+            { "required": ["unexpected"] },
+            { "required": ["patterns_discovered"] },
+            { "required": ["prior_learning_comparison"] },
+            { "required": ["tier2_promotions"] },
+            { "required": ["iterations"] },
+            { "required": ["based_on"] },
+            { "required": ["classification"] }
+          ]
+        }
+      }
+    },
+    {
+      "$comment": "archive_escalated => escalate object required; the multi-pass DID run (learning was extracted) but the primary Tier 1 Postgres archive write FAILED, so the learning is discarded and the substantive sections / tier2_promotions / incomplete_details are still FORBIDDEN (nothing was persisted, so no learning may be smuggled into the escalate output). Unlike precondition_escalated, 'iterations' is REQUIRED here: the multi-pass completed (1..3) before the archive write failed, so a true pass count exists and must NOT be suppressed (that count is real, not fabricated). prior_learning_comparison stays FORBIDDEN — the escalate output carries no learning payload, only the pass count + escalate.",
+      "if": {
+        "properties": { "result": { "const": "archive_escalated" } }
+      },
+      "then": {
+        "required": ["escalate", "iterations"],
+        "not": {
+          "anyOf": [
+            { "required": ["incomplete_details"] },
+            { "required": ["what_worked"] },
+            { "required": ["what_failed"] },
+            { "required": ["unexpected"] },
+            { "required": ["patterns_discovered"] },
+            { "required": ["prior_learning_comparison"] },
+            { "required": ["tier2_promotions"] }
+          ]
+        }
       }
     }
   ],
@@ -355,10 +421,10 @@
 
     "DiscoveredPattern": {
       "$comment": "patterns_discovered item. occurrence_count = CountClaim (R23): measured times-observed backing the 3+ promotion threshold.",
-      "description": "A recurring pattern worth tracking. text is the pattern statement (substance floor). occurrence_count (R23 CountClaim) is the MEASURED number of times the pattern has been observed across flows — the count that drives Tier 2 promotion; it must be derived from the prior-run query stdout, not invented. promotion_eligible is the SHAPE-level signal (occurrence_count.value >= 3); the actual promotion is in tier2_promotions. source_tool (R26) required.",
+      "description": "A recurring pattern worth tracking. text is the pattern statement (substance floor). occurrence_count (R23 CountClaim) is the MEASURED number of times the pattern has been observed across flows — the count that drives Tier 2 promotion; it must be derived from the prior-run query stdout, not invented. There is NO separate promotion-eligible boolean: the 3+ promotion threshold is read directly from occurrence_count.value, and the actual promotion act (and its candidate→active transition) is recorded in tier2_promotions[].resulting_status — a redundant SHAPE-level flag is intentionally omitted (the Tier 2 write is not gated on 3+; see README Tier 2 Promotion). source_tool (R26) required.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["text", "occurrence_count", "promotion_eligible", "source_tool"],
+      "required": ["text", "occurrence_count", "source_tool"],
       "properties": {
         "text": {
           "description": "The pattern statement. minLength 24 substance floor.",
@@ -366,12 +432,12 @@
           "minLength": 24
         },
         "occurrence_count": {
-          "description": "R23 CountClaim — times observed across flows (the 3+ promotion threshold backing). Measured from the prior-run query, M2-validated as derivable from raw_stdout.",
-          "$ref": "./_defs.schema.json#/$defs/CountClaim"
-        },
-        "promotion_eligible": {
-          "description": "true if occurrence_count.value >= 3 (Tier 2 promotion threshold met). M2 validator asserts this boolean is consistent with occurrence_count.value.",
-          "type": "boolean"
+          "$comment": "R23 derivability holds on cold_start: the source command counts DISTINCT flows INCLUDING the current one (self-inclusive), whose stdout yields 1 on a first-ever run — so value=1 is derivable from raw_stdout (the single observation is THIS flow, counted by the self-inclusive query). The prior-run query that returns 0 priors is NOT the source for a cold_start count; the self-inclusive distinct-flow count is. The CountClaim primitive hard-codes minimum:0 (generic); a self-inclusive distinct-flow count is STRUCTURALLY >= 1 (the current flow always counts), so a per-field minimum:1 override pushes the >=1 floor into GRAMMAR here (it is no longer M2-prose-only — value:0 is grammar-rejected), since value=0 would mean observed in zero flows including the current, which is impossible by construction.",
+          "description": "R23 CountClaim — distinct flows the pattern was observed in (the 3+ promotion threshold backing). Source = a command counting distinct flows the pattern appears in, INCLUDING the current flow (self-inclusive), so value >= 1 always (grammar-enforced via the minimum:1 override below) and value=1 is the cold_start baseline derived from a stdout that counts this run. M2-validated as derivable from raw_stdout.",
+          "allOf": [
+            { "$ref": "./_defs.schema.json#/$defs/CountClaim" },
+            { "properties": { "value": { "minimum": 1 } } }
+          ]
         },
         "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
       }

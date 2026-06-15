@@ -54,12 +54,41 @@
       }
     },
     {
-      "$comment": "freshness.git_head_start/git_head_end are conditionally required ONLY when volatile_state.git.git_state=repo (prose [git capture states]): when git_state ∈ {no_repo,empty_repo,git_unavailable} head_start/head_end are omitted + omitted_fields recorded and racing_changes=false.",
+      "$comment": "P0 override (prose [Adaptive Depth]): flow_type=bugfix-p0 forces depth=shallow regardless of any deepen trigger. This is a cross-field one-value restriction grammar CAN express, so it is closed in M1 here (not left to M2).",
+      "if": {
+        "required": [
+          "flow_type"
+        ],
+        "properties": {
+          "flow_type": {
+            "const": "bugfix-p0"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "depth": {
+            "const": "shallow"
+          }
+        }
+      }
+    },
+    {
+      "$comment": "freshness.git_head_start/git_head_end are conditionally required ONLY when ground_result.status!=escalate AND volatile_state.git.git_state=repo (prose [git capture states] + escalate-survival rule): on escalate, volatile_state/freshness are dropped from required even if git was captured before the ED-down escalate, so this branch must NOT fire on escalate (otherwise it would re-require freshness.git_head_start that the escalate `then` deliberately relaxed). When git_state ∈ {no_repo,empty_repo,git_unavailable} head_start/head_end are omitted + omitted_fields recorded and racing_changes=false.",
       "if": {
         "required": [
           "volatile_state"
         ],
         "properties": {
+          "ground_result": {
+            "properties": {
+              "status": {
+                "not": {
+                  "const": "escalate"
+                }
+              }
+            }
+          },
           "volatile_state": {
             "required": [
               "git"
@@ -149,7 +178,7 @@
               "minLength": 1
             },
             "evidence": {
-              "description": "Input ref or tool_call ref proving the escalate (e.g. attempted ed_query ref, or the partial-progress activity list on cap_exceeded).",
+              "description": "Single ref string proving the escalate: an input ref or tool_call ref (e.g. attempted ed_query ref on ED-down). On cap_exceeded it is a SINGLE ref summarizing the partial progress (a progress-checkpoint ref to the completed/incomplete activities) — NOT a structured activity list, since this field is one string.",
               "type": "string",
               "minLength": 1
             }
@@ -194,8 +223,8 @@
       ]
     },
     "omitted_fields": {
-      "$comment": "R22 carrier. Every conditional/degradable schema key omitted from this output is recorded here with {field, reason, source_tool} — the mechanism every key-omission/degrade depends on (reviewer: 'omit된 schema key마다 omitted_fields에 1행'). Optional at the grammar level (present only when something was omitted); the M2 reviewer enforces non-empty-when-any-key-omitted and forbids value:null / comment-only key markers.",
-      "description": "R22 key-omission carrier. One row per schema key that tool/data absence forced Ground to omit (e.g. perf_baseline skipped, git head_* on git_state≠repo, ed_snapshot_version when task_subgraph Omitted). x-validator-contract (M2): every omitted conditional key has exactly one row here; no value:null / '# OMITTED' placeholders (R22).",
+      "$comment": "R22 carrier. Every PROFILE-DECLARED conditional/degradable schema key that Ground could not capture is recorded here with {field, reason, source_tool} — the mechanism every key-omission/degrade depends on (reviewer: 'profile이 선언한 schema key가 omit될 때마다 omitted_fields에 1행'). A conditional field ABSENT because the flow_type's profile does not declare it (normal profile absence — e.g. perf_baseline on a feature flow) needs NO row. Optional at the grammar level (present only when something declared was omitted); the M2 reviewer enforces non-empty-when-any-declared-key-omitted and forbids value:null / comment-only key markers.",
+      "description": "R22 key-omission carrier. One row per PROFILE-DECLARED schema key that tool/data absence forced Ground to omit (e.g. perf_baseline capture failed WITHIN a Performance flow, git head_* on git_state≠repo, ed_snapshot_version when task_subgraph Omitted, unrecognized_flow conditional dimension). A conditional field absent because the flow_type profile does not declare it is normal profile absence and is NOT recorded here. x-validator-contract (M2): every omitted profile-declared conditional key has exactly one row here; no value:null / '# OMITTED' placeholders (R22).",
       "type": "array",
       "items": {
         "type": "object",
@@ -216,6 +245,8 @@
             "minLength": 1
           },
           "source_tool": {
+            "$comment": "Provenance for the omission. For git-omission rows (git_state≠repo dropping branch/dirty/head_*/recent_commits) this is the git-state DETECTION tool (e.g. 'git rev-parse') — the SAME value as the VolatileGit non-repo branch source_tool (no provenance fork). For an ed_snapshot_version omission row it is the ED query tool. A git-omission is a factual non-measurement (no command produced a value to omit), so its provenance is the detection that established git_state.",
+            "description": "Tool/origin that establishes why this field was omitted. git-omission rows carry the git-state detection tool (e.g. 'git rev-parse', identical to VolatileGit non-repo source_tool); ed_snapshot_version omission carries the ED query tool.",
             "$ref": "./_defs.schema.json#/$defs/SourceTool"
           }
         }
@@ -255,8 +286,10 @@
           "minLength": 1
         },
         "conversation_context_digest": {
-          "description": "Digest of None-state conversation turns. Present only for channel=user_session (a2a/ci have none). Inline literal.",
-          "type": "string"
+          "$comment": "Channel↔digest coupling is a cross-field TRUTH constraint spanning two top-level properties (channel + input_refs.conversation_context_digest), so it is an x-validator-contract (M2), NOT grammar-enforced here (a sibling-key 'iff' is not expressible at this nesting level without re-litigating envelope shape).",
+          "description": "Digest of None-state conversation turns. Non-empty (minLength:1) — even the zero-turn user_session case carries a real digest OVER empty input, never the empty string (prose '빈 문자열 아님'). x-validator-contract (M2): conversation_context_digest is present IFF channel=user_session (a2a/ci have none — must be ABSENT, not empty-string). A user_session turn with ZERO conversation_context turns STILL carries this key (a digest OVER empty input — not an empty string, not absent); key absence is reserved for a2a/ci only. So the IFF fires on channel alone, never on turn-count. Inline literal.",
+          "type": "string",
+          "minLength": 1
         },
         "scope_hint": {
           "description": "Monorepo package/path scope limiter extracted by Triage or supplied by caller (optional). Inline literal.",
@@ -274,28 +307,30 @@
       "minLength": 1
     },
     "depth": {
-      "$comment": "Adaptive Step Depth Policy. P0 override: bugfix-p0 forces shallow regardless of deepen triggers.",
-      "description": "Adaptive depth this Ground run executed at (shallow default; deep on a deepen trigger). P0 override (flow_type=bugfix-p0) forces shallow.",
+      "$comment": "Adaptive Step Depth Policy. P0 override: bugfix-p0 forces shallow regardless of deepen triggers — enforced in M1 by the top-level allOf (flow_type=bugfix-p0 → depth const shallow).",
+      "description": "Adaptive depth this Ground run executed at (shallow default; deep on a deepen trigger). P0 override (flow_type=bugfix-p0) forces shallow (grammar-enforced via the top-level conditional).",
       "$ref": "./_defs.schema.json#/$defs/Depth"
     },
     "active_flow_note": {
-      "$comment": "Active Flow Conflict priority. active:<something> on entry is a MECHANICAL ERROR (orchestrator bug) — Ground escalates; that escalation is an orchestrator-level outcome, not a value Ground self-reports as a normal field. Here Ground records only the post-resolution residue it was ASKED to be aware of (suspended-similar hint, preempted prior for post-stabilization follow-up).",
-      "description": "Awareness of post-resolution active-flow residue (Ground does NOT resolve conflicts — orchestrator resolves BEFORE Ground entry). Optional. Records a suspended-similar-area hint and/or a preempted prior id for post-stabilization follow-up. NOTE: active:<something> on entry = mechanical error → Ground escalates (an orchestrator outcome), not represented here.",
+      "$comment": "Active Flow Conflict priority. active:<something> on entry is a MECHANICAL ERROR (orchestrator bug) — Ground escalates; that escalation is an orchestrator-level outcome, not a value Ground self-reports as a normal field. Here Ground records only the post-resolution residue it was ASKED to be aware of (suspended-similar hint, preempted prior for post-stabilization follow-up). The input↔note linkage cannot be grammar-enforced (active_flow_state is a runtime INPUT, not in this output), so it is an x-validator-contract (M2): see the property $comments and prose [active_flow_state].",
+      "description": "Awareness of post-resolution active-flow residue (Ground does NOT resolve conflicts — orchestrator resolves BEFORE Ground entry). Optional. Records a suspended-similar-area hint and/or a preempted prior id for post-stabilization follow-up. NOTE: active:<something> on entry = mechanical error → Ground escalates (an orchestrator outcome), not represented here. x-validator-contract (M2): preempted_prior_ref is present IFF input active_flow_state.preempted!=null; suspended_similar_hint is present IFF the similarity check found a path-prefix overlap (and then at least one matching unknowns[{dim:suspended_similar}] item must also exist — one per overlapping prior, so possibly many; the hint mirrors the suspended_similar dimension COLLECTIVELY, not 1:1). The unknowns items are the authoritative carrier; the hint is the advisory mirror.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "suspended_similar_hint": {
-          "description": "Free-text hint surfaced into unknowns when a suspended prior is in a similar area (similarity check). Boundary: a hint, not a judgment.",
+          "$comment": "Advisory mirror of the authoritative unknowns[{dim:suspended_similar}] carrier. x-validator-contract (M2): present IFF the similarity check fired; when present, at least one matching unknowns item must exist (one per overlapping prior — possibly many; the single-string hint mirrors the dimension collectively, not 1:1).",
+          "description": "Free-text hint mirroring the unknowns[{dim:suspended_similar}] item surfaced when a suspended prior is in a similar area (similarity check). The unknowns item is authoritative; this hint is advisory. Boundary: a hint, not a judgment.",
           "type": "string"
         },
         "preempted_prior_ref": {
-          "description": "RowRef of a prior flow preempted by a P0 (recorded for post-stabilization follow-up). §5 RowRef, not a file.",
+          "$comment": "x-validator-contract (M2): present IFF input active_flow_state.preempted!=null (the P0-preempt-direct case in prose [active_flow_state]).",
+          "description": "RowRef of a prior flow preempted by a P0 (recorded for post-stabilization follow-up). x-validator-contract (M2): present IFF input active_flow_state.preempted!=null. §5 RowRef, not a file.",
           "$ref": "./_defs.schema.json#/$defs/RowRef"
         }
       }
     },
     "task_subgraph": {
-      "$comment": "M3 DEGRADE: ED MCP can be ABSENT/fail/timeout → the whole subgraph is an Omitted branch. R18: god_nodes_in_scope is omitted when ED is absent. Specializes Measured.value with the concrete bounded-subgraph shape; reuses shared Omitted. Reviewer rule (M2): entry_nodes≥1 OR unknowns contains a referent_unresolved item.",
+      "$comment": "M3 DEGRADE: ED MCP can be ABSENT/fail/timeout → the whole subgraph is an Omitted branch (which co-occurs with ground_result.status=escalate, since ED is PRIMARY). R18: god_nodes_in_scope is omitted when ED is absent. Omitted.reason mapping by escalate origin: failure_origin=ground (ED-down, prose ED table) → MCP not attached='unavailable', ED errored='tool_failed', ED timed out='timeout'; failure_origin=cap_exceeded (step budget exhausted before the ED query completed / was ever attempted) → 'skipped' (the subgraph was skipped for budget, not tool-failed). The shared Omitted enum has no escalate/primary_down member — escalate-grade is carried by ground_result.status, not by Omitted.reason. The Omitted branch below restricts reason to EXACTLY {unavailable, tool_failed, timeout, skipped} (tool_absent/not_applicable are forbidden for task_subgraph — there is no non-escalate Omitted subgraph state). The reason↔failure_origin pairing (ground→three-down-reasons, cap_exceeded→skipped) is an x-validator-contract (M2); grammar only narrows the enum. Specializes Measured.value with the concrete bounded-subgraph shape; reuses shared Omitted. Reviewer rule (M2): entry_nodes≥1 OR unknowns contains a referent_unresolved item.",
       "description": "M3 DEGRADE union. The bounded ED subgraph (entry nodes + neighbors + god nodes in scope). ED MCP is degradable: when ED is ABSENT/fails/times out the model MUST emit the Omitted branch (R22 — not null, not a placeholder) and surface the gap in unknowns/conflicts; R18 god_nodes_in_scope only exist in the measured branch. Grammar forces exactly one branch via the 'status' discriminant. x-validator-contract (M2): reviewer rule — entry_nodes length ≥ 1 OR unknowns contains an item with dim='referent' reason='unresolved' (referent_unresolved). Also: every ED AMBIGUOUS/INFERRED edge is mapped into unknowns or conflicts (silent-gap forbidden).",
       "type": "object",
       "required": [
@@ -303,6 +338,8 @@
       ],
       "oneOf": [
         {
+          "$comment": "additionalProperties:false at the branch's OWN object level (consistent with every other closed object in this schema) — a fabricated stray top-level key inside task_subgraph is rejected. The allowed keys are exactly the Measured envelope's: status, value, source_tool, plus the optional source provenance block.",
+          "additionalProperties": false,
           "allOf": [
             {
               "$ref": "./_defs.schema.json#/$defs/Measured"
@@ -311,6 +348,12 @@
           "properties": {
             "status": {
               "const": "measured"
+            },
+            "source_tool": {
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
+            },
+            "source": {
+              "type": "object"
             },
             "value": {
               "type": "object",
@@ -360,12 +403,33 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "task_subgraph Omitted co-occurs ONLY with ground_result.status=escalate (ED is PRIMARY; there is no non-escalate Omitted subgraph state — degenerate/referent-absent ED cases are MEASURED). The Omitted.reason is restricted to {unavailable, tool_failed, timeout, skipped}: the first three are the failure_origin=ground ED-down mapping (prose [ED MCP] table: MCP not attached→unavailable, ED errored→tool_failed, ED timed out→timeout); 'skipped' is the failure_origin=cap_exceeded case (step budget exhausted before the ED query completed / was ever attempted — the subgraph was skipped, not tool-failed). The remaining shared Omitted members (tool_absent/not_applicable) are NOT legal for task_subgraph. additionalProperties:false is restated at this branch's OWN object level (consistent with the measured branch and every other closed object in this schema) so a fabricated stray key is rejected by THIS allOf member too, not only by the shared Omitted def. x-validator-contract (M2): {status≠escalate AND task_subgraph.status=omitted} is a reviewer FAIL ('ED absence must escalate'); reason=skipped is valid ONLY when failure_origin=cap_exceeded, and {unavailable,tool_failed,timeout} ONLY when failure_origin=ground.",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "status": true,
+                "detail": true,
+                "source_tool": true,
+                "reason": {
+                  "enum": [
+                    "unavailable",
+                    "tool_failed",
+                    "timeout",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
     "volatile_state": {
-      "$comment": "Each tool field is a DegradableMeasurement (M3). Universal: typecheck/tests/lint/git. Conditional (present-or-absent by flow_type): perf_baseline/dependency_audit/observability/release_state. 'skipped-with-reason' in prose = Omitted(reason:skipped). git is non-degradable factual state (always present). tests.passed + tests.failed-count + lint.warnings/errors + release_state.new_commits_count = CountClaim (R23).",
+      "$comment": "Each tool field is a DegradableMeasurement (M3). Universal: typecheck/tests/lint/git. Conditional (present-or-absent by flow_type): perf_baseline/dependency_audit/observability/release_state. 'skipped-with-reason' in prose = Omitted(reason:skipped). git is non-degradable factual state (always present). tests.passed + tests.failed-count + lint.warnings/errors + release_state.new_commits_count = CountClaim (R23). NOTE: the shared Omitted enum includes 'not_applicable', but GROUND NEVER EMITS not_applicable — every Ground measurement omission maps to {skipped, tool_absent, unavailable, timeout, tool_failed} (command-not-defined=skipped; profile-undeclared conditional fields are absent keys, not Omitted branches). This single-enum-member exclusion is grammar-expressible, so it is M1-CLOSED: every Ground volatile Omitted arm (typecheck/tests/lint + the four conditionals) $refs the shared Omitted wrapped in an allOf that narrows reason to {tool_absent, tool_failed, timeout, unavailable, skipped} — not_applicable is structurally unproducible (symmetric with the task_subgraph Omitted reason restriction, no asymmetry). CONDITIONAL-FIELD GATE (M2): the four conditional keys (perf_baseline/dependency_audit/observability/release_state) are optional here at the GRAMMAR level because flow_type is a free string (the M4 flow-definition source, not this schema's concern), so grammar cannot gate presence on flow_type. A conditional key may be PRESENT only if the current flow_type's profile (prose [Volatile Profile by Flow Type]) DECLARES it (perf_baseline⇒performance, dependency_audit⇒migration, observability⇒bugfix-unreproducible, release_state⇒release); its presence in any non-declaring flow_type (e.g. perf_baseline on a chore/feature flow) is a reviewer FAIL ('conditional volatile field present in a flow whose profile does not declare it'). This shuts the hole where a fabricated conditional measurement passes both grammar and reviewer.",
       "description": "Volatile capture per the declared profile for this flow_type. Universal fields (typecheck, tests, lint, git) are ALWAYS keys; tool-dependent ones are M3 DegradableMeasurement (measured | omitted-with-reason — prose 'skipped-with-reason' = Omitted(reason='skipped'); 'timeout'/'fail' map to Omitted(reason='timeout'|'tool_failed') or a measured-with-failure status per field). Conditional fields (perf_baseline / dependency_audit / observability / release_state) are PRESENT-OR-ABSENT by flow_type — Ground does NOT judge which measurement matters; the flow definition declares the profile. x-validator-contract (M2): each profile-required command has an explicit status; every capture failure/timeout is mapped into unknowns/conflicts.",
       "type": "object",
       "additionalProperties": false,
@@ -390,7 +454,7 @@
         },
         "git": {
           "$comment": "git is a FACTUAL-STATE discriminant ([git capture states]), NOT 'always a repo'. git_state ∈ {repo, no_repo, empty_repo, git_unavailable}. Only git_state=repo carries branch/dirty/head_start/head_end/recent_commits; the other states omit those keys (+ omitted_fields row) and demote the run to degraded_pass. The reviewer gates 'git_state 부재 = FAIL'.",
-          "description": "Git capture state. Discriminated on git_state: repo (git repo with ≥1 commit) carries branch/dirty/head_start/head_end/recent_commits + source_tool; no_repo (working dir is not a git repo) / empty_repo (repo with 0 commits, no HEAD) / git_unavailable (git binary absent/unrunnable) carry only git_state + source_tool, omit the head_* / recent_commits keys (recorded in omitted_fields), and the run becomes degraded_pass. Not a fake 'always present' measurement — non-repo/empty/no-binary are real factual states surfaced (not escalate, since git is not a PRIMARY tool).",
+          "description": "Git capture state. Discriminated on git_state: repo (git repo with ≥1 commit) carries branch/dirty/head_start/head_end/recent_commits + source_tool; no_repo (working dir is not a git repo) / empty_repo (repo with 0 commits, no HEAD) / git_unavailable (git binary absent/unrunnable) carry only git_state + source_tool, omit the branch/dirty/head_* / recent_commits keys (recorded in omitted_fields), and the run becomes degraded_pass. Not a fake 'always present' measurement — non-repo/empty/no-binary are real factual states surfaced (not escalate, since git is not a PRIMARY tool).",
           "$ref": "#/$defs/VolatileGit"
         },
         "perf_baseline": {
@@ -441,8 +505,8 @@
       ],
       "properties": {
         "ed_snapshot_version": {
-          "$comment": "Reviewer-required factual provenance. When ED is Omitted, this is absent (the subgraph carries no version) — so it is optional at this level and asserted-present by the reviewer only when ED was queried.",
-          "description": "ED snapshot version/hash recorded for freshness. Optional here because an ED-Omitted run has no snapshot; reviewer requires it when ED was queried.",
+          "$comment": "Reviewer-required factual provenance. Optional at the GRAMMAR level because on ground_result.status=escalate the entire freshness block is relaxed from required (the escalate `then` drops freshness), and ED-Omitted ALWAYS co-occurs with escalate (ED is PRIMARY → escalate, never a non-escalate ED-Omitted state). On ok/degraded_pass task_subgraph is always MEASURED, so this is M2-required there (mirrors task_subgraph.value.ed_snapshot_version). It is NOT left optional to model a non-escalate ED-omitted state — that state cannot exist under the contract.",
+          "description": "ED snapshot version/hash recorded for freshness. Optional at grammar level because on escalate the whole freshness block is relaxed; on ok/degraded_pass it is M2-required since task_subgraph is always measured there (and must equal task_subgraph.value.ed_snapshot_version).",
           "type": "string",
           "minLength": 1
         },
@@ -457,15 +521,15 @@
           "minLength": 1
         },
         "racing_changes": {
-          "$comment": "Set true only if head_start ≠ head_end AFTER the single retry (prose: 'capture 시작·종료 git HEAD 비교 → 변동 시 racing_changes 1회 재시도', reviewer: '재시도 1회 후도 변동 시 표시').",
-          "description": "true if git HEAD changed between capture start and end and was still different after the one retry. x-validator-contract (M2): racing_changes == (git_head_start != git_head_end).",
+          "$comment": "Set true only if head_start ≠ head_end AFTER the single retry (prose: 'capture 시작·종료 git HEAD 비교 → 변동 시 racing_changes 1회 재시도', reviewer: '재시도 1회 후도 변동 시 표시'). On git_state≠repo, or when git_state TRANSITIONED within the capture window (start repo → end non-repo/HEAD-gone — prose [racing_changes] capture-window transition), the comparison is skipped/unstable → racing_changes=false and the instability is surfaced via unknowns (dim racing_changes|capture_failure) + degraded_pass, NOT left undefined.",
+          "description": "true if git HEAD changed between capture start and end and was still different after the one retry. x-validator-contract (M2): racing_changes == (git_head_start != git_head_end) when git_state stayed=repo across the window; if git_state was unstable/transitioned within the window the comparison is skipped (racing_changes=false) and the instability is surfaced in unknowns + degraded_pass.",
           "type": "boolean"
         }
       }
     },
     "verification_proof": {
       "$comment": "Shared container. Hashes are SHAPE; re-hash + replay + re-read are M2.",
-      "description": "Provenance container backing every fact (tool_calls, read_files, optional ed_queries). SHAPE here; x-validator-contract (M2): re-hash every *_sha256/result_hash, re-read read_files, replay replayable tool_calls. Prose 'verification_proof 해시만으론 부족' — that is exactly why per-item source_tool is ALSO required on unknowns/conflicts/nodes (provenance floor).",
+      "description": "Provenance container backing every fact (tool_calls, read_files, optional ed_queries). SHAPE here; x-validator-contract (M2): re-hash every *_sha256/result_hash, re-read read_files, replay replayable tool_calls. Prose 'verification_proof 해시만으론 부족' — that is exactly why per-item source_tool is ALSO required on unknowns/conflicts/nodes (provenance floor). ESCALATE PROOF-OF-ATTEMPT (M2, NOT grammar): the shared VerificationProof puts NO minItems on tool_calls/ed_queries (an empty array is grammar-legal), so grammar cannot force a non-empty proof. When ground_result.status=escalate with failure_origin=ground (ED-down in particular), the reviewer asserts verification_proof contains AT LEAST ONE attempted tool_call/ed_query proving the escalate (an attempted ed_query for ED-down) and that escalate_detail.evidence references it — the 'attempted tool_call 포함' guarantee in the escalate field-survival rule is an M2-only invariant, not a grammar one. cap_exceeded escalate (budget exhausted before measurement) is exempt.",
       "$ref": "./_defs.schema.json#/$defs/VerificationProof"
     },
     "source_manifest": {
@@ -475,8 +539,8 @@
   },
   "$defs": {
     "SubgraphNode": {
-      "$comment": "Provenance floor: every fact node carries source + freshness. source is fixed to 'ed_query' (the only producer of subgraph nodes); freshness is per-node last_updated.",
-      "description": "A node in the bounded ED subgraph (entry / neighbor / god node). Provenance floor: id + source (the ED query origin) + freshness (per-node last_updated, prose 'per-node: freshness metadata (last_updated, source)').",
+      "$comment": "Provenance floor: every fact node carries source + freshness. source is a SourceTool provenance field (not a fixed const) — subgraph nodes are produced by the ED query, but source records that provenance rather than constraining it to a literal; freshness is per-node last_updated.",
+      "description": "A node in the bounded ED subgraph (entry / neighbor / god node). Provenance floor: id + source (SourceTool provenance — the ED query origin for subgraph nodes) + freshness (per-node last_updated, prose 'per-node: freshness metadata (last_updated, source)').",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -491,8 +555,8 @@
           "minLength": 1
         },
         "source": {
-          "$comment": "Provenance floor (source_tool). Subgraph nodes come only from ED query.",
-          "description": "Provenance: how this node was obtained. SourceTool — for subgraph nodes this is the ED query origin (prose 'source: ed_query').",
+          "$comment": "Provenance floor (source_tool). Subgraph nodes are produced by the ED query; source records that provenance (SourceTool), it is not a fixed const.",
+          "description": "Provenance: how this node was obtained. SourceTool — for subgraph nodes this is the ED query origin (provenance field, not a fixed literal).",
           "$ref": "./_defs.schema.json#/$defs/SourceTool"
         },
         "freshness": {
@@ -557,7 +621,25 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Ground-emit Omitted: reason restricted to the 5 Ground reasons {tool_absent, tool_failed, timeout, unavailable, skipped} — not_applicable is EXCLUDED in-grammar (Ground never emits it; same single-enum-member restriction grammar-closed for task_subgraph). Closes the orphan-enum-member symmetrically rather than leaving it M2-only.",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -657,7 +739,25 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Ground-emit Omitted: reason restricted to the 5 Ground reasons {tool_absent, tool_failed, timeout, unavailable, skipped} — not_applicable EXCLUDED in-grammar (Ground never emits it).",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -720,13 +820,31 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Ground-emit Omitted: reason restricted to the 5 Ground reasons {tool_absent, tool_failed, timeout, unavailable, skipped} — not_applicable EXCLUDED in-grammar (Ground never emits it).",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
     "VolatileGit": {
-      "$comment": "git — FACTUAL-STATE discriminant ([git capture states]), NOT 'always a committed repo'. git_state ∈ {repo, no_repo, empty_repo, git_unavailable}. ONLY git_state=repo requires branch/dirty/head_start/head_end/recent_commits (each commit carries sha + source_tool provenance); the other three states require only git_state + source_tool and the head_*/recent_commits keys are omitted (recorded in omitted_fields) — the run is then degraded_pass. recent_commits is a list, not a count, so no CountClaim.",
-      "description": "Git capture state, discriminated on git_state. git_state=repo (git repo with ≥1 commit): branch, dirty(bool), head_start, head_end, recent_commits (each with sha + provenance source_tool). git_state ∈ {no_repo (working dir not a git repo), empty_repo (repo with 0 commits / no HEAD), git_unavailable (git binary absent/unrunnable)}: head_*/recent_commits keys are OMITTED (+ omitted_fields row), racing_changes comparison skipped (racing_changes=false), run demoted to degraded_pass. git is a factual state, not a PRIMARY tool, so non-repo/empty/no-binary are surfaced (degrade), never escalate.",
+      "$comment": "git — FACTUAL-STATE discriminant ([git capture states]), NOT 'always a committed repo'. git_state ∈ {repo, no_repo, empty_repo, git_unavailable}. ONLY git_state=repo requires branch/dirty/head_start/head_end/recent_commits (each commit carries sha + source_tool provenance); the other three states require only git_state + source_tool and the branch/dirty/head_*/recent_commits keys are omitted (recorded in omitted_fields) — the run is then degraded_pass. recent_commits is a list, not a count, so no CountClaim.",
+      "description": "Git capture state, discriminated on git_state. git_state=repo (git repo with ≥1 commit): branch, dirty(bool), head_start, head_end, recent_commits (each with sha + provenance source_tool). git_state ∈ {no_repo (working dir not a git repo), empty_repo (repo with 0 commits / no HEAD), git_unavailable (git binary absent/unrunnable)}: branch/dirty/head_*/recent_commits keys are OMITTED (+ omitted_fields row), racing_changes comparison skipped (racing_changes=false), run demoted to degraded_pass. git is a factual state, not a PRIMARY tool, so non-repo/empty/no-binary are surfaced (degrade), never escalate.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -798,7 +916,7 @@
           }
         },
         {
-          "$comment": "git_state ∈ {no_repo, empty_repo, git_unavailable} — head_*/recent_commits keys OMITTED (recorded in omitted_fields), run degraded_pass.",
+          "$comment": "git_state ∈ {no_repo, empty_repo, git_unavailable} — branch/dirty/head_*/recent_commits keys OMITTED (recorded in omitted_fields), run degraded_pass.",
           "additionalProperties": false,
           "required": [
             "git_state",
@@ -884,7 +1002,25 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Ground-emit Omitted: reason restricted to the 5 Ground reasons {tool_absent, tool_failed, timeout, unavailable, skipped} — not_applicable EXCLUDED in-grammar (Ground never emits it).",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -956,7 +1092,25 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Ground-emit Omitted: reason restricted to the 5 Ground reasons {tool_absent, tool_failed, timeout, unavailable, skipped} — not_applicable EXCLUDED in-grammar (Ground never emits it).",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -1035,7 +1189,25 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Ground-emit Omitted: reason restricted to the 5 Ground reasons {tool_absent, tool_failed, timeout, unavailable, skipped} — not_applicable EXCLUDED in-grammar (Ground never emits it).",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -1086,7 +1258,25 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Ground-emit Omitted: reason restricted to the 5 Ground reasons {tool_absent, tool_failed, timeout, unavailable, skipped} — not_applicable EXCLUDED in-grammar (Ground never emits it).",
+          "allOf": [
+            {
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            },
+            {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -1103,8 +1293,8 @@
       ],
       "properties": {
         "dim": {
-          "$comment": "FACTUAL-tag dimension (P6 — NOT an Investigate disposition token). Known values (the [unknowns.dim FACTUAL tag enum] table): referent, ed_ambiguous, ed_inferred, ed_drift, capture_failure, timeout, inaccessible, racing_changes, suspended_similar, external_unknown, unrecognized_flow. Kept open (type:string, not a closed enum) because new FACTUAL dimensions may be added — prose 'open-ish' — provided each item is self-describing via reason + source_tool.",
-          "description": "Factual dimension of the unknown (open-ish — new factual dimensions may be added; each item must stay self-describing via reason + source_tool). Known values: referent (request entity absent from ED graph — the referent_unresolved case, reason='unresolved'), ed_ambiguous (ED AMBIGUOUS edge), ed_inferred (ED INFERRED low-confidence edge), ed_drift (ED reports card↔code drift one-sided — single-source uncertainty), capture_failure (volatile command failed, non-timeout), timeout (volatile command timed out), inaccessible (permission/access denied), racing_changes (head_start≠head_end after retry), suspended_similar (similar-area suspended prior exists), external_unknown (external lib/API unknown), unrecognized_flow (flow_type matched no profile row — universal-only fallback). NOT an Investigate disposition token.",
+          "$comment": "FACTUAL-tag dimension (P6 — NOT an Investigate disposition token). Known values (the [unknowns.dim FACTUAL tag enum] table): referent, ed_ambiguous, ed_inferred, ed_drift, capture_failure, timeout, inaccessible, racing_changes, suspended_similar, unrecognized_flow. Kept open (type:string, not a closed enum) because new FACTUAL dimensions may be added — prose 'open-ish' — provided each item is self-describing via reason + source_tool. (external_unknown is an Investigate-produced dimension — Investigate attempts WebFetch — NOT emitted by Ground; it is not in Ground's dim set.)",
+          "description": "Factual dimension of the unknown (open-ish — new factual dimensions may be added; each item must stay self-describing via reason + source_tool). Known values: referent (request entity absent from ED graph — the referent_unresolved case, reason='unresolved'), ed_ambiguous (ED AMBIGUOUS edge), ed_inferred (ED INFERRED low-confidence edge), ed_drift (ED reports card↔code drift one-sided — single-source uncertainty), capture_failure (volatile command failed, non-timeout), timeout (volatile command timed out), inaccessible (permission/access denied), racing_changes (head_start≠head_end after retry), suspended_similar (similar-area suspended prior exists), unrecognized_flow (flow_type matched no profile row — universal-only fallback). NOT an Investigate disposition token (external_unknown is Investigate-produced, not a Ground dim).",
           "type": "string",
           "minLength": 1
         },
@@ -1154,7 +1344,8 @@
                 ]
               },
               "ref": {
-                "description": "The origin reference: a tool name, or a READ file path (a read input, not a §5 cross-step row ref).",
+                "$comment": "Provenance-gap rule (R36): a kind:file ref that is an ED-graph artifact (e.g. a drift card↔code pair Ground did NOT itself read) is an ED-INTERNAL ref and needs NO source_manifest entry; only a kind:file ref that Ground actually READ must appear in source_manifest.cited_lines. x-validator-contract (M2): if a kind:file ref names a path Ground read (in verification_proof.read_files), it MUST exist in source_manifest.entries; ED-internal card/code refs are exempt.",
+                "description": "The origin reference: a tool name (kind:tool), or for kind:file either an ED-INTERNAL artifact ref (e.g. an ED drift card/code node Ground did not read — no source_manifest entry required) or a READ file path Ground actually read (then it MUST appear in source_manifest.cited_lines). A read input, not a §5 cross-step row ref.",
                 "type": "string",
                 "minLength": 1
               }

@@ -17,7 +17,7 @@
     },
     {
       "field": "result(proceed).tasks[].depends_on / acceptance_criteria graph",
-      "rule": "Task ordering must be acyclic (spec.md L46 'no circular dependencies').",
+      "rule": "Task ordering must be acyclic (spec.md Activity 4 '순서·의존' — acyclic 강제, M2 validator가 topological sort).",
       "check": "M2: topologically sort tasks over depends_on; assert no cycle. A circular depends_on is unimplementable."
     },
     {
@@ -41,6 +41,11 @@
       "check": "M2: assert each RowRef resolves to an existing step_runs row of the expected upstream step_name (decide/investigate/ground)."
     },
     {
+      "field": "based_on.investigate_ref (conditional presence)",
+      "rule": "spec.md L190 (reviewer) + based_on.description — investigate_ref is REQUIRED only when the flow chain HAS an Investigate step. Grammar (BasedOn $def) leaves it optional and the based_on required[] is only [decide_ref, ground_ref], so M1 cannot enforce conditional presence; this is a TRUTH/cross-step invariant grammar cannot express.",
+      "check": "M2: when the flow chain contains an Investigate step_run, assert based_on.investigate_ref is PRESENT and resolves to that Investigate row. When the chain is greenfield / Investigate-degenerate (no Investigate step_run), investigate_ref legitimately absent. Grammar cannot see the chain shape; this contract names the conditional-provenance invariant the prose declares."
+    },
+    {
       "field": "result(proceed).code_architecture.files[].path / directories[]",
       "rule": "spec-reviewer criterion 3 — 'Paths are real in the project'. NEW files won't exist yet; MODIFIED/read paths must.",
       "check": "M2: for files[] with change_kind in {modify,read} and every directory in directories[] marked existing, assert the path exists on disk (re-read / stat). NEW paths are exempt (they are being created)."
@@ -51,27 +56,88 @@
       "check": "M2: assert declared_next_step == orchestrator-injected expected_next_step (chain check folded into R27 validator body). Mismatch = chain divergence."
     },
     {
+      "field": "result(blocked).blocked_reason=compatibility_blocker",
+      "rule": "spec.md 'Input preconditions' (compatibility gate row, '`compatibility_verdict`가 blocking issue를 담지 않음') — the compatibility gate is a QUALITATIVE field-value test on the Investigate-defined CompatibilityIssue shape (investigate.schema.json CompatibilityIssue), reusing its two fields severity (SeverityIssue scale fatal|high|medium|low) and blocks_flow (boolean) — no new classifier invented. Distinct from the deepen-trigger's quantitative issues.length>=2.",
+      "check": "M2: when blocked_reason=compatibility_blocker (attributed_step=investigate), assert at least one Investigate compatibility_verdict.issues[] entry has severity=='fatal' OR blocks_flow==true. Guarded: an absent/empty compatibility_verdict (Investigate-degenerate) is treated as 'no blocking issue' (silent false), NOT a forced block. Grammar cannot reach the cross-step Investigate shape; this contract names the field coupling the schema cannot $ref."
+    },
+    {
+      "field": "result(proceed).acceptance_criteria / tasks (over-budget proceed)",
+      "rule": "spec.md 'AC/task 폭발 (cap 초과)' — a proceed whose AC/task decomposition exceeds the single-spec MECHANICAL cap is ILLEGAL and MUST instead be blocked(decomposition_overflow, attributed_step=cap_exceeded). The OBSERVABLE mechanical threshold is a fixed structural count (AC count > 50 OR tasks count > 50) — chosen as the single-Spec emit ceiling so a completed proceed stays auditably re-readable. The wall_s/tokens budget is NOT part of this check: a mid-decomposition caps exhaustion already forces blocked AT EMIT TIME (see 'caps 소진 (mid-activity)'), so a SUCCESSFULLY-emitted proceed by definition did not exhaust caps — the validator re-reading the output has no observable evidence of mid-decomposition cap state and MUST NOT assert on it.",
+      "check": "M2: when result=proceed, assert the decomposition did NOT exceed the mechanical structural cap — assert acceptance_criteria length <= 50 AND tasks length <= 50. An over-count proceed (more than 50 AC or 50 tasks) is a silent oversized spec and MUST have been blocked(decomposition_overflow, attributed_step=cap_exceeded) instead — flag it. The wall_s/tokens-exhaustion arm is intentionally NOT checked here: caps exhaustion forces blocked at emit time, so a completed proceed cannot be retroactively caps-checked from its output (no observable signal). Grammar enforces only the lower bound (>=1); this contract enforces the observable structural upper bound (50/50) the prose defines."
+    },
+    {
+      "field": "result(blocked).blocked_reason=decomposition_overflow <-> attributed_step=cap_exceeded",
+      "rule": "spec.md 'AC/task 폭발 (cap 초과)' + 'caps 소진 (mid-activity)' + needs_clarification >3-ambiguity overflow — a Spec-own budget exhaustion is attributed to the cap_exceeded control value, NOT to an upstream producer.",
+      "check": "M2 (one-enum-member restriction grammar cannot express): assert blocked_reason=decomposition_overflow IFF attributed_step=cap_exceeded. A decomposition_overflow block MUST NOT name decide/investigate/ground (a self-caused failure cannot be honestly attributed upstream); and cap_exceeded MUST NOT appear with any other blocked_reason (conflicting_policy/missing_upstream/compatibility_blocker are genuine upstream faults). For cap_exceeded there is no producing tool, so source_tool is OMITTED (the blocked branch's if/then forbids it) and the attributed-step tool-family check below does not apply. SUBCODE AUDIT (overflow_subcode, REQUIRED on every decomposition_overflow per the if/then): only overflow_subcode=count_overflow has an output-observable anchor — M2 re-derives the would-be AC/task counts and asserts they actually exceed 50/50 (a count_overflow whose counts are <=50/50 is a mis-labelled block, flag it). overflow_subcode in {caps_exhausted, ambiguity_overflow} are explicitly NOT output-auditable (caps exhaustion and >3-ambiguity leave no observable signal in the blocked payload) and are ACCEPTED ON TRUST — this is the documented residual: an S4 deficiency mis-attributed as caps_exhausted/ambiguity_overflow cannot be mechanically distinguished from a genuine one and is not flaggable. The subcode at least pins which of the three a block CLAIMS to be (so count_overflow becomes checkable and the trust-residual is narrowed to the two non-observable arms instead of all three)."
+    },
+    {
+      "field": "result(blocked).source_tool / result(no_op).source_tool",
+      "rule": "spec.md — source_tool value space on the non-proceed branches is documented, not free. For AC/clarifications it is the CLOSED Decide enum {design-document, plan-chosen, record-decision}; for blocked/no_op it is the OPEN SourceTool floor but constrained by attribution.",
+      "check": "M2: for blocked, assert source_tool belongs to the attributed_step's tool family — decide-attributed => {design-document, plan-chosen, record-decision}; investigate-attributed => {compatibility-verdict} (the pinned Investigate compatibility/verdict tool identifier); ground-attributed => {ground-capture} (the pinned Ground capture tool identifier). All three attributions pin a concrete value space the same way the three Decide tool values are pinned — no free string. EXEMPTION: attributed_step=cap_exceeded (blocked_reason=decomposition_overflow) has no producing tool — source_tool is OMITTED (forbidden by the blocked branch's if/then) and therefore not tool-family-checked. For no_op the value-space membership is ALREADY pinned in M1 grammar (the no_op.source_tool allOf narrows the floor to the closed Decide enum {design-document, plan-chosen, record-decision}), since its value space is the closed Decide enum, not the attribution-dependent open floor blocked needs — so M2 does NOT re-assert membership for no_op. M2's only no_op residual is PRESENCE: when reason=no_implementable_surface (S3) source_tool is REQUIRED (grammar if/then), and when reason=non_code_flow (S2) it is OPTIONAL/emit-exempt — if absent the no_op is treated as triage-routed non-code (no producing Decide tool). For blocked, grammar leaves source_tool the open floor; this contract pins its value space (per attributed_step) in M2."
+    },
+    {
+      "field": "files_to_read / code_architecture.files[](change_kind=read)",
+      "rule": "spec.md 'Output' files_to_read note — files_to_read and code_architecture.files[] with change_kind=read are two views of the SAME read-input set. Canonical location is code_architecture.files[]; files_to_read is the derived flat projection for Test/Implement (plan-as-prompt convenience). EMPTY-SET CANONICAL FORM: when zero change_kind=read files exist, the read-set is empty and files_to_read MUST be OMITTED (absent); a literal '[]' is GRAMMAR-ILLEGAL (minItems:1), so omission is the only legal empty representation.",
+      "check": "M2: assert files_to_read (when present) == the set of code_architecture.files[].path having change_kind=='read' (derived projection, no drift). A path in files_to_read absent from files[](read), or a read-file absent from files_to_read, is a divergence. EMPTY-SET RULE (drift-distinguishing): an ABSENT files_to_read is legal ONLY when the read-set is genuinely empty (zero change_kind=='read' files). The validator MUST distinguish two absent cases: (i) absent-because-empty — files[] has NO change_kind=='read' entry → canonical empty representation, NOT drift; (ii) absent-despite-nonempty-read-set — files[] DOES contain >=1 change_kind=='read' entry yet files_to_read is omitted → this is DRIFT (the projection was dropped), and MUST be flagged. The validator must NOT blanket-treat absent==empty-set (that would silently mask case ii); it computes the read-set from files[] first, then requires absent IFF the read-set is empty. Grammar's minItems:1 already rejects a literal '[]' (so omission is the only legal empty form), but grammar cannot do the cross-field set comparison nor see case ii."
+    },
+    {
+      "field": "result(proceed).code_architecture.files[].path (uniqueness + read-set membership)",
+      "rule": "spec.md 'Output' files_to_read note — the canonical read-set is {files[].path | change_kind=='read'}, projected into files_to_read. Grammar's uniqueItems checks whole-item equality, so it CANNOT assert path-level uniqueness across files[] (two entries with the same path but different change_kind are whole-item-distinct and slip through). The read-set projection and the R33 same-file mutual-exclusion both presuppose a well-defined per-path change_kind, which is undefined if a path appears twice.",
+      "check": "M2 (grammar-inexpressible path invariant): assert files[].path is UNIQUE across files[] — a single path may NOT appear in two files[] entries (no '[same path, change_kind=read] + [same path, change_kind=modify]' duplicate). A path is therefore in the read-set IFF its single files[] entry has change_kind=='read'; a read+modify on one path is NOT representable (it would have to be ONE entry whose single change_kind decides read-set membership). Consequently files_to_read NEVER contains a path that files[] also records as create/modify (that path's single change_kind would be read, not modify). With uniqueness asserted, the files_to_read==read-set projection (sibling contract) and R33 same-file overlap are both well-defined. A duplicate path is a malformed architecture — flag it.",
+      "$comment": "Closes the read-set/R33 ambiguity: without path uniqueness, a same-path read+modify pair left read-set membership and same-file mutual-exclusion undefined."
+    },
+    {
       "field": "result(proceed).spec_card_id (Measured branch)",
-      "rule": "emberdeck create_card is MCP-backed and degradable; the Measured branch claims a real card id.",
-      "check": "M2: when status=measured, probe emberdeck capability and (where replayable) confirm the card id exists. When emberdeck is unattached, the grammar must have forced the Omitted branch (M2 capability probe → status=omitted, reason=unavailable)."
+      "rule": "emberdeck create_card is MCP-backed and degradable; the Measured branch claims a real card id. The Measured branch is ALSO Decide-mode-conditional: a spec card links a Design intent card, so it is legal ONLY when Decide mode=design (intent card present). spec.md L77-78: plan/record (no intent card) MUST emit Omitted(not_applicable). Grammar (M1) only probes emberdeck attachment via the Measured/Omitted oneOf; it cannot reach the cross-step Decide mode, so this Decide-mode restriction is M2.",
+      "check": "M2: when status=measured, (a) assert Decide mode==design (intent card present) — a measured spec card is ILLEGAL when Decide mode in {plan,record}, which MUST be Omitted(reason=not_applicable); a plan/record flow emitting a measured spec card is a violation even though it passes M1. Then (b) probe emberdeck capability and (where replayable) confirm the card id exists. When emberdeck is unattached, the grammar must have forced the Omitted branch (M2 capability probe → status=omitted, reason=unavailable)."
+    },
+    {
+      "field": "result(proceed).spec_card_id.measured.code_links (provenance)",
+      "rule": "spec.md 'Measured' branch (code_links) + reviewer criterion 'codeLinks 매핑 검증' — code_links is a MAPPING {from_card_anchor -> to_source_path}, not a flat path list. The Measured branch self-asserts the card and its links; grammar enforces only the SHAPE (each entry has an anchor + a path). Whether each to_source_path resolves to a REAL source path and whether the spec card actually links the Decide intent_card_id is a TRUTH/cross-step invariant grammar cannot express.",
+      "check": "M2 (realizes the reviewer 'codeLinks 매핑' obligation): when spec_card_id.status=measured and code_links present, for each entry re-read/stat to_source_path and assert it resolves to a real source path in the project; and re-read emberdeck to confirm the spec card (value) links the Decide design document's intent_card_id (the mapping is anchored on the real intent card, not a fabricated anchor). A code_link whose to_source_path does not resolve, or a measured card that does not link the intent card, is a self-asserted provenance hole — flag it. Grammar gives the mapping shape; only this code check makes the codeLink provenance trustworthy.",
+      "$comment": "Closes the silent provenance hole: code_links carried a reviewer obligation ('codeLinks 매핑 검증') but no mechanical TRUTH check re-read emberdeck/paths."
+    },
+    {
+      "field": "result(no_op).reason=non_code_flow (S2 auditability)",
+      "rule": "spec.md 'no_op' branch + reviewer criterion (S2 non_code_flow) — an S2 no_op may legally emit a bare {result, reason} with NO detail and NO source_tool (both optional/emit-exempt on S2, unlike S3 which requires detail + source_tool). Grammar therefore cannot make S2 self-auditable from the emitted payload alone (there is no emitted evidence field to audit 'flow is non-code' against). The S2 non-code determination is instead audited against the UPSTREAM Triage/Decide rows, NOT against an emitted Spec evidence field — a TRUTH/cross-step invariant grammar cannot express, named here so a bare {result,reason} S2 no_op is not an unauditable punt.",
+      "check": "M2: when result=no_op AND reason=non_code_flow, assert the non-code determination is corroborated by the upstream chain — the Triage classification routed this flow as non-code (non-implementing flow_type) OR the resolved Decide row carries a record/non-code decision with no design/plan/record build surface. A bare S2 {result,reason} no_op whose upstream Triage/Decide rows DO carry a code-bearing implementable surface is a model silently punting a code flow as non-code (an S4 fault masquerading as a legitimate S2 empty) — flag it. When detail/source_tool ARE present on S2 they are additional (optional) evidence but the cross-step Triage/Decide check is authoritative; grammar cannot reach the upstream rows."
     }
   ],
 
   "type": "object",
   "unevaluatedProperties": false,
-  "required": ["result", "based_on", "declared_next_step"],
+  "required": ["result", "based_on"],
+  "allOf": [
+    {
+      "$comment": "declared_next_step is PROCEED-ONLY: REQUIRED on proceed (a normal forward successor exists) and FORBIDDEN on every non-proceed branch. R16 DeclaredNextStep has no null/skip sentinel, so it is undefined on no_op (downstream skipped) and blocked (routes to attributed_step) and needs_clarification (HITL re-invoke). The branch additionalProperties:false does NOT reach a TOP-LEVEL sibling, so without this guard top-level declared_next_step would leak alongside a no_op/blocked result; the else-arm 'not required AND not present' closes that hole. files_to_read (the OTHER proceed-only field) needs no such top-level guard because it lives INSIDE the proceed branch payload, where the non-proceed branches' additionalProperties:false already forbids it.",
+      "if": {
+        "properties": { "result": { "properties": { "result": { "const": "proceed" } } } },
+        "required": ["result"]
+      },
+      "then": { "required": ["declared_next_step"] },
+      "else": { "not": { "required": ["declared_next_step"] } }
+    }
+  ],
   "properties": {
     "based_on": {
       "$comment": "§5 — all values are RowRef (Postgres step_runs row ids), never file paths. Spec consumes Decide + Investigate + Ground.",
-      "description": "§5 BASED-ON bundle (RowRefs only). Spec's chain provides Decide (design document / plan / record), Investigate (constraints, risk_surface, compatibility issues), Ground (task_subgraph, volatile_state). decide_ref and ground_ref are REQUIRED (every spec descends from a Decide and a Ground); investigate_ref is OPTIONAL/conditional — required only when the chain HAS Investigate (M2/reviewer cross-check), but greenfield / Investigate-degenerate chains legitimately lack it, so it is NOT an M1 grammar invariant. Legacy prose 'based_on: { decide_ref, investigate_ref, ground_ref }' translated from file paths to row refs.",
+      "description": "§5 BASED-ON bundle (RowRefs only). Spec's chain provides Decide (design document / plan / record), Investigate (constraints, risk_surface, compatibility issues), Ground (task_subgraph, volatile_state). decide_ref and ground_ref are REQUIRED (every spec descends from a Decide and a Ground); investigate_ref is OPTIONAL/conditional — required only when the chain HAS Investigate (enforced by the x-validator-contract 'based_on.investigate_ref (conditional presence)', NOT M1 grammar), but greenfield / Investigate-degenerate chains legitimately lack it, so it is NOT an M1 grammar invariant. Legacy prose 'based_on: { decide_ref, investigate_ref, ground_ref }' translated from file paths to row refs.",
       "allOf": [{ "$ref": "./_defs.schema.json#/$defs/BasedOn" }],
       "required": ["decide_ref", "ground_ref"]
     },
 
     "declared_next_step": {
-      "$comment": "R16 — advisory; orchestrator injects authoritative expected_next_step. Chain check is an M2 validator_contract.",
-      "description": "R16 DECLARED-NEXT-STEP (advisory). Spec's typical successor is Test (code flows) or Implement (greenfield / test-less chains). The model may DECLARE this; the orchestrator INJECTS the authoritative expected_next_step and the M2 validator asserts they match. Carried on every branch (even blocked/needs_clarification, where the orchestrator routes per the result table).",
-      "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep"
+      "$comment": "R16 — advisory; orchestrator injects authoritative expected_next_step. Chain check is an M2 validator_contract. PROCEED-ONLY (required only on the proceed branch — see below). DeclaredNextStep requires a StepName with no null/skip sentinel, so it is only meaningful where a normal forward successor EXISTS (Test/Implement). On no_op the orchestrator SKIPS Spec→Test→Implement and on blocked it routes back to attributed_step — neither has a forward successor to declare, so declared_next_step is NOT carried there (forbidden by those branches' additionalProperties:false).",
+      "description": "R16 DECLARED-NEXT-STEP (advisory, PROCEED-ONLY). Spec's successor is CLOSED to exactly {test, implement}: Test (code flows) or Implement (greenfield / test-less chains). The shared DeclaredNextStep $def carries the open 10-value StepName; this step NARROWS declared_next_step to the two legal Spec successors via the allOf enum below (grammar-expressible, so it is pinned in M1, not left to M2). The model may DECLARE this; the orchestrator INJECTS the authoritative expected_next_step and the M2 validator asserts they match. Required ONLY on the proceed branch (the sole branch with a normal forward successor); blocked routes to attributed_step and no_op skips downstream, so they carry no declared_next_step.",
+      "allOf": [
+        { "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep" },
+        {
+          "$comment": "Spec's forward successor value space is the CLOSED pair {test, implement} (spec.md declared_next_step note). The shared StepName floor is open (10 values); this narrowing forbids declaring spec-self/decide/reflect/etc. as the next step. Grammar-expressible enum restriction (M1), parallel to the spec_card_id source_tool const override.",
+          "properties": {
+            "declared_next_step": { "enum": ["test", "implement"] }
+          }
+        }
+      ]
     },
 
     "result": {
@@ -171,6 +237,16 @@
                     "type": "object",
                     "additionalProperties": false,
                     "required": ["path", "purpose", "exports", "change_kind"],
+                    "allOf": [
+                      {
+                        "$comment": "change_summary is conditionally required: a modify/read file MUST carry the what-changes/why rationale downstream Test/Implement (plan-as-prompt) needs; a create file is exempt (the whole file is new, purpose+exports already describe it). Mirrors the if/then conditional-required used by no_op.detail and spec_card_id.reason.",
+                        "if": {
+                          "properties": { "change_kind": { "enum": ["modify", "read"] } },
+                          "required": ["change_kind"]
+                        },
+                        "then": { "required": ["change_summary"] }
+                      }
+                    ],
                     "properties": {
                       "path": {
                         "description": "Real project file path. M2 checks existence for change_kind in {modify,read}.",
@@ -184,13 +260,14 @@
                         "items": { "type": "string", "minLength": 1 }
                       },
                       "change_kind": {
-                        "description": "create = new file (path-realness exempt); modify = existing file changed; read = existing file consumed (files_to_read for Test/Implement).",
+                        "description": "create = new file (path-realness exempt); modify = existing file changed; read = existing file consumed by Test/Implement (this is the CANONICAL read-input record; top-level files_to_read is the derived flat projection of these read entries — x-validator-contract asserts they match).",
                         "type": "string",
                         "enum": ["create", "modify", "read"]
                       },
                       "change_summary": {
-                        "description": "For modify/read: what changes / why this file is read (spec.md 'Modified files: path + what changes + why').",
-                        "type": "string"
+                        "description": "What changes (modify) / why this file is read (read) — the rationale downstream Test/Implement (plan-as-prompt) consumes (spec.md 'Modified files: path + what changes + why'). REQUIRED when change_kind in {modify,read} (if/then above); create is exempt. Non-empty when present.",
+                        "type": "string",
+                        "minLength": 1
                       }
                     }
                   }
@@ -285,8 +362,10 @@
               "oneOf": [
                 {
                   "title": "spec_card_id measured",
+                  "$comment": "unevaluatedProperties:false (NOT additionalProperties — this branch $allOf-s the intentionally-open Measured $def, whose status/value/source_tool/source are evaluated through the $ref). It forbids fabricated extra keys on the measured spec card while still allowing the inherited Measured properties; the omitted branch already inherits Omitted's additionalProperties:false, so both branches are now closed.",
                   "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Measured" }],
                   "type": "object",
+                  "unevaluatedProperties": false,
                   "properties": {
                     "source_tool": {
                       "$comment": "Pinned provenance — overrides the inherited open SourceTool floor. emberdeck is the only tool that produces a spec card; mirrors the omitted branch which fixes source_tool='emberdeck'.",
@@ -299,9 +378,26 @@
                       "minLength": 1
                     },
                     "code_links": {
-                      "description": "Optional codeLinks created from the card to source paths.",
+                      "$comment": "codeLink MAPPING (not a flat path list): each entry maps a card-side anchor to a real source path, so the reviewer's 'codeLinks 매핑 검증' is representable. SHAPE here; that each to_source_path resolves on disk AND the card links the Decide intent card is the x-validator-contract 'result(proceed).spec_card_id.measured.code_links (provenance)'.",
+                      "description": "Optional codeLinks: each maps a card-side anchor (from_card_anchor) to a real source path (to_source_path) the card links. A MAPPING, not a flat path list — supports the reviewer's source↔card mapping check.",
                       "type": "array",
-                      "items": { "type": "string", "minLength": 1 }
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["from_card_anchor", "to_source_path"],
+                        "properties": {
+                          "from_card_anchor": {
+                            "description": "Card-side anchor (the spec/intent card node the link originates from).",
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "to_source_path": {
+                            "description": "Real on-disk source path the anchor maps to. M2 re-reads to confirm it resolves (x-validator-contract).",
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      }
                     }
                   }
                 },
@@ -322,9 +418,10 @@
             },
 
             "files_to_read": {
-              "$comment": "Plan-as-prompt: the files Test/Implement read. READ INPUT paths (not §5 RowRefs) — reading a file is allowed.",
-              "description": "OPTIONAL — files the downstream Test and Implement agents should read (spec.md output #4). These are READ INPUT paths (real on-disk source files the next agents consume), NOT §5 cross-step RowRefs — reading a file is allowed; storing workflow OUTPUT as a file is not.",
+              "$comment": "Plan-as-prompt: the files Test/Implement read. READ INPUT paths (not §5 RowRefs) — reading a file is allowed. DERIVED projection of code_architecture.files[] with change_kind=read (canonical location is code_architecture.files[]); the two must agree — x-validator-contract enforces files_to_read == {files[].path | change_kind==read}.",
+              "description": "OPTIONAL — files the downstream Test and Implement agents should read (spec.md output #4). These are READ INPUT paths (real on-disk source files the next agents consume), NOT §5 cross-step RowRefs — reading a file is allowed; storing workflow OUTPUT as a file is not. NOT a parallel/independent list: this is the flat projection of code_architecture.files[] entries whose change_kind=read (canonical READ-input location is code_architecture.files[]). M2 asserts the two sets match so they never drift. When there are ZERO read files the read-set is empty: files_to_read MUST be OMITTED (absent), never '[]' — minItems:1 makes a literal '[]' GRAMMAR-ILLEGAL, so omission is the only legal empty representation. The validator does NOT blanket-treat absent==empty-set: absent is canonical ONLY when the computed read-set (files[] with change_kind=read) is genuinely empty; an absent files_to_read DESPITE a non-empty read-set (files[] has >=1 change_kind=read) is a dropped projection = DRIFT to flag, not a canonical empty.",
               "type": "array",
+              "minItems": 1,
               "items": { "type": "string", "minLength": 1 }
             }
           }
@@ -346,14 +443,14 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["question", "blocks_ac", "source_tool"],
+                "required": ["question", "blocked_decide_item", "source_tool"],
                 "properties": {
                   "question": {
                     "description": "The specific clarification needed (legacy '[NEEDS CLARIFICATION: specific question]').",
                     "type": "string",
                     "minLength": 1
                   },
-                  "blocks_ac": {
+                  "blocked_decide_item": {
                     "description": "BACKWARD ref to the Decide-source item this clarification blocks — NOT an emitted AC id (the needs_clarification branch carries no acceptance_criteria, so no forward AC id exists; R14 fail-loud). It names which upstream Decide item cannot be reduced to a measurable AC: a design policy/requirement/user_flow id, a plan sequencing unit or chosen.approach item, or a record decision id.",
                     "type": "string",
                     "minLength": 1
@@ -375,13 +472,33 @@
           "$comment": "G2 core failure-mode — '상충/불충족 정책, 누락 upstream artifact'. Discriminated cause + attributed step for routing.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["result", "blocked_reason", "detail", "attributed_step", "source_tool"],
+          "required": ["result", "blocked_reason", "detail", "attributed_step"],
+          "allOf": [
+            {
+              "$comment": "source_tool is the attributed producer's tool family — it is REQUIRED for the genuine upstream attributions (decide/investigate/ground) but OMITTED for cap_exceeded (decomposition_overflow): a Spec-own budget exhaustion has NO producing tool, so the model is not forced to fabricate a source_tool value with no defined value space (spec.md 'branch source_tool 값공간' — cap_exceeded exempt).",
+              "if": {
+                "properties": { "attributed_step": { "const": "cap_exceeded" } },
+                "required": ["attributed_step"]
+              },
+              "then": { "not": { "required": ["source_tool"] } },
+              "else": { "required": ["source_tool"] }
+            },
+            {
+              "$comment": "overflow_subcode machine-distinguishes the THREE decomposition_overflow triggers so each is auditable: count_overflow (AC or task count >50 — M2-observable from the would-be proceed counts), caps_exhausted (wall_s/tokens exhausted mid-decomposition — NOT output-observable), ambiguity_overflow (>3 distinct un-measurable Decide items past the needs_clarification cap — NOT observable in proceed output). REQUIRED exactly when blocked_reason=decomposition_overflow (and FORBIDDEN otherwise — the other blocked_reasons have no overflow trigger to subclassify). Without it all three collapse to one indistinguishable block and an S4 deficiency mis-attributed to cap_exceeded is unflaggable.",
+              "if": {
+                "properties": { "blocked_reason": { "const": "decomposition_overflow" } },
+                "required": ["blocked_reason"]
+              },
+              "then": { "required": ["overflow_subcode"] },
+              "else": { "not": { "required": ["overflow_subcode"] } }
+            }
+          ],
           "properties": {
             "result": { "const": "blocked" },
             "blocked_reason": {
-              "description": "WHY Spec cannot produce an implementable form. conflicting_policy = Decide policies contradict (R15-adjacent). unsatisfiable_requirement = a requirement cannot be made measurable/testable. missing_upstream = a required upstream artifact (Decide design document / Investigate constraints / Ground subgraph) is absent or empty. compatibility_blocker = Investigate compatibility_verdict surfaced a fatal issue. The exact spec.md failure-modes G2 designs.",
+              "description": "WHY Spec cannot produce an implementable form. conflicting_policy = two constraints in the same scope contradict (R15-adjacent) — cross-source (a Decide constraint vs an Investigate constraint) routes attributed_step=decide; intra-Decide (two Decide policies) routes decide; intra-Investigate (two Investigate constraints, Decide not a party) routes attributed_step=investigate — the conflict is attributed to the producer step(s) party to it, never dishonestly to decide when Decide is not a party. missing_upstream = a required upstream artifact (Decide design document / Investigate constraints / Ground subgraph) is absent or empty. compatibility_blocker = Investigate compatibility_verdict surfaced a fatal issue. decomposition_overflow = AC/task decomposition exceeds the single-spec budget (caps wall_s/tokens exhausted mid-decomposition, OR >3 distinct Decide-source items remain un-measurable past the needs_clarification cap) — a Spec-own budget/scale failure, NOT an upstream producer's fault, so it is attributed_step=cap_exceeded (see attributed_step). A single requirement that cannot be made measurable is NOT a distinct blocked_reason: it routes to needs_clarification (<=3 such items) or decomposition_overflow (>3) per S5 — there is no 'unsatisfiable_requirement' member. The exact spec.md failure-modes G2 designs.",
               "type": "string",
-              "enum": ["conflicting_policy", "unsatisfiable_requirement", "missing_upstream", "compatibility_blocker"]
+              "enum": ["conflicting_policy", "missing_upstream", "compatibility_blocker", "decomposition_overflow"]
             },
             "detail": {
               "description": "Specific description of the block (which policies conflict / which requirement / which upstream artifact / which compatibility issue).",
@@ -389,11 +506,21 @@
               "minLength": 1
             },
             "attributed_step": {
-              "$comment": "Routing target — which upstream step the orchestrator routes back to. Shared StepName enum (M4 single-source).",
-              "description": "Which upstream step the orchestrator should re-route to (the step whose output made spec impossible — typically decide or investigate or ground).",
-              "$ref": "./_defs.schema.json#/$defs/StepName"
+              "$comment": "Routing target NARROWED to Spec's upstream producers, PLUS the cap_exceeded control value. Spec consumes Decide/Investigate/Ground (based_on), so an upstream-attributed blocked target can ONLY be one of those three — never spec(self), a downstream step (test/implement/report/verify/reflect), or triage. cap_exceeded is the SELF/budget control value (mirrors FailureOrigin.cap_exceeded) used ONLY with blocked_reason=decomposition_overflow: a caps/decomposition-budget failure is Spec's own budget exhaustion, not an upstream producer's fault, so it must NOT be dishonestly attributed to decide/investigate/ground. {decide,investigate,ground} are a subset of StepName; cap_exceeded is the same control value FailureOrigin defines. x-validator-contract binds cap_exceeded <-> decomposition_overflow. NOT a $ref StepName (which would permit nonsensical self/downstream targets).",
+              "description": "Which upstream PRODUCER step the orchestrator should re-route to (the step whose output made spec impossible) — decide | investigate | ground — OR the control value cap_exceeded for a Spec-own budget exhaustion (blocked_reason=decomposition_overflow), which halts/escalates rather than routing to an upstream producer. M4 single-source: decide/investigate/ground are a subset of StepName; cap_exceeded mirrors FailureOrigin.cap_exceeded.",
+              "type": "string",
+              "enum": ["decide", "investigate", "ground", "cap_exceeded"]
             },
-            "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+            "overflow_subcode": {
+              "$comment": "Subclassifies decomposition_overflow so each of its three triggers is machine-distinguishable/auditable. count_overflow is M2-observable (AC or task count >50); caps_exhausted and ambiguity_overflow are NOT output-observable (see x-validator-contract 'result(blocked).blocked_reason=decomposition_overflow <-> attributed_step=cap_exceeded' for which arms carry an audit anchor and which are accepted on trust). REQUIRED iff blocked_reason=decomposition_overflow (if/then above), forbidden otherwise.",
+              "description": "Which decomposition_overflow trigger fired: count_overflow = AC/task count exceeded the 50/50 structural cap (M2-auditable from counts); caps_exhausted = wall_s/tokens exhausted mid-decomposition (not output-observable); ambiguity_overflow = >3 distinct un-measurable Decide items past the needs_clarification cap (not output-observable). Present only with blocked_reason=decomposition_overflow.",
+              "type": "string",
+              "enum": ["count_overflow", "caps_exhausted", "ambiguity_overflow"]
+            },
+            "source_tool": {
+              "$comment": "Open SourceTool floor; value space documented in spec.md 'Input preconditions' / 'Result enum & branches' — for blocked the natural origin is the attributed_step's producing tool, pinned to a concrete value space (Decide {design-document, plan-chosen, record-decision} for decide-attributed; {compatibility-verdict} for investigate-attributed; {ground-capture} for ground-attributed). REQUIRED for decide/investigate/ground attributions; OMITTED for attributed_step=cap_exceeded (decomposition_overflow) which has no producing tool — the blocked branch's if/then forbids source_tool there so the model never fabricates a value with no defined space. x-validator-contract pins source_tool to the attributed_step's tool family for the upstream attributions.",
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
+            }
           }
         },
 
@@ -402,7 +529,25 @@
           "$comment": "Nothing to spec — non-code/docs/exploratory flow routed here, or Decide produced no implementable surface. Orchestrator skips Spec→Test→Implement.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["result", "reason", "source_tool"],
+          "required": ["result", "reason"],
+          "allOf": [
+            {
+              "$comment": "S3 auditability — when reason=no_implementable_surface, detail is REQUIRED (it records the explicit zero-surface determination so a legitimate S3 verdict is distinguishable from an S4 malformed payload rubber-stamped as no_op). non_code_flow leaves detail optional.",
+              "if": {
+                "properties": { "reason": { "const": "no_implementable_surface" } },
+                "required": ["reason"]
+              },
+              "then": { "required": ["detail"] }
+            },
+            {
+              "$comment": "source_tool emit-exemption for non_code_flow (S2) — paralleling the cap_exceeded source_tool exemption on the blocked branch. S3 (no_implementable_surface) is ALWAYS a well-formed Decide verdict, so it names a real Decide source and source_tool is REQUIRED. S2 (non_code_flow) is non-code BY NATURE and may have been triage-routed to Spec WITHOUT a Decide having produced a design/plan/record surface tied to one of the three closed Decide tool values; forcing source_tool there would fabricate a producing tool that does not exist (the same hazard the cap_exceeded exemption avoids), so source_tool is OPTIONAL for non_code_flow — when present it names the Decide source, when absent the validator treats the no_op as triage-routed non-code (no producing Decide tool).",
+              "if": {
+                "properties": { "reason": { "const": "no_implementable_surface" } },
+                "required": ["reason"]
+              },
+              "then": { "required": ["source_tool"] }
+            }
+          ],
           "properties": {
             "result": { "const": "no_op" },
             "reason": {
@@ -411,10 +556,18 @@
               "enum": ["non_code_flow", "no_implementable_surface"]
             },
             "detail": {
-              "description": "Optional elaboration of why this flow needs no spec.",
-              "type": "string"
+              "description": "Elaboration of why this flow needs no spec. REQUIRED when reason=no_implementable_surface (records the explicit zero-surface determination — the auditable S3 evidence distinguishing a legitimate verdict from an S4 malformed payload); optional for non_code_flow. When present, non-empty.",
+              "type": "string",
+              "minLength": 1
             },
-            "source_tool": { "$ref": "./_defs.schema.json#/$defs/SourceTool" }
+            "source_tool": {
+              "$comment": "CLOSED Decide enum pinned in M1 grammar (unlike blocked, whose value space is attributed-step-dependent and open). no_op's source_tool — whether REQUIRED (S3) or OPTIONAL/emit-exempt (S2) — ALWAYS, WHEN PRESENT, names a Decide source, whose value space is the same closed three-value Decide enum {design-document, plan-chosen, record-decision} the AC/clarifications source_tool already pin. So it is narrowed here in grammar (allOf+enum over the shared SourceTool floor, parallel to declared_next_step's narrowing), not left open for M2.",
+              "description": "The Decide source this no_op's verdict came from: design-document | plan-chosen | record-decision. Closed enum (narrowed from the open SourceTool floor). REQUIRED for S3 (no_implementable_surface, a well-formed Decide verdict); OPTIONAL/emit-exempt for S2 (non_code_flow, may be triage-routed without a Decide-produced surface) — but when present it is one of these three values, never a free string.",
+              "allOf": [
+                { "$ref": "./_defs.schema.json#/$defs/SourceTool" },
+                { "enum": ["design-document", "plan-chosen", "record-decision"] }
+              ]
+            }
           }
         }
       ]

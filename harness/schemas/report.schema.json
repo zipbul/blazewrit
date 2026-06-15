@@ -13,6 +13,7 @@
       "$comment": "result ∈ {synthesized, empty_clean} — the SUCCESS / legitimately-empty terminal artifact. report_type + the common synthesis fields are required; the nested report_type oneOf tightens per-flow obligations. empty_clean additionally requires empty_details; synthesized requires body.summary present (enforced by body.required=[summary]).",
       "title": "result=synthesized|empty_clean",
       "type": "object",
+      "unevaluatedProperties": false,
       "required": [
         "result",
         "report_type",
@@ -101,18 +102,24 @@
           "$ref": "#/$defs/EmptyDetails"
         },
         "based_on": {
-          "description": "§5 upstream RowRefs the report synthesized from. README 'based_on: { investigate_ref, decide_ref, ground_ref }'. EVERY value is a Postgres step_runs row id, NEVER a file path (legacy '.blazewrit/grounds/**' is PRE-§5). All three keys required here because Report's inputs (README Inputs) are Investigate + Decide + Ground outputs; a report not grounded in those three rows is unsourced. sub_flow_refs is the additional Compound provenance key (array of sub_flow_id RowRefs) coexisting with sub_flow_summaries. x-m2-validator: each ref must resolve to an existing step_run row of the expected step in this flow.",
-          "allOf": [
-            {
-              "$ref": "./_defs.schema.json#/$defs/BasedOn"
-            }
-          ],
+          "description": "§5 upstream RowRefs the report synthesized from. README 'based_on: { investigate_ref, decide_ref, ground_ref }'. EVERY value is a Postgres step_runs row id, NEVER a file path (legacy '.blazewrit/grounds/**' is PRE-§5). All three keys required here because Report's inputs (README Inputs) are Investigate + Decide + Ground outputs; a report not grounded in those three rows is unsourced. Report's based_on carries ONLY its declared input keys — investigate_ref/decide_ref/ground_ref (+ the Compound sub_flow_refs) — so it is INLINED here rather than allOf-ing the shared BasedOn $def (which also declares triage_ref/spec_ref/test_ref/report_ref, none of which are Report inputs); additionalProperties:false then rejects any non-input key. sub_flow_refs is the additional Compound provenance key (array of RowRefs resolving the aggregated sub-flow rows, distinct from the input-side sub_flow_id) coexisting with sub_flow_summaries. x-m2-validator: each ref must resolve to an existing step_run row of the expected step in this flow.",
+          "type": "object",
+          "additionalProperties": false,
           "required": [
             "investigate_ref",
             "decide_ref",
             "ground_ref"
           ],
           "properties": {
+            "investigate_ref": {
+              "$ref": "./_defs.schema.json#/$defs/RowRef"
+            },
+            "decide_ref": {
+              "$ref": "./_defs.schema.json#/$defs/RowRef"
+            },
+            "ground_ref": {
+              "$ref": "./_defs.schema.json#/$defs/RowRef"
+            },
             "sub_flow_refs": {
               "$comment": "§5 — Compound source provenance. Coexists with the richer sub_flow_summaries object (cross-cutting decision 5: carry both the machine shape and the provenance refs).",
               "description": "Array of sub-flow RowRefs aggregated by a Compound report (README Compound input shape). Present for report_type=compound; each is a Postgres flow/step_run row id, never a path.",
@@ -125,7 +132,7 @@
         },
         "declared_next_step": {
           "$comment": "R16 — producer DECLARES but does not free-fill the authoritative next step; orchestrator injects expected_next_step; chain match is M2.",
-          "description": "R16 (agent.md L28/L31-33; reviewer criterion 6 CRITICAL). Report's declared successor — for a terminal non-code flow this is typically 'verify' (plan-standalone: Decide→Report→Verify). ADVISORY: the schema carries the declared value; the authoritative value is orchestrator-injected. x-m2-validator: declared_next_step == orchestrator's expected_next_step (chain-divergence check). Mismatch = reviewer FAIL 'R16 chain violation'.",
+          "description": "R16 (agent.md L28/L31-33; reviewer criterion 6 CRITICAL). REQUIRED on this synthesized|empty_clean branch only — the escalate branch carries no declared_next_step (orchestrator routes via NEEDS_CONTEXT, not the normal successor). Report's declared successor — for a terminal non-code flow this is typically 'verify' (plan-standalone: Decide→Report→Verify). ADVISORY: the schema carries the declared value; the authoritative value is orchestrator-injected. x-m2-validator (synthesized|empty_clean only): declared_next_step == orchestrator's expected_next_step (chain-divergence check). Mismatch = reviewer FAIL 'R16 chain violation'.",
           "$ref": "./_defs.schema.json#/$defs/DeclaredNextStep"
         }
       },
@@ -155,13 +162,25 @@
           }
         },
         {
-          "$comment": "SYNTHESIZED-ONLY per-report_type minimum-content obligations. These gate result=synthesized ONLY (README L183); empty_clean is EXEMPT (satisfied by empty_details alone). retro ⇒ >=1 action_item; spike ⇒ feasibility_verdict; plan_standalone ⇒ task_list + body.sections + body.next_step; compound ⇒ sub_flow_summaries.",
+          "$comment": "SYNTHESIZED-ONLY per-report_type minimum-content obligations. These gate result=synthesized ONLY (README L183); empty_clean is EXEMPT (satisfied by empty_details alone). review ⇒ >=1 finding; retro ⇒ >=1 action_item; spike ⇒ feasibility_verdict; plan_standalone ⇒ task_list + body.sections + body.next_step; compound ⇒ sub_flow_summaries.",
           "if": {
             "properties": { "result": { "const": "synthesized" } },
             "required": ["result"]
           },
           "then": {
             "allOf": [
+              {
+                "$comment": "review synthesized ⇒ >=1 finding. A 0-findings clean review is a legitimately-empty verdict and routes to empty_clean (README L198), NOT synthesized; so a synthesized review must carry at least one finding (no degenerate summary-only synthesized review).",
+                "if": {
+                  "properties": { "report_type": { "const": "review" } },
+                  "required": ["report_type"]
+                },
+                "then": {
+                  "properties": {
+                    "findings": { "minItems": 1 }
+                  }
+                }
+              },
               {
                 "$comment": "retro synthesized ⇒ >=1 action item (the sole action-item floor).",
                 "if": {
@@ -200,16 +219,35 @@
                 }
               },
               {
-                "$comment": "compound synthesized ⇒ sub_flow_summaries (machine aggregation); coexists with body.summary + based_on.sub_flow_refs.",
+                "$comment": "compound synthesized ⇒ sub_flow_summaries (machine aggregation) AND based_on.sub_flow_refs (provenance); both coexist with body.summary (cross-cutting decision 5). README L125/L192/reviewer L253: sub_flow_refs is REQUIRED for a compound synthesized report.",
                 "if": {
                   "properties": { "report_type": { "const": "compound" } },
                   "required": ["report_type"]
                 },
                 "then": {
-                  "required": ["sub_flow_summaries"]
+                  "required": ["sub_flow_summaries"],
+                  "properties": {
+                    "based_on": {
+                      "required": ["sub_flow_refs"]
+                    }
+                  }
                 }
               }
             ]
+          }
+        },
+        {
+          "$comment": "VERDICT-OR-ESCALATE report_types have NO empty_clean case (README L190 spike, L191 plan_standalone). spike: verdict-or-escalate (verdict ⇒ synthesized, no verdict ⇒ escalate). plan_standalone: Decide(Design) present ⇒ synthesized, absent ⇒ escalate (failure_origin=decide) — there is no legitimately-empty plan. So report_type ∈ {spike, plan_standalone} ⇒ result must be synthesized (this outer branch already excludes escalate; this forbids empty_clean). Machine-enforces the prose unreachable-state rule.",
+          "if": {
+            "properties": {
+              "report_type": { "enum": ["spike", "plan_standalone"] }
+            },
+            "required": ["report_type"]
+          },
+          "then": {
+            "properties": {
+              "result": { "const": "synthesized" }
+            }
           }
         }
       ],
@@ -217,64 +255,74 @@
         {
           "$comment": "REVIEW — Pass1 critical / Pass2 informational (agent.md L39). Findings-driven. No action-item floor: a clean review with 0 findings routes to empty_clean.",
           "title": "report_type=review",
-          "additionalProperties": true,
           "properties": {
-            "report_type": { "const": "review" }
+            "report_type": { "const": "review" },
+            "feasibility_verdict": false,
+            "task_list": false,
+            "sub_flow_summaries": false
           },
           "required": ["report_type"]
         },
         {
-          "$comment": "RETRO — process observations. The >=1 action-item floor is gated to result=synthesized (see the synthesized-only allOf below); empty_clean retro is EXEMPT (it is satisfied by empty_details), though per README L188 a retro with no learnings normally ESCALATES rather than emitting empty_clean.",
+          "$comment": "RETRO — process observations. The >=1 action-item floor is gated to result=synthesized (see the synthesized-only allOf below); empty_clean retro is EXEMPT (it is satisfied by empty_details). README L188: a retro whose upstream (Decide/Investigate) is WELL-FORMED but yields 0 learnings is a legitimate empty_clean; only a MISSING/MALFORMED upstream escalates, with failure_origin = the broken input's origin (Investigate-missing ⇒ investigate, Decide-missing ⇒ decide; per the Input-preconditions table — NOT hardcoded to decide).",
           "title": "report_type=retro",
-          "additionalProperties": true,
           "properties": {
-            "report_type": { "const": "retro" }
+            "report_type": { "const": "retro" },
+            "feasibility_verdict": false,
+            "task_list": false,
+            "sub_flow_summaries": false
           },
           "required": ["report_type"]
         },
         {
           "$comment": "EXPLORATION — 'content over form' (agent.md L41). Minimum-bar = body.summary non-empty (gated to synthesized via the outer body.summary if/then); action items NOT required.",
           "title": "report_type=exploration",
-          "additionalProperties": true,
           "properties": {
             "report_type": { "const": "exploration" },
-            "action_items": { "minItems": 0 }
+            "action_items": { "minItems": 0 },
+            "feasibility_verdict": false,
+            "task_list": false,
+            "sub_flow_summaries": false
           },
           "required": ["report_type"]
         },
         {
-          "$comment": "SPIKE — feasibility assessment; on result=synthesized MUST end with a go/no_go/conditional verdict (reviewer Spike criterion). feasibility_verdict is required only when result=synthesized (see the synthesized-only allOf below); a spike has effectively no empty_clean case (README L190: verdict-or-escalate), so the obligation is gated to synthesized per cross-cutting decision 5.",
+          "$comment": "SPIKE — feasibility assessment; MUST end with a go/no_go/conditional verdict (reviewer Spike criterion). spike has NO empty_clean case (verdict-or-escalate, README L190): result is forced to synthesized by the verdict-or-escalate allOf above, so feasibility_verdict always applies here.",
           "title": "report_type=spike",
-          "additionalProperties": true,
           "properties": {
-            "report_type": { "const": "spike" }
+            "report_type": { "const": "spike" },
+            "task_list": false,
+            "sub_flow_summaries": false
           },
           "required": ["report_type"]
         },
         {
-          "$comment": "PLAN_STANDALONE — Decide(Design)→Report→Verify terminal Design doc. On result=synthesized carries BOTH the machine-consumable task_list (R19, verbatim/refined from Decide, deferral forbidden — reviewer criterion 9) AND the human-readable body.sections (design document) + body.next_step (cross-cutting decision 5). task_list, body.sections, body.next_step are required only when result=synthesized (see the synthesized-only allOf below); empty_clean is EXEMPT (README L183).",
+          "$comment": "PLAN_STANDALONE — Decide(Design)→Report→Verify terminal Design doc. On result=synthesized carries BOTH the machine-consumable task_list (R19, verbatim/refined from Decide, deferral forbidden — reviewer criterion 9) AND the human-readable body.sections (design document) + body.next_step (cross-cutting decision 5). plan_standalone has NO empty_clean case (design-or-escalate, README L191): result is forced to synthesized by the verdict-or-escalate allOf above, so the task_list/body.sections/body.next_step minimum-bar always applies here.",
           "title": "report_type=plan_standalone",
-          "additionalProperties": true,
           "properties": {
-            "report_type": { "const": "plan_standalone" }
+            "report_type": { "const": "plan_standalone" },
+            "feasibility_verdict": false,
+            "sub_flow_summaries": false
           },
           "required": ["report_type"]
         },
         {
           "$comment": "COMPOUND — top-level summary aggregating sub-flow results (README L7). On result=synthesized carries BOTH the machine-consumable sub_flow_summaries AND body.summary + based_on.sub_flow_refs provenance. sub_flow_summaries is required only when result=synthesized (see the synthesized-only allOf below); empty_clean is EXEMPT (README L183). No action-item floor.",
           "title": "report_type=compound",
-          "additionalProperties": true,
           "properties": {
-            "report_type": { "const": "compound" }
+            "report_type": { "const": "compound" },
+            "feasibility_verdict": false,
+            "task_list": false
           },
           "required": ["report_type"]
         }
       ]
     },
     {
-      "$comment": "result=escalate — Report cannot synthesize a sound deliverable within its own scope (principle 1: synthesis itself is blocked, not an auxiliary tool). Emittable WITHOUT a valid report_type (a code-flow / missing-or-malformed flow_type precondition violation → escalate, failure_origin=upstream — README report_type assignment rule + Constraint). Only escalate_details is required. Orchestrator routes via the existing NEEDS_CONTEXT path; Report does NOT diagnose or queue followups.",
+      "$comment": "result=escalate — Report cannot synthesize a sound deliverable within its own scope (principle 1: synthesis itself is blocked, not an auxiliary tool). Emittable WITHOUT a valid report_type (a code-flow / missing-or-malformed flow_type precondition violation → escalate, failure_origin=upstream — README report_type assignment rule + Constraint). escalate_details is required; based_on is OPTIONAL provenance of whichever upstream rows WERE inspected before escalating (so a partial-input escalate — e.g. spike with prototype missing but Investigate/Decide present, failure_origin=implement; or a self-cap escalate where all inputs were well-formed, failure_origin=self — is machine-traceable, not only a prose string). Orchestrator routes via the existing NEEDS_CONTEXT path; Report does NOT diagnose or queue followups.",
       "title": "result=escalate",
       "type": "object",
+      "unevaluatedProperties": false,
       "required": [
         "result",
         "escalate_details"
@@ -285,11 +333,42 @@
         },
         "escalate_details": {
           "$ref": "#/$defs/EscalateDetails"
+        },
+        "based_on": {
+          "$comment": "OPTIONAL on escalate (unlike the synthesized|empty_clean branch where investigate/decide/ground are required). At escalate time the inputs may be PARTIAL or absent, so no key is required here — Report records only the upstream rows it actually consumed before escalating, making escalate provenance machine-resolvable for the orchestrator's NEEDS_CONTEXT routing + 5-accumulated-fail cap. All values are §5 RowRefs.",
+          "description": "§5 upstream RowRefs the report inspected before escalating (optional, partial). Lets the orchestrator trace WHICH upstream rows were consumed for a partial-input or self-cap escalate. Each value is a Postgres step_runs row id, never a path. INLINED to the same Report-input key set as the synthesized branch (investigate_ref/decide_ref/ground_ref/sub_flow_refs) — all OPTIONAL here — rather than allOf-ing the shared BasedOn $def, so additionalProperties:false rejects any non-input key. x-m2-validator: any present ref resolves to an existing row of the expected step in this flow.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "investigate_ref": {
+              "$ref": "./_defs.schema.json#/$defs/RowRef"
+            },
+            "decide_ref": {
+              "$ref": "./_defs.schema.json#/$defs/RowRef"
+            },
+            "ground_ref": {
+              "$ref": "./_defs.schema.json#/$defs/RowRef"
+            },
+            "sub_flow_refs": {
+              "$comment": "§5 — optional Compound source provenance when a compound report escalates after partially inspecting sub-flow rows.",
+              "description": "Array of sub-flow RowRefs inspected before escalating (compound). Each is a Postgres flow/step_run row id, never a path.",
+              "type": "array",
+              "items": {
+                "$ref": "./_defs.schema.json#/$defs/RowRef"
+              }
+            }
+          }
         }
       }
     }
   ],
   "$defs": {
+    "CrossCheckedCount": {
+      "$comment": "NOT a CountClaim: task_count/sub_flow_count count things the model SYNTHESIZED (the plan's task array, the assembled sub-flow array), not the stdout of a measuring command. Forcing CountClaim here would force fabricating a command+sha for a non-tool-measured quantity (the exact failure CountClaim was built to PREVENT). So this is a bare integer whose truth is the x-m2 array-length cross-check (value == len of the sibling array), not a stdout re-hash.",
+      "description": "A count cross-checked against a sibling array length (task_count == len(task_list.tasks); sub_flow_count == len(sub_flow_summaries.sub_flows) == len(based_on.sub_flow_refs)). x-m2-validator: assert the integer equals the cardinality of the array it counts — NOT a CountClaim (no command/stdout backs a model-synthesized array).",
+      "type": "integer",
+      "minimum": 0
+    },
     "Finding": {
       "description": "One severity-tagged finding (README 'findings: [id, statement, severity, evidence_ref]' + agent.md L22-26 impact/verify_probe). evidence_ref present = SHAPE; evidence-traceable / 'claim verified' = irreducible floor closed by M2 (re-read the cited source) + the unverified KEEP-polarity flag. source_tool is the REQUIRED R26 provenance floor on every finding item. severity uses the SINGLE shared risk Severity scale low|med|high|critical (cross-cutting decision 2 / principle 6 — no second scale invented).",
       "type": "object",
@@ -457,8 +536,9 @@
           "minLength": 1
         },
         "conditions": {
-          "description": "Conditions that must hold — REQUIRED when verdict=conditional (충족돼야 할 조건). Omitted otherwise.",
+          "description": "Conditions that must hold — REQUIRED+non-empty when verdict=conditional (충족돼야 할 조건). Omitted otherwise. minItems:1 so a conditional verdict cannot vacuously pass with an empty conditions list.",
           "type": "array",
+          "minItems": 1,
           "items": {
             "type": "string",
             "minLength": 1
@@ -533,7 +613,7 @@
       }
     },
     "EscalateDetails": {
-      "description": "result=escalate payload (principle 1: synthesis itself blocked). reason + failure_origin + evidence. Report does NOT diagnose — failure_origin names the nearest origin the input precondition points at. failure_origin is a REPORT-LOCAL enum [upstream, investigate, decide, implement] — 'upstream' is NOT in the shared FailureOrigin $def (which is Verify's routing enum), so it is defined locally here (cross-cutting decision 4 / the report mismatch resolution).",
+      "description": "result=escalate payload (principle 1: synthesis itself blocked). reason + failure_origin + evidence. Report does NOT diagnose — failure_origin names the nearest origin the input precondition points at. failure_origin is a REPORT-LOCAL enum [upstream, investigate, decide, implement, self] — 'upstream' is NOT in the shared FailureOrigin $def (which is Verify's routing enum), so it is defined locally here (cross-cutting decision 4 / the report mismatch resolution). 'self' = Report's OWN active-depth wall_s/token cap exhausted mid-synthesis (whichever depth cap was active — Shallow wall_s=30/tokens=5k OR Deep wall_s=180/tokens=15k; self-budget exhaustion — distinct from the shared FailureOrigin 'cap_exceeded' which is Verify's flow-level cap); the prior input preconditions were all met, so no upstream origin applies.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -548,14 +628,15 @@
           "minLength": 1
         },
         "failure_origin": {
-          "$comment": "Report-local enum, NOT the shared FailureOrigin $def — 'upstream' is a generic-origin value the shared enum lacks. upstream = generic/missing upstream; investigate/decide/implement = the concrete producer the precondition points at.",
-          "description": "Nearest origin of the synthesis-blocking input fault (Report does not deeply diagnose). upstream = generic missing/malformed upstream (e.g. code-flow / missing flow_type); investigate = findings source missing; decide = decision/design source missing; implement = prototype result missing (spike).",
+          "$comment": "Report-local enum, NOT the shared FailureOrigin $def — 'upstream' and 'self' are values the shared enum lacks. upstream = generic/missing upstream; investigate/decide/implement = the concrete producer the precondition points at; self = Report's own active depth-cap (wall_s/token) exhaustion mid-synthesis — Shallow (wall_s=30/tokens=5k) or Deep (wall_s=180/tokens=15k), whichever was active.",
+          "description": "Nearest origin of the synthesis-blocking fault (Report does not deeply diagnose). upstream = generic missing/malformed upstream (e.g. code-flow / missing flow_type); investigate = findings source missing; decide = decision/design source missing; implement = prototype result missing (spike); self = Report's OWN active depth cap exhausted before synthesis completed — whichever cap was active (Shallow wall_s=30/tokens=5k OR Deep wall_s=180/tokens=15k) — inputs were well-formed but the deliverable could not be finished within budget (Step Depth Policy self-cap branch).",
           "type": "string",
           "enum": [
             "upstream",
             "investigate",
             "decide",
-            "implement"
+            "implement",
+            "self"
           ]
         },
         "evidence": {
@@ -566,7 +647,7 @@
       }
     },
     "Task": {
-      "$comment": "R19/R33 task — carried VERBATIM/refined from Decide.task_list for plan-standalone. parallel_marker has an M2 same-file mutual-exclusion contract; counts use CountClaim.",
+      "$comment": "R19/R33 task — carried VERBATIM/refined from Decide.task_list for plan-standalone. parallel_marker has an M2 same-file mutual-exclusion contract; task_count is a CrossCheckedCount (== len(tasks)), NOT a CountClaim.",
       "description": "One R19 task in a plan-standalone Design synthesis (agent.md L29 'Decide의 task_list verbatim 또는 정제. Spec/Implement이 직접 consume — deferral 금지'; decide.md L58-66 task shape). Terminal: this report IS the consumable plan. deferral ('Spec이 finalize') is a reviewer FAIL (criterion 9). target_files drives the M2 same-file parallel-exclusion check.",
       "type": "object",
       "additionalProperties": false,
@@ -659,8 +740,8 @@
       }
     },
     "TaskList": {
-      "$comment": "plan-standalone Design synthesis (R19). task_count is a MEASURED count → CountClaim (R23), never a bare integer. Coexists with body.sections+body.next_step (cross-cutting decision 5).",
-      "description": "R19 task list for plan-standalone (agent.md L29; decide.md L58). Carried verbatim/refined from Decide; this report is the terminal consumable plan. The MACHINE-consumable half of the plan_standalone deliverable; the human-readable design document lives in body.sections + body.next_step. task_count is a CountClaim (R23) — a measured count of tasks, never a bare integer.",
+      "$comment": "plan-standalone Design synthesis (R19). task_count is a CrossCheckedCount (== len(tasks)), NOT a CountClaim — the task array is model-synthesized, not a measuring command's stdout. Coexists with body.sections+body.next_step (cross-cutting decision 5).",
+      "description": "R19 task list for plan-standalone (agent.md L29; decide.md L58). Carried verbatim/refined from Decide; this report is the terminal consumable plan. The MACHINE-consumable half of the plan_standalone deliverable; the human-readable design document lives in body.sections + body.next_step. task_count is a CrossCheckedCount cross-checked against len(tasks) — NOT a CountClaim, since no command measures a synthesized task list.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -676,15 +757,15 @@
           }
         },
         "task_count": {
-          "$comment": "R23 count-type — measured count of tasks, NOT a bare integer. x-m2-validator: value derivable from the task-source command stdout.",
-          "description": "Number of tasks (decide.md L224 '모든 count claim (task count, ...)도 R23 wrapper'). CountClaim, never bare int.",
-          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+          "$comment": "NOT a CountClaim — the task array is model-synthesized (carried/refined from Decide), not the stdout of a measuring command. x-m2-validator: task_count == len(tasks) (array-length cross-check), not a stdout re-hash.",
+          "description": "Number of tasks in this plan. Cross-checked count == len(task_list.tasks); never a CountClaim (no command measures a synthesized task list).",
+          "$ref": "#/$defs/CrossCheckedCount"
         }
       }
     },
     "SubFlowSummaries": {
-      "$comment": "Compound top-level aggregation. sub_flow_count is a MEASURED count → CountClaim (R23). Coexists with based_on.sub_flow_refs + body.summary (cross-cutting decision 5).",
-      "description": "Compound flow top-level summary (README L7). Aggregates each sub-flow's terminal result row. The MACHINE-consumable half of the compound deliverable; body.summary is the human-readable top-level summary and based_on.sub_flow_refs the provenance ref list. sub_flow_count is a CountClaim (R23). Each entry references the sub-flow's row (§5 RowRef) and records its terminal_result.",
+      "$comment": "Compound top-level aggregation. sub_flow_count is a CrossCheckedCount (== len(sub_flows) == len(based_on.sub_flow_refs)), NOT a CountClaim — the sub_flows array is model-assembled, not a measuring command's stdout. Coexists with based_on.sub_flow_refs + body.summary (cross-cutting decision 5).",
+      "description": "Compound flow top-level summary (README L7). Aggregates each sub-flow's terminal result row. The MACHINE-consumable half of the compound deliverable; body.summary is the human-readable top-level summary and based_on.sub_flow_refs the provenance ref list. sub_flow_count is a CrossCheckedCount cross-checked against len(sub_flows) and len(based_on.sub_flow_refs) — NOT a CountClaim, since no command measures a model-assembled sub-flow set. Each entry references the sub-flow's row (§5 RowRef) and records its terminal_result.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -701,7 +782,8 @@
             "required": [
               "flow_ref",
               "outcome",
-              "terminal_result"
+              "terminal_result",
+              "source_tool"
             ],
             "properties": {
               "flow_ref": {
@@ -710,7 +792,8 @@
                 "$ref": "./_defs.schema.json#/$defs/RowRef"
               },
               "outcome": {
-                "description": "One-line outcome of the sub-flow.",
+                "$comment": "Report-SYNTHESIZED, not carried verbatim from the Compound input shape (which has no 'outcome' field). Derived per README 'outcome 생산 규칙' from this sub-flow's verdict_ref/finding_refs/terminal_result.",
+                "description": "One-line outcome of the sub-flow, SYNTHESIZED by Report (README 'outcome 생산 규칙') from the sub-flow's verdict_ref (if any) + finding_refs + terminal_result — not an upstream-carried field. If a sub-flow carries NEITHER verdict_ref NOR finding_refs (nothing to summarize beyond terminal_result), outcome degrades to the terminal_result restatement (e.g. 'abandoned, no findings'); a sub-flow whose terminal_result itself is missing/malformed is an input-precondition fault → result=escalate, failure_origin=upstream (not a synthesizable outcome).",
                 "type": "string",
                 "minLength": 1
               },
@@ -726,17 +809,17 @@
                 "$ref": "./_defs.schema.json#/$defs/RowRef"
               },
               "source_tool": {
-                "$comment": "R26 provenance floor on each aggregated item.",
-                "description": "Origin of this sub-flow result (the sub-flow's reporting step / orchestrator).",
+                "$comment": "R26 provenance floor on each aggregated item. NOT carried verbatim from the Compound input shape (which has no 'source_tool' field, like 'outcome') — Report DERIVES it per README 'source_tool 생산 규칙' as the upstream step that PRODUCED this aggregated sub-flow row (the sub-flow's own terminal Report step when verdict_ref is present, else the terminal step that produced the finding_refs row), propagating that provenance rather than fabricating it (and never stamping Report itself as the origin). A sub-flow with no verdict_ref/finding_refs row to derive provenance from is an input-precondition fault ⇒ result=escalate, failure_origin=upstream — enforced by the 'sub_flow_results (compound INPUT precondition)' M2 contract, since the source row lives in the INPUT shape grammar cannot see.",
+                "description": "Origin of this sub-flow result — the upstream step that PRODUCED the aggregated sub-flow row (the sub-flow's terminal Report step if verdict_ref is present, else the terminal step behind finding_refs), SYNTHESIZED/propagated by Report per README 'source_tool 생산 규칙', not an upstream-carried field and not Report itself. A sub-flow with no derivable provenance row ⇒ result=escalate, failure_origin=upstream (R26 floor — no fabricated source_tool).",
                 "$ref": "./_defs.schema.json#/$defs/SourceTool"
               }
             }
           }
         },
         "sub_flow_count": {
-          "$comment": "R23 count-type — measured count of sub-flows aggregated.",
-          "description": "Number of sub-flows aggregated. CountClaim, never bare int.",
-          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+          "$comment": "NOT a CountClaim — the sub_flows array is model-assembled from the sub_flow_results input, not the stdout of a measuring command. x-m2-validator: sub_flow_count == len(sub_flows) == len(based_on.sub_flow_refs) (array-length cross-check), not a stdout re-hash.",
+          "description": "Number of sub-flows aggregated. Cross-checked count == len(sub_flow_summaries.sub_flows) == len(based_on.sub_flow_refs); never a CountClaim (no command measures a model-assembled sub-flow set).",
+          "$ref": "#/$defs/CrossCheckedCount"
         }
       }
     }
@@ -775,7 +858,7 @@
     {
       "field": "based_on.{investigate_ref,decide_ref,ground_ref,sub_flow_refs}",
       "rule": "§5 RowRef resolution",
-      "check": "Each ref resolves to an existing step_runs/flow row of the expected step within this flow; not a file path. sub_flow_refs present for compound."
+      "check": "Each ref resolves to an existing step_runs/flow row of the expected step within this flow; not a file path. sub_flow_refs present for compound. On the escalate branch based_on is OPTIONAL and may be partial (inputs were partial/absent); whichever refs ARE present must still resolve, giving the orchestrator's NEEDS_CONTEXT routing + 5-accumulated-fail cap machine-resolvable escalate provenance."
     },
     {
       "field": "action_items[].followup_flow_ref",
@@ -789,8 +872,8 @@
     },
     {
       "field": "declared_next_step.declared_next_step",
-      "rule": "R16 chain match",
-      "check": "declared_next_step == orchestrator-injected expected_next_step (reviewer criterion 6, CRITICAL). Mismatch = 'R16 chain violation'. No chain-outside-flow_def step claim (criterion 7)."
+      "rule": "R16 chain match (result ∈ {synthesized, empty_clean} ONLY)",
+      "check": "Applies ONLY on the synthesized|empty_clean branch, which is the only branch carrying declared_next_step. declared_next_step == orchestrator-injected expected_next_step (reviewer criterion 6, CRITICAL). Mismatch = 'R16 chain violation'. No chain-outside-flow_def step claim (criterion 7). NOT APPLICABLE on result=escalate: the escalate branch carries no declared_next_step (only escalate_details); the orchestrator routes via NEEDS_CONTEXT instead of the normal successor."
     },
     {
       "field": "task_list (plan_standalone)",
@@ -804,8 +887,13 @@
     },
     {
       "field": "task_list.task_count / sub_flow_summaries.sub_flow_count",
-      "rule": "R23 count↔stdout derivation",
-      "check": "Re-hash source.raw_stdout to confirm raw_stdout_sha256, then re-derive value; assert value is derivable. A measured count disconnected from its command is the R23 hallucination."
+      "rule": "cardinality cross-check (NOT R23 stdout derivation)",
+      "check": "These count model-SYNTHESIZED arrays, not a measuring command's stdout, so they are CrossCheckedCount integers, not CountClaim. Assert task_list.task_count == len(task_list.tasks); assert sub_flow_summaries.sub_flow_count == len(sub_flow_summaries.sub_flows) == len(based_on.sub_flow_refs). Any cardinality disagreement (e.g. 3 sub_flows, sub_flow_count=7, 2 sub_flow_refs) = FAIL. This is the sole guard that the three parallel compound representations (sub_flows / sub_flow_count / sub_flow_refs) agree, and that task_count matches the task array."
+    },
+    {
+      "field": "sub_flow_results (compound INPUT precondition)",
+      "rule": "Compound input shape well-formedness — well-formed terminal_result AND well-formed sub_flow_type AND a derivable source_tool provenance row on every aggregated sub-flow row (README 'Input preconditions' sub_flow_results row + 'Compound input shape' + 'outcome 생산 규칙' + 'source_tool 생산 규칙')",
+      "check": "On report_type=compound, BEFORE synthesizing sub_flow_summaries (the input shape — Compound input shape — is not part of this OUTPUT schema, so grammar cannot see it), assert on each upstream sub_flow_results row: (1) terminal_result is well-formed ∈ {completed, abandoned, suspended}; (2) sub_flow_type is well-formed ∈ the 16 hyphenated flow-file stems {feature, bugfix, bugfix-p0, bugfix-unreproducible, refactor, performance, migration, test, chore, plan-standalone, review, release, retro, spike, exploration, compound} (cross-cutting decision 1 — closed legal set; an out-of-set/malformed sub_flow_type is otherwise silently trusted since it is an INPUT field absent from the OUTPUT schema); (3) a source_tool provenance row is DERIVABLE — i.e. the row carries verdict_ref (⇒ the sub-flow's terminal Report step) OR at least one finding_refs entry (⇒ the terminal step that produced it), so the REQUIRED output sub_flows[].source_tool can be propagated per 'source_tool 생산 규칙' rather than fabricated (R26 provenance floor — source_tool, like outcome, is absent from the input shape and is otherwise unsourced). A missing/malformed terminal_result OR an out-of-set/malformed sub_flow_type OR a sub-flow with no derivable source_tool provenance row is an input-precondition fault (not a legitimately-empty summary) ⇒ result=escalate, failure_origin=upstream (principle 3: empty-deficit not stamped as empty-legitimate; R26: no fabricated provenance). This is the only place the escalate-on-malformed-input rule is actually enforced for these fields, since the OUTPUT sub_flow_summaries carries terminal_result (required+enum) and source_tool (required) but has no sub_flow_type at all and none of them can represent the garbage-in / unsourced-provenance case (the source rows live only in the INPUT shape)."
     },
     {
       "field": "report_type (flow ↔ step presence)",

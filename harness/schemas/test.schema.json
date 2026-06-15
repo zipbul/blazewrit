@@ -8,9 +8,11 @@
   "additionalProperties": false,
   "required": ["input", "tests_written_count", "red_confirmed_count", "based_on", "unverified"],
 
+  "$comment": "ROOT REQUIRED note: tests_written_count/red_confirmed_count ARE root-required but are Measured(CountClaim)|Omitted DEGRADABLE unions (NOT bare CountClaim). The discriminant is WHETHER A BEHAVIOR-TEST RUNNER WAS INVOKED, not whether a `result` is set. (1) Measured branch — emitted whenever the behavior-test runner actually ran over a (possibly partial) suite: the result∈{red,unexpected_green} success paths AND the cap_exceeded escalate path (caps blew mid-activity AFTER partial tests_added were written AND executed to derive per-test RED status, so a real CountClaim exists over the partial suite — counted from that runner's stdout). (2) Omitted branch — emitted on every path where NO behavior-test runner was invoked, regardless of whether a result is set: the no_op / measured (Performance|Migration) paths (reason=not_applicable), the migration-failed|partial escalate (a Migration flow with no behavior runner — the dry-run tool itself ran, the migration script is what broke; reason=not_applicable, decoupled from 'has a result'), and the precondition-or-runner-absent escalate where test code/execution never happened (reason=tool_absent|tool_failed|timeout). See prose 'Count provenance' note.",
+
   "allOf": [
     {
-      "$comment": "ESCALATE EXCLUSIVITY (prose L74: 'escalate는 result enum 값이 아니다 ... 성공 result 분기와 배타적이다'). escalate is a first-class TERMINAL branch mutually exclusive with the success result verdict. When `escalate` is ABSENT, `result` is required (the success/no_op verdict path); when `escalate` is PRESENT, the precondition/in-scope-failure escalation routes purely on `escalate` and `result` is NOT required (it may be omitted entirely — there is no success result and no success output block).",
+      "$comment": "ESCALATE EXCLUSIVITY (prose L74: 'escalate는 result enum 값이 아니다 ... 성공 result 분기와 배타적이다'). escalate is a first-class TERMINAL branch mutually exclusive with the SUCCESS result verdict. When `escalate` is ABSENT, `result` is required (the success/no_op verdict path); when `escalate` is PRESENT, the precondition/in-scope-failure escalation routes purely on `escalate` and `result` is NOT required (it may be omitted entirely — there is no success result and no success output block). TWO PERMITTED CO-OCCURRENCES (escalate accompanying a diagnostic/partial block — neither is a SUCCESS block, so neither violates exclusivity): (1) prose Migration failed|partial path — a migration_validation block whose dry_run_result.value.outcome=failed|partial MAY (and per the M2 contract MUST) co-occur with escalate(failure_origin=test); that measured-but-failed block is where dry_run_detail (the diagnostic) lives. (2) prose Caps mid-activity path (L192-193) — escalate(failure_origin=cap_exceeded) MAY (and per the M2 contract MUST) co-occur with a PARTIAL tests_added (the tests written before caps blew) plus escalate.remaining_targets (the remaining-AC list); the partial tests_added is NOT a success result block (no `result` is set on the escalate path, so it does not derive result=red) — it is partial-progress diagnostic carried alongside the cap escalation. Because the success-block obligations are SUPPRESSED (not forbidden) under escalate, both diagnostic co-occurrences are grammatically permitted; the M2 cap_exceeded contract (see escalate.remaining_targets) requires the partial tests_added + remaining_targets pairing. All OTHER success blocks remain suppressed under escalate.",
       "if": { "not": { "required": ["escalate"] } },
       "then": { "required": ["result"] }
     },
@@ -53,6 +55,16 @@
         ]
       },
       "then": { "required": ["no_op_details"] }
+    },
+    {
+      "$comment": "MANDATORY FIREBAT SCAN (prose Activity 7 L46 + agents/test.md L22): a test-writing flow MUST run a firebat scan AFTER writing test code, recording its findings_count or — on absence/fail/timeout — firebat_scan.status=omitted. The trigger is 'test code was written', i.e. a non-empty primary behavior-test block (tests_added / coverage_added) — REGARDLESS of escalate. The escalate-absence guard is DELIBERATELY ABSENT here (Defect-1 fix): the cap_exceeded escalate path writes+executes a PARTIAL tests_added before caps blow (see escalate $comment + tests_written_count Measured branch), so that real test code MUST also carry the mandatory scan — exempting it would let a flow that wrote and ran real test code skip the scan Activity 7 makes obligatory. Precondition/runner-absent escalates carry NO tests_added/coverage_added, so they never trip this. measured/migration/no_op flows that write no test code also do not trip it.",
+      "if": {
+        "anyOf": [
+          { "required": ["tests_added"], "properties": { "tests_added": { "minItems": 1 } } },
+          { "required": ["coverage_added"], "properties": { "coverage_added": { "minItems": 1 } } }
+        ]
+      },
+      "then": { "required": ["firebat_scan"] }
     }
   ],
 
@@ -60,7 +72,8 @@
 
     "result": {
       "$comment": "P1+P-residual: the whole result-verdict field, DERIVED from the flow's primary output block (tests_added / coverage_added / profile / migration_validation — NOT tests_added alone). This is the deliberate Investigate-pattern backport (success branches, not just failures). In-scope FAILURES (preconditions, runner-absent, migration dry_run failed|partial, caps) are NOT result values — they route through the separate `escalate` branch with failure_origin.",
-      "description": "Test result verdict. 'red' = at least one written tests_added/coverage_added item has status=RED (→ Test⇄Implement loop). 'unexpected_green' = all filled behavior-test/coverage items are status=unexpected_green (→ signal Verify, not escalate). 'measured' = Performance profile measured or Migration dry_run outcome=ok (→ signal Verify). 'no_op' = legitimately-zero output (well-formed empty AC / Decide-driven 0-derivation) carrying no_op_details. Migration dry_run failed|partial and other in-scope failures do NOT map here — they escalate (failure_origin=test).",
+      "x-validator-contract": "M2 (result derivation precedence + measured primary-block selection, prose L72 tie-break + 'measured primary-block 선택' note): (1) BEHAVIOR-TEST PRECEDENCE — if tests_added/coverage_added has any status=RED ⇒ result=red; else if any behavior-test/coverage item is present (all unexpected_green) ⇒ result=unexpected_green; behavior-test/coverage presence OUTRANKS measured (a flow that also carries a measurement does NOT collapse to measured while behavior tests exist). (2) MEASURED PRIMARY SELECTION — result=measured derives from exactly ONE primary measuring block, the flow's actual primary per orchestrator chain (Performance⇒profile, Migration⇒migration_validation); the non-primary measuring block (if any) is enrichment metadata. (3) NO RUBBER-STAMP — result=measured is FORBIDDEN when the chosen primary's measurement is omitted/failed (profile.baseline.status=omitted, or migration_validation.dry_run_result.status=omitted, or dry_run_result.value.outcome∈{failed,partial}); those route to escalate(failure_origin=test) with result omitted (prose L182-184). Grammar accepts these combinations; this contract is the named rejection hook.",
+      "description": "Test result verdict. 'red' = at least one written tests_added/coverage_added item has status=RED (→ Test⇄Implement loop). 'unexpected_green' = all filled behavior-test/coverage items are status=unexpected_green (→ signal Verify, not escalate); behavior-test/coverage presence outranks measured (see x-validator-contract). 'measured' = the flow's PRIMARY measuring block measured cleanly — Performance profile baseline=measured OR Migration dry_run outcome=ok (→ signal Verify); forbidden when the chosen primary's measurement is omitted/failed (routes to escalate). 'no_op' = legitimately-zero output (well-formed empty AC / Decide-driven 0-derivation) carrying no_op_details. Migration dry_run failed|partial and other in-scope failures do NOT map here — they escalate (failure_origin=test).",
       "type": "string",
       "enum": ["red", "unexpected_green", "measured", "no_op"]
     },
@@ -86,7 +99,7 @@
     },
 
     "escalate": {
-      "$comment": "Mechanical-error / in-scope-failure terminal carrier — present INSTEAD of a result verdict path's success blocks (preconditions PC, test-runner absent, migration dry_run failed|partial, caps mid-activity). failure_origin reuses _defs FailureOrigin restricted to the Test-reachable origins {spec, decide, test, cap_exceeded}. NOT request_upstream_deepen (Decide-only, principle 2). EXCLUSIVE with success: when `escalate` is present (a) `result` is NOT required (root allOf only requires `result` when escalate is absent) and (b) the three conditional primary-block requirements (tests_added/coverage_added for red|unexpected_green, profile|migration_validation for measured, no_op_details for no_op) are SUPPRESSED — the orchestrator routes purely on `escalate`.",
+      "$comment": "Mechanical-error / in-scope-failure terminal carrier — present INSTEAD of a result verdict path's success blocks (preconditions PC, test-runner absent, migration dry_run failed|partial, caps mid-activity). failure_origin reuses _defs FailureOrigin restricted to the Test-reachable origins {spec, decide, test, cap_exceeded}. NOT request_upstream_deepen (Decide-only, principle 2). EXCLUSIVE with success: when `escalate` is present (a) `result` is NOT required (root allOf only requires `result` when escalate is absent) and (b) the three conditional primary-block requirements (tests_added/coverage_added for red|unexpected_green, profile|migration_validation for measured, no_op_details for no_op) are SUPPRESSED — the orchestrator routes purely on `escalate`. CAP_EXCEEDED PARTIAL CO-OCCURRENCE (prose L192-193): on failure_origin=cap_exceeded the step ALSO emits the partial tests_added (tests written before caps blew) and escalate.remaining_targets (the remaining-AC list); x-validator-contract (M2): failure_origin=cap_exceeded ⇒ remaining_targets present (the unaddressed ACs) and the partial tests_added carried alongside — this partial block is diagnostic, not a result-deriving success block (no `result` is set).",
       "description": "OPTIONAL escalate carrier for Test's in-scope failures (mechanical errors): missing/malformed upstream (failure_origin=spec|decide), test-runner absent or migration dry_run failed|partial (failure_origin=test), or caps blown mid-activity (failure_origin=cap_exceeded). reason + evidence (ref or file:line) diagnose it. Routed out-of-band by the orchestrator; never via request_upstream_deepen.",
       "type": "object",
       "additionalProperties": false,
@@ -108,6 +121,12 @@
           "description": "Evidence for the failure (a RowRef-style ref or a file:line pointer).",
           "type": "string",
           "minLength": 1
+        },
+        "remaining_targets": {
+          "$comment": "PARTIAL-PROGRESS carrier for the cap_exceeded path (prose 'Caps mid-activity hit' L192-193): when caps blow mid-activity the step fills tests_added with the tests written so far AND records the still-unaddressed ACs/targets here. This is the home for the 'remaining-AC list' the prose mandates; absent on non-cap escalations.",
+          "description": "REMAINING AC / target list for the cap_exceeded partial-output path. When Step Depth Policy caps blow before every AC got a test, the step emits the partial tests_added AND lists the unaddressed ACs/derivation targets here (each a within-Spec AC id or a Decide-derived target). Present only on failure_origin=cap_exceeded; the orchestrator uses it to resume/route. Absent on spec/decide/test escalations.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
         }
       }
     },
@@ -144,7 +163,8 @@
 
     "tests_added": {
       "$comment": "Core output for behavior-test flows. tests_added[{file_path, test_name, ac_ref?, status:RED|unexpected_green, unexpected_green_reason?}]. status is DERIVED from actual execution: RED = ran and failed; unexpected_green = ran and passed (a first-class normal outcome, NOT escalate). minItems removed and conditionally required only when result ∈ {red, unexpected_green} (see top-level allOf) — measured/no_op/coverage-only flows fill other blocks. Each item carries optional RED-confirmation evidence (M3 degradable), a provenance source_tool (R26 floor), and the R13 unverified KEEP-polarity flag.",
-      "description": "The behavior tests this step wrote. Each entry is a single test traced to the AC (or reproduction/coverage target) it verifies. status is DERIVED from the actual test run: 'RED' = executed and observed failing (Implement turns GREEN); 'unexpected_green' = executed and observed passing (RED was intended but it passed — a normal outcome: already_satisfied / not_reproducible / coverage_over_existing / p0_retroactive). ac_ref (OPTIONAL) is the within-Spec AC identifier (e.g. 'AC-001') for Spec-driven tests, or the reproduction/coverage/derivation target for Decide-driven tests; unexpected_green/no_op cases may legitimately lack an AC id. M2 (test-reviewer/AC traceability): every Spec AC has at least one tests_added entry whose ac_ref names it; reverse, every ac_ref resolves to a real AC in the spec_ref row.",
+      "x-validator-contract": "M2 (source_tool provenance consistency, Defect-3 hole closure): each tests_added item carries TWO runner-provenance fields that grammar cannot couple — the item-level source_tool (R26 floor) and, on the Measured branch of red_confirmation, the inherited Measured.source_tool. These name the SAME run (the item-level source_tool IS the runner that produced red_confirmation's RED/GREEN evidence), so when red_confirmation.status=measured the validator asserts tests_added[i].source_tool == red_confirmation.source_tool (the Measured branch's inherited source_tool — same runner identity); a producer naming 'bun' at item level and 'firebat' inside red_confirmation is REJECTED as inconsistent provenance. On red_confirmation.status=omitted there is no measured source_tool to cross-check (only the item-level floor applies).",
+      "description": "The behavior tests this step wrote. Each entry is a single test traced to the AC (or reproduction/coverage target) it verifies. status is DERIVED from the actual test run: 'RED' = executed and observed failing (Implement turns GREEN); 'unexpected_green' = executed and observed passing (RED was intended but it passed — a normal outcome: already_satisfied / not_reproducible / coverage_over_existing / p0_retroactive). ac_ref (OPTIONAL) is the within-Spec AC identifier (e.g. 'AC-001') for Spec-driven tests, or the reproduction/coverage/derivation target for Decide-driven tests; unexpected_green/no_op cases may legitimately lack an AC id. M2 (test-reviewer/AC traceability): every Spec AC has at least one tests_added entry whose ac_ref names it; reverse, every ac_ref resolves to a real AC in the spec_ref row. M2 (source_tool consistency): the item-level source_tool and the red_confirmation Measured-branch source_tool name the SAME runner (see x-validator-contract).",
       "type": "array",
       "items": {
         "type": "object",
@@ -155,6 +175,11 @@
             "$comment": "unexpected_green_reason is required iff status=unexpected_green.",
             "if": { "properties": { "status": { "const": "unexpected_green" } } },
             "then": { "required": ["unexpected_green_reason"] }
+          },
+          {
+            "$comment": "ANTI-SELF-ASSERTION FLOOR (prose L50/L100 + Defect-3 hole closure): status is DERIVED from actual execution, and M2 re-executes/re-hashes the recorded outcome — so the execution-evidence carrier red_confirmation MUST be present for any status∈{RED,unexpected_green} (i.e. always, given the status enum). Without it the M2 re-execution/re-hash contract has no command/sha to anchor to and status collapses to the exact self-assertion the design forbids. The Measured|Omitted union still lets a degraded run surface as the Omitted branch (R22 first-class absence) — but the FIELD itself is no longer omissible.",
+            "if": { "properties": { "status": { "enum": ["RED", "unexpected_green"] } }, "required": ["status"] },
+            "then": { "required": ["red_confirmation"] }
           }
         ],
         "properties": {
@@ -173,6 +198,10 @@
             "type": "string",
             "minLength": 1
           },
+          "bug_ref": {
+            "description": "OPTIONAL JOIN KEY for the reproduction↔tests_added pairing (Bug Fix flow). When this tests_added entry is the reproduce test paired with a reproduction block, bug_ref carries the SAME §5 RowRef as that reproduction.bug_ref — this is the joinable field the M2 pairing contract matches on (reproduced=true ⇒ this entry status=RED; reproduced=false ⇒ status=unexpected_green/not_reproducible). Absent on non-reproduce tests. NEVER a file path.",
+            "$ref": "./_defs.schema.json#/$defs/RowRef"
+          },
           "status": {
             "description": "Per-test run polarity, DERIVED from actual execution (not self-asserted). 'RED' = ran and failed (Implement turns GREEN); 'unexpected_green' = ran and passed (RED intended but it passed — a first-class normal outcome, signals Verify, not escalate). When 'unexpected_green', unexpected_green_reason is required.",
             "type": "string",
@@ -185,8 +214,8 @@
             "enum": ["already_satisfied", "not_reproducible", "coverage_over_existing", "p0_retroactive"]
           },
           "red_confirmation": {
-            "$comment": "M3 DEGRADE — confirming RED requires RUNNING the test; that run can fail/timeout/be unavailable (firebat absent). Absence is a first-class branch (Measured|Omitted), NOT a null or placeholder. Measured.value carries the observed failing outcome.",
-            "description": "Evidence from actually running this test (the observed run polarity). M3 Measured|Omitted discriminated union on `status`: 'measured' = the test was executed and its outcome observed (value.failed=true ⇒ RED; value.failed=false ⇒ unexpected_green); 'omitted' = the run could not be performed (e.g. test runner/firebat tool_failed/timeout/unavailable — R22 first-class absence). x-validator-contract (M2/R20-adjacent): orchestrator re-executes the test and asserts the recorded outcome (a self-asserted polarity is not truth).",
+            "$comment": "M3 DEGRADE — confirming the run polarity requires RUNNING the test; that run can fail/timeout/be unavailable (firebat absent). Absence-of-VALUE is a first-class branch (Measured|Omitted), NOT a null or placeholder. Measured.value carries the observed outcome. REQUIRED per-item (item-level allOf if/then above): because status is derived from execution and M2 re-executes/re-hashes it, the evidence carrier cannot be field-omitted for any status — a non-runnable case surfaces as the Omitted branch, NOT a missing field.",
+            "description": "Evidence from actually running this test (the observed run polarity) — the per-test re-hashable anchor M2 re-executes against. REQUIRED for every item (status is always RED|unexpected_green). M3 Measured|Omitted discriminated union on `status`: 'measured' = the test was executed and its outcome observed (value.failed=true ⇒ RED; value.failed=false ⇒ unexpected_green); 'omitted' = the run could not be performed (e.g. test runner/firebat tool_failed/timeout/unavailable — R22 first-class absence). x-validator-contract (M2/R20-adjacent): orchestrator re-executes the test and asserts the recorded outcome (a self-asserted polarity is not truth).",
             "type": "object",
             "required": ["status"],
             "oneOf": [
@@ -196,7 +225,7 @@
                   "value": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["failed", "command"],
+                    "required": ["failed", "command", "raw_stdout_sha256"],
                     "properties": {
                       "failed": {
                         "description": "Observed run polarity: true = the test FAILED (RED); false = the test PASSED (unexpected_green). M2 re-executes and confirms the recorded value matches the item's status (failed=true ⇔ status=RED, failed=false ⇔ status=unexpected_green).",
@@ -208,7 +237,7 @@
                         "minLength": 1
                       },
                       "raw_stdout_sha256": {
-                        "description": "SHA-256 of the captured runner stdout. M2 re-hashes and re-derives the failing outcome.",
+                        "description": "REQUIRED SHA-256 of the captured runner stdout — the load-bearing anchor M2 re-hashes to re-derive the failing/passing outcome (mirrors CountClaim, where the sha is likewise required). Without it the M2 re-hash contract has nothing to re-hash and status collapses to self-assertion.",
                         "$ref": "./_defs.schema.json#/$defs/Sha256"
                       }
                     }
@@ -238,12 +267,17 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["file_path", "area", "status"],
+        "required": ["file_path", "area", "status", "red_confirmation", "source_tool", "unverified"],
         "allOf": [
           {
             "$comment": "unexpected_green_reason is required iff status=unexpected_green.",
             "if": { "properties": { "status": { "const": "unexpected_green" } } },
             "then": { "required": ["unexpected_green_reason"] }
+          },
+          {
+            "$comment": "ANTI-SELF-ASSERTION FLOOR (prose L50/L117 + Defect-1/Defect-2 closure): coverage_added is a first-class PRIMARY result-deriving block exactly like tests_added, so its per-item status (always RED|unexpected_green) is execution-derived and re-hashed by M2 — the execution-evidence carrier red_confirmation MUST be present on every item (mirrors tests_added). Without it the red_confirmed_count count-denominator re-derivation has no per-item raw_stdout_sha256 anchor for the coverage_added portion (Defect-2), and status collapses to the self-assertion the design forbids. The Measured|Omitted union still surfaces a degraded run as the Omitted branch (R22) — the FIELD is not omissible.",
+            "if": { "properties": { "status": { "enum": ["RED", "unexpected_green"] } }, "required": ["status"] },
+            "then": { "required": ["red_confirmation"] }
           }
         ],
         "properties": {
@@ -263,29 +297,96 @@
             "enum": ["RED", "unexpected_green"]
           },
           "unexpected_green_reason": {
-            "description": "Why this coverage test came up GREEN. Required when status=unexpected_green (typically 'coverage_over_existing').",
+            "$comment": "Coverage flows are Refactor/Test (prose L42), NOT Bug Fix — so the Bug-Fix-only reasons not_reproducible (reproduce) and p0_retroactive (P0 retroactive) cannot legitimately arise here. Restricted to the coverage-reachable reasons only (prose L113 pairs coverage with coverage_over_existing).",
+            "description": "Why this coverage test came up GREEN. Required when status=unexpected_green (typically 'coverage_over_existing'; 'already_satisfied' when the covered area's behavior was already met). The Bug-Fix-only reasons (not_reproducible / p0_retroactive) are excluded — coverage flows are Refactor/Test, not Bug Fix.",
             "type": "string",
-            "enum": ["already_satisfied", "not_reproducible", "coverage_over_existing", "p0_retroactive"]
+            "enum": ["already_satisfied", "coverage_over_existing"]
+          },
+          "red_confirmation": {
+            "$comment": "M3 DEGRADE — mirrors tests_added.red_confirmation (Defect-1/Defect-2 closure). coverage_added is a first-class PRIMARY result-deriving block, so confirming its per-item run polarity requires RUNNING the coverage test; that run can fail/timeout/be unavailable. Absence-of-VALUE is a first-class branch (Measured|Omitted), NOT a null/placeholder. REQUIRED per-item (item-level allOf if/then above): status is execution-derived (always RED|unexpected_green) and M2 re-executes/re-hashes it, so the evidence carrier cannot be field-omitted — a non-runnable case surfaces as the Omitted branch. This per-item raw_stdout_sha256 is the anchor red_confirmed_count's count-denominator re-derivation needs for the coverage_added portion (Defect-2).",
+            "description": "Evidence from actually running this coverage test (the observed run polarity) — the per-test re-hashable anchor M2 re-executes against. REQUIRED for every item (status is always RED|unexpected_green). M3 Measured|Omitted discriminated union on `status`: 'measured' = the test was executed and its outcome observed (value.failed=true ⇒ RED; value.failed=false ⇒ unexpected_green); 'omitted' = the run could not be performed (test runner/firebat tool_failed/timeout/unavailable — R22 first-class absence). x-validator-contract (M2): orchestrator re-executes the test and asserts the recorded outcome; red_confirmed_count re-derives its RED-count denominator from these anchors.",
+            "type": "object",
+            "required": ["status"],
+            "oneOf": [
+              {
+                "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Measured" }],
+                "properties": {
+                  "value": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["failed", "command", "raw_stdout_sha256"],
+                    "properties": {
+                      "failed": {
+                        "description": "Observed run polarity: true = the coverage test FAILED (RED); false = it PASSED (unexpected_green). M2 re-executes and confirms the recorded value matches the item's status (failed=true ⇔ status=RED, failed=false ⇔ status=unexpected_green).",
+                        "type": "boolean"
+                      },
+                      "command": {
+                        "description": "Exact command run to confirm the coverage test's run polarity (e.g. 'bun test path/to/file').",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "raw_stdout_sha256": {
+                        "description": "REQUIRED SHA-256 of the captured runner stdout — the load-bearing anchor M2 re-hashes to re-derive the failing/passing outcome and the red_confirmed_count RED-count denominator (mirrors tests_added.red_confirmation). Without it the M2 re-hash contract has nothing to re-hash and status collapses to self-assertion.",
+                        "$ref": "./_defs.schema.json#/$defs/Sha256"
+                      }
+                    }
+                  }
+                }
+              },
+              { "$ref": "./_defs.schema.json#/$defs/Omitted" }
+            ]
+          },
+          "source_tool": {
+            "description": "PROVENANCE (R26 floor, required) — mirrors tests_added. The tool/runner that produced this coverage entry's run evidence (e.g. 'bun', 'firebat'). A coverage entry without a source_tool is unsourced and rejected. coverage_added is a first-class PRIMARY result-deriving block, equivalent to tests_added, so it carries the same irreducible floor. M2 (source_tool consistency, mirrors tests_added): when red_confirmation.status=measured the item-level source_tool == red_confirmation.source_tool (same runner identity).",
+            "$ref": "./_defs.schema.json#/$defs/SourceTool"
+          },
+          "unverified": {
+            "$comment": "R13 floor, KEEP polarity — mirrors tests_added. coverage_added is a first-class PRIMARY block, so its unverified claim must have a carrier to propagate to Verify.",
+            "description": "R13 KEEP-polarity floor flag (required). true = a claim about this coverage test was not verified by Test itself and MUST propagate downstream to Verify. Never forbidden true at this intermediate step.",
+            "type": "boolean"
           }
         }
       }
     },
 
     "tests_written_count": {
-      "$comment": "R23 count TYPE — 'N tests written' is a measured count, NEVER a bare integer.",
-      "description": "R23 CountClaim. The number of tests written, asserted as MEASURED (counted from the test runner / file scan). Bare integer forbidden — the model must emit the command + sha256 of its stdout. M2: re-parse source.raw_stdout, assert value derivable. Equals tests_added.length when consistent (cross-check is M2, not grammar).",
-      "$ref": "./_defs.schema.json#/$defs/CountClaim"
+      "$comment": "R23 count TYPE wrapped in an M3 DEGRADABLE union (Measured(CountClaim)|Omitted). 'N tests written' is a measured count NEVER a bare integer. The Measured|Omitted discriminant is WHETHER A BEHAVIOR-TEST RUNNER WAS INVOKED, not whether a `result` is set: the result∈{red,unexpected_green} paths AND the cap_exceeded escalate path (the runner ran over the PARTIAL suite, so a real CountClaim exists) emit Measured; every path with no behavior runner (no_op / measured / migration-failed|partial escalate / precondition-or-runner-absent escalate) emits Omitted (R22 first-class absence). Measured branch's value is the R23 CountClaim (command + sha256 of stdout).",
+      "x-validator-contract": "M2 (Omitted.reason ↔ runner-invocation coupling, prose 'Count provenance'): grammar leaves the shared Omitted.reason enum broad (tool_absent|tool_failed|timeout|unavailable|skipped|not_applicable), so this code check binds tests_written_count/red_confirmed_count's branch+reason to WHETHER A BEHAVIOR-TEST RUNNER WAS INVOKED (NOT to whether a result is set). (A) RUNNER RAN ⇒ Measured: result∈{red,unexpected_green} AND failure_origin=cap_exceeded (the runner ran over the partial tests_added before caps blew, so a real CountClaim over the partial suite exists). (B) NO RUNNER ⇒ Omitted: result∈{no_op, measured} ⇒ Omitted.reason MUST be not_applicable (no runner invoked, not a tool degrade); failure_origin=test caused by a Migration dry_run outcome∈{failed,partial} (a Migration flow — no behavior runner ran; the dry-run tool itself ran fine, the migration script broke) ⇒ Omitted.reason MUST be not_applicable (decoupled from 'has a result' — bound to 'no behavior-test runner was invoked'); a precondition-or-runner-ABSENT escalate (no test code/execution) ⇒ Omitted.reason ∈ {tool_absent, tool_failed, timeout}. The values unavailable|skipped are NOT valid for these two counts; a producer emitting result=no_op with reason=skipped passes grammar but this contract rejects it. COUNT-DENOMINATOR (Defect-5 fix): on the Measured branch re-parse source.raw_stdout and assert tests_written_count.value == the TOTAL number of written behavior-test items (tests_added + coverage_added items, all statuses; on cap_exceeded this is the partial suite). Do NOT equate it to red_confirmed_count when unexpected_green items exist.",
+      "description": "R23 CountClaim wrapped in M3 Measured|Omitted. The branch is chosen by whether a behavior-test runner ran, NOT by whether a result is set. 'measured' = a behavior-test runner ran and the written-test count was counted from its stdout (value = CountClaim: command + raw_stdout_sha256) — the result∈{red,unexpected_green} paths AND the cap_exceeded escalate path (runner ran over the partial suite). 'omitted' = no behavior runner was invoked: no_op legitimately-zero / Performance|Migration measured path / migration-failed|partial escalate (Migration flow, no behavior runner) ⇒ reason=not_applicable; precondition-or-runner-absent escalate (no test code/execution) ⇒ tool_absent|tool_failed|timeout. The broader unavailable|skipped enum values are NOT valid here — see x-validator-contract. Bare integer forbidden. M2: on the measured branch re-parse source.raw_stdout and assert value == the TOTAL written behavior-test count (tests_added + coverage_added items, all statuses) — NOT only the RED ones.",
+      "type": "object",
+      "required": ["status"],
+      "oneOf": [
+        {
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Measured" }],
+          "properties": {
+            "value": { "$ref": "./_defs.schema.json#/$defs/CountClaim" }
+          }
+        },
+        { "$ref": "./_defs.schema.json#/$defs/Omitted" }
+      ]
     },
 
     "red_confirmed_count": {
-      "$comment": "R23 count TYPE — 'N RED confirmed' is a measured count from re-running the tests.",
-      "description": "R23 CountClaim. The number of tests that were RUN and confirmed failing (RED). Measured count → CountClaim (command + raw_stdout_sha256). M2: re-execute the suite, re-derive the failing count from raw_stdout, assert value. Self-asserted 'N RED' is the exact R23 hallucination this forbids.",
-      "$ref": "./_defs.schema.json#/$defs/CountClaim"
+      "$comment": "R23 count TYPE wrapped in an M3 DEGRADABLE union (Measured(CountClaim)|Omitted). 'N RED confirmed' is a measured count from re-running the tests. The Measured|Omitted discriminant is WHETHER A BEHAVIOR-TEST RUNNER WAS INVOKED, not whether a result is set: the result∈{red,unexpected_green} paths AND the cap_exceeded escalate path (the runner ran over the partial suite, deriving per-test RED status) emit Measured; every path with no behavior runner (no_op / measured / migration-failed|partial escalate / precondition-or-runner-absent escalate) emits Omitted.",
+      "x-validator-contract": "M2 (Omitted.reason ↔ runner-invocation coupling, prose 'Count provenance'): same binding as tests_written_count, keyed on WHETHER A BEHAVIOR-TEST RUNNER WAS INVOKED (NOT on whether a result is set). (A) RUNNER RAN ⇒ Measured: result∈{red,unexpected_green} AND failure_origin=cap_exceeded (runner ran over the partial tests_added, so the RED-confirmed count exists over the partial suite). (B) NO RUNNER ⇒ Omitted: result∈{no_op, measured} ⇒ Omitted.reason MUST be not_applicable; a migration dry_run outcome∈{failed,partial} escalate (Migration flow, no behavior runner; dry-run tool ran fine, migration script broke) ⇒ Omitted.reason MUST be not_applicable (decoupled from 'has a result' — bound to 'no behavior-test runner was invoked'); a precondition-or-runner-ABSENT escalate ⇒ Omitted.reason ∈ {tool_absent, tool_failed, timeout}; the shared-enum values unavailable|skipped are rejected for this count. COUNT-DENOMINATOR (Defect-5 fix): on the Measured branch re-execute the suite, re-derive the failing count from raw_stdout, and assert red_confirmed_count.value == the number of tests_added/coverage_added items with status=RED (the RED-confirmed subset, re-derived from runner stdout; on cap_exceeded over the partial suite) — NOT tests_added.length and NOT tests_written_count.value, since a mixed red/unexpected_green flow (prose L72) has fewer RED items than total written items.",
+      "description": "R23 CountClaim wrapped in M3 Measured|Omitted. The branch is chosen by whether a behavior-test runner ran, NOT by whether a result is set. 'measured' = the suite was RUN and the RED-confirmed count derived from its stdout (value = CountClaim: command + raw_stdout_sha256) — the result∈{red,unexpected_green} paths AND the cap_exceeded escalate path (runner ran over the partial suite). 'omitted' = no behavior suite was run: no_op / Performance|Migration measured / migration-failed|partial escalate (Migration flow, no behavior runner) ⇒ reason=not_applicable; precondition-or-runner-absent escalate ⇒ tool_absent|tool_failed|timeout. unavailable|skipped NOT valid — see x-validator-contract. Self-asserted 'N RED' is the exact R23 hallucination this forbids. M2: on the measured branch re-execute the suite, re-derive the failing count, and assert value == the count of tests_added/coverage_added items with status=RED — NOT the total written count (which tests_written_count carries) when statuses are mixed.",
+      "type": "object",
+      "required": ["status"],
+      "oneOf": [
+        {
+          "allOf": [{ "$ref": "./_defs.schema.json#/$defs/Measured" }],
+          "properties": {
+            "value": { "$ref": "./_defs.schema.json#/$defs/CountClaim" }
+          }
+        },
+        { "$ref": "./_defs.schema.json#/$defs/Omitted" }
+      ]
     },
 
     "reproduction": {
-      "$comment": "Bug Fix flow only. {test_path, bug_ref}. bug_ref is a §5 RowRef (the Decide/bug-source row), NOT a file path.",
-      "description": "OPTIONAL — Bug Fix flow. The test that reproduces the bug (RED; Implement's fix turns it GREEN). Present only on Bug Fix chains. test_path is a real on-disk test file path (git-versioned code); bug_ref is a §5 RowRef to the upstream Decide or Investigate step_runs row describing the bug (the legacy `decision_record` field name does NOT exist in the Decide schema — P3/P8 correction). M2 (test-reviewer): the reproduction test actually reproduces the bug.",
+      "$comment": "Bug Fix flow only. {test_path, bug_ref, reproduced}. bug_ref is a §5 RowRef (the Decide/bug-source row), NOT a file path. reproduction is METADATA, NOT a primary result-deriving block — it never appears in the root allOf primary-block anyOf. Every reproduction (reproduced true AND false) is always carried by a PAIRED tests_added entry (the reproduce test) whose status drives result derivation; reproduction itself contributes no result. See x-validator-contract.",
+      "x-validator-contract": "M2 (reproduction↔tests_added pairing): every reproduction MUST be mirrored by a paired tests_added entry, JOINED ON bug_ref — the paired entry is the tests_added item whose bug_ref equals this reproduction.bug_ref (the joinable key; with multiple bugs the validator matches reproduction.bug_ref ⇔ tests_added[].bug_ref). For the matched entry: reproduced=true ⇒ status=RED; reproduced=false ⇒ status=unexpected_green with unexpected_green_reason=not_reproducible. result is DERIVED from the paired tests_added entry's status, NOT from reproduction (reproduction is metadata, not a primary result block). Grammar cannot express this cross-field pairing/join; it is enforced as an M2 contract. JOIN COMPLETENESS (Defect-5 fix — bug_ref is OPTIONAL on tests_added, so the join key can be missing on one side): when a reproduction block is present, EXACTLY ONE tests_added entry MUST carry a matching bug_ref; a reproduction whose bug_ref joins to ZERO tests_added entries (no paired reproduce test — e.g. a stale/malformed upstream that emitted reproduced=true with no tests_added carrying that bug_ref) OR to MORE THAN ONE entry (ambiguous join) is REJECTED. REPRODUCTION-ABSENCE (Defect-2 hole closure): reproduction MUST be ABSENT whenever there is no joinable tests_added entry to pair with — i.e. on result=no_op (zero written tests), result=measured (Performance/Migration — no behavior test), and escalate-only paths (no test code). A reproduction co-occurring with any of these (no joinable tests_added[].bug_ref) is REJECTED.",
+      "description": "OPTIONAL — Bug Fix flow. The test that reproduces the bug (RED; Implement's fix turns it GREEN). Present only on Bug Fix chains. test_path is a real on-disk test file path (git-versioned code); bug_ref is a §5 RowRef to the upstream Decide or Investigate step_runs row describing the bug (the legacy `decision_record` field name does NOT exist in the Decide schema — P3/P8 correction). reproduction is METADATA, NOT a result-deriving primary block: every reproduction (true and false) is paired with a tests_added entry that drives result derivation. M2 (test-reviewer): the reproduction test actually reproduces the bug, and the reproduction↔tests_added pairing holds (see x-validator-contract).",
       "type": "object",
       "additionalProperties": false,
       "required": ["test_path", "bug_ref", "reproduced"],
@@ -296,7 +397,7 @@
           "minLength": 1
         },
         "bug_ref": {
-          "description": "§5 RowRef to the upstream row that defines the bug (the Decide or Investigate step_runs row describing the bug). NEVER a file path.",
+          "description": "§5 RowRef to the upstream row that defines the bug (the Decide or Investigate step_runs row describing the bug). NEVER a file path. JOIN KEY: the paired reproduce test in tests_added carries the SAME bug_ref so the M2 pairing contract can match reproduction↔tests_added (see x-validator-contract).",
           "$ref": "./_defs.schema.json#/$defs/RowRef"
         },
         "reproduced": {
@@ -307,8 +408,9 @@
     },
 
     "profile": {
-      "$comment": "Performance flow only. {metric, baseline, target}. baseline is MEASURED (CountClaim) when available, but profiling tools are degradable → baseline is a Measured(CountClaim)|Omitted union (R22/M3). target is the design goal, not a measurement.",
-      "description": "OPTIONAL — Performance flow. The profiling measurement: which metric, its measured baseline, and the target. Present only on Performance chains. baseline is M3-degradable (perf tooling can be ABSENT/FAIL/timeout — R22 first-class absence), and when measured it is a CountClaim (a measured number, not a bare integer — R23). target is the goal the benchmark asserts against (an M2/R20 verify_probe-style threshold, not itself a measurement).",
+      "$comment": "Performance flow only. {metric, baseline, target}. baseline is MEASURED (CountClaim) when available, but profiling tools are degradable → baseline is a Measured(CountClaim)|Omitted union (R22/M3). target is the design goal, not a measurement. ANTI-RUBBER-STAMP (mirrors migration_validation L369): grammar accepts result=measured alongside baseline.status=omitted; the inner measured-state coupling is closed by x-validator-contract, not grammar.",
+      "x-validator-contract": "M2 (result=measured ⇒ profile.baseline.status=measured, prose L69/L116/L200): when result=measured is derived from this Performance block, profile.baseline.status MUST be measured (a measured profile result cannot rest on an omitted baseline). Conversely when profile.baseline.status=omitted: if the profiler is the flow's SOLE output the step escalates (failure_origin=test, prose L174) and does NOT set result=measured; if behavior tests also exist they drive result (red|unexpected_green) and profile is enrichment metadata. Grammar accepts result=measured with baseline.status=omitted; this contract rejects that rubber-stamp.",
+      "description": "OPTIONAL — Performance flow. The profiling measurement: which metric, its measured baseline, and the target. Present only on Performance chains. baseline is M3-degradable (perf tooling can be ABSENT/FAIL/timeout — R22 first-class absence), and when measured it is a CountClaim (a measured number, not a bare integer — R23). target is the goal the benchmark asserts against (an M2/R20 verify_probe-style threshold, not itself a measurement). x-validator-contract (M2): result=measured ⇒ baseline.status=measured; baseline.status=omitted routes to escalate (sole output) or to the behavior-test result (non-sole) — never to result=measured.",
       "type": "object",
       "additionalProperties": false,
       "required": ["metric", "unit", "baseline", "target", "comparator"],
@@ -364,8 +466,9 @@
           "minLength": 1
         },
         "dry_run_result": {
-          "$comment": "M3 DEGRADE — the dry-run outcome. Measured branch carries the executed result + provenance; Omitted when the dry-run could not run.",
-          "description": "Outcome of the migration dry-run. M3 Measured|Omitted on `status`: 'measured' = dry-run executed (value carries outcome + the command that ran); 'omitted' = dry-run tool absent/failed/timeout (R22). x-validator-contract (M2): re-execute the dry-run, re-hash its stdout, assert the recorded outcome.",
+          "$comment": "M3 DEGRADE — the dry-run outcome. Measured branch carries the executed result + provenance; Omitted when the dry-run could not run. ANTI-RUBBER-STAMP (prose L76): outcome failed|partial is an in-scope Test failure, NOT a measured success — grammar cannot couple it to escalate, so see x-validator-contract.",
+          "x-validator-contract": "M2 (anti-rubber-stamp, prose L76/L130/L200): when dry_run_result.value.outcome ∈ {failed, partial}, the output MUST carry escalate with failure_origin=test AND MUST NOT set result=measured (result is omitted on the escalate path); dry_run_detail MUST be present as the diagnostic. Only outcome=ok maps to result=measured (with no escalate). Grammar accepts outcome=failed alongside result=measured and no escalate; this contract is the named enforcement hook that rejects that rubber-stamp.",
+          "description": "Outcome of the migration dry-run. M3 Measured|Omitted on `status`: 'measured' = dry-run executed (value carries outcome + the command that ran); 'omitted' = dry-run tool absent/failed/timeout (R22). x-validator-contract (M2): re-execute the dry-run, re-hash its stdout, assert the recorded outcome; AND enforce outcome∈{failed,partial} ⇒ escalate(failure_origin=test) present and result≠measured (see contract above).",
           "type": "object",
           "required": ["status"],
           "oneOf": [
@@ -375,7 +478,7 @@
                 "value": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["outcome", "command"],
+                  "required": ["outcome", "command", "raw_stdout_sha256"],
                   "properties": {
                     "outcome": {
                       "description": "Dry-run verdict: did the migration apply cleanly and reverse cleanly? 'ok' = dry-run passed → result=measured; 'failed'|'partial' = the migration script itself is broken (Test's in-scope failure) → NOT mapped to a result; escalate(failure_origin=test) with dry_run_detail.",
@@ -393,7 +496,7 @@
                       "minLength": 1
                     },
                     "raw_stdout_sha256": {
-                      "description": "SHA-256 of the dry-run stdout. M2 re-hashes and re-derives outcome.",
+                      "description": "REQUIRED SHA-256 of the dry-run stdout — the load-bearing anchor the M2 contract re-hashes to re-derive the recorded outcome. Required on the Measured branch so the outcome the M2 re-hash re-derives always has a hash anchor (mirrors red_confirmation).",
                       "$ref": "./_defs.schema.json#/$defs/Sha256"
                     },
                     "reversible": {
@@ -411,8 +514,8 @@
     },
 
     "firebat_scan": {
-      "$comment": "agents/test.md L22 'Run firebat scan after writing test code'. firebat is MCP-backed → degradable (Measured|Omitted, R22/M3). Optional: only present when the step runs the scan.",
-      "description": "OPTIONAL — result of the firebat scan run after writing test code (agent rule). firebat is MCP-backed and degradable: M3 Measured|Omitted on `status` — 'measured' = scan ran (value carries findings count as an R23 CountClaim); 'omitted' = firebat unavailable/failed/timeout (R22 first-class absence). NOT nullable, NOT a placeholder.",
+      "$comment": "agents/test.md L22 'Run firebat scan after writing test code'. firebat is MCP-backed → degradable (Measured|Omitted, R22/M3). CONDITIONALLY REQUIRED (root allOf): whenever a primary behavior-test block (tests_added/coverage_added) is non-empty this field is REQUIRED — the mandatory scan's non-execution must surface as the Omitted branch, never as field-omission. This trigger is NOT guarded by escalate-absence (Defect-1 fix): the cap_exceeded escalate path writes a PARTIAL tests_added (real, executed test code), so the scan is required there too. Precondition/runner-absent escalates and measured(Performance|Migration)/no_op flows write no test code, so it is absent there.",
+      "description": "Result of the firebat scan run after writing test code (agent rule). CONDITIONALLY REQUIRED whenever the step wrote a non-empty primary behavior-test block (tests_added/coverage_added) — the scan is mandatory on test-writing flows, so its non-execution is the Omitted branch, not field-omission. This holds even on the cap_exceeded escalate path, which writes+executes a partial tests_added (real test code that must also be scanned). firebat is MCP-backed and degradable: M3 Measured|Omitted on `status` — 'measured' = scan ran (value carries findings count as an R23 CountClaim); 'omitted' = firebat unavailable/failed/timeout (R22 first-class absence). NOT nullable, NOT a placeholder.",
       "type": "object",
       "required": ["status"],
       "oneOf": [

@@ -65,6 +65,11 @@ export class BlazewritApi {
     return this.http.get<ConnectionVm[]>(`${this.base}/api/connections`);
   }
 
+  /** Center intake: submit a raw intent; the backend (meta agent) triages + routes + runs. */
+  submitIntent(request: string, hitl = false): Observable<{ accepted: boolean; workItemId?: string }> {
+    return this.http.post<{ accepted: boolean; workItemId?: string }>(`${this.base}/api/run`, { request, hitl });
+  }
+
   /** SSE URL for a step run's live agent-event stream. */
   streamUrl(stepRunId: string): string {
     return `${this.base}/api/step-runs/${stepRunId}/stream`;

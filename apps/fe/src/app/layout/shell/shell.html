@@ -15,6 +15,19 @@
     <span class="live"><span class="dot"></span>{{ liveAgents() }} agents live · ⌘K</span>
   </header>
 
+  <form class="composer glass" (submit)="$event.preventDefault(); submitIntent(q.value, h.checked); q.value = ''">
+    <input
+      #q
+      class="prompt"
+      type="text"
+      name="intent"
+      autocomplete="off"
+      placeholder="의도를 입력하세요 — blazewrit이 분석해 워크플로우로 라우팅합니다…"
+      aria-label="Center prompt" />
+    <label class="hitl"><input #h type="checkbox" /> 검토(HITL)</label>
+    <button type="submit" class="run">▶ Run</button>
+  </form>
+
   @if (loadError(); as err) {
     <div class="error-banner" role="alert">⚠ {{ err }}</div>
   }

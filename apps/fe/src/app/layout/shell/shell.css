@@ -149,3 +149,39 @@
   margin-left: auto;
   color: var(--muted-foreground);
 }
+
+/* Center prompt composer */
+.composer {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.6rem 1rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px;
+}
+.composer .prompt {
+  flex: 1;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  padding: 0.6rem 0.8rem;
+  outline: none;
+}
+.composer .prompt:focus { border-color: rgba(120, 200, 255, 0.7); }
+.composer .run {
+  background: linear-gradient(135deg, #2bd1ff, #6a8cff);
+  color: #00121e;
+  font-weight: 700;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  cursor: pointer;
+}
+.composer .run:hover { filter: brightness(1.08); }
+
+.composer .hitl {
+  display: flex; align-items: center; gap: 0.35rem;
+  font-size: 0.8rem; color: var(--muted-foreground); white-space: nowrap; cursor: pointer;
+}

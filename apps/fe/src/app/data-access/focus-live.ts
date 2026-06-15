@@ -51,12 +51,17 @@ export class FocusLive {
     return f ? (this.store.flowFor(f) ?? null) : null;
   });
 
-  private readonly focusFlowId = computed(() => this.focusFlow()?.id ?? null);
+  // Re-fetch step runs whenever the focused flow changes OR a live event ticks, so the
+  // metro advances in real time as the backend persists each step run.
+  private readonly stepRunsTrigger = computed(() => ({
+    id: this.focusFlow()?.id ?? null,
+    tick: this.store.liveTick(),
+  }));
   readonly stepRuns = toSignal(
-    toObservable(this.focusFlowId).pipe(
+    toObservable(this.stepRunsTrigger).pipe(
       // catchError INSIDE switchMap: a failed fetch maps to [] without terminating the
-      // outer toObservable pipeline, so later focus changes keep updating (self-healing).
-      switchMap((id) =>
+      // outer toObservable pipeline, so later changes keep updating (self-healing).
+      switchMap(({ id }) =>
         id ? this.api.stepRuns(id).pipe(catchError(() => of([] as StepRunDto[]))) : of([] as StepRunDto[]),
       ),
     ),

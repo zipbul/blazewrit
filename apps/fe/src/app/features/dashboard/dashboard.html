@@ -11,7 +11,7 @@
             <span class="n" role="img" [attr.aria-label]="step.name + ': ' + step.state"
                   [class.dn]="step.state === 'done'" [class.ac]="step.state === 'active'"
                   [class.gh]="step.state === 'pending'"></span>
-            <small [class.cur]="step.state === 'active'">{{ step.name }}</small>
+            <small [class.cur]="step.state === 'active'" [class.dn]="step.state === 'done'">{{ step.name }}</small>
           </div>
           @if (!last) { <span class="sg" [class.dn]="step.state === 'done'"></span> }
         }

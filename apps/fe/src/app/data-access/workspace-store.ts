@@ -28,15 +28,37 @@ export class WorkspaceStore {
 
   readonly loadError = signal<string | null>(null);
 
+  /** Bumped on every live (SSE) backend event so views re-derive (e.g. re-fetch step runs). */
+  readonly liveTick = signal(0);
+
+  private readonly onError = (what: string) => (err: unknown) =>
+    this.loadError.set(`${what} 로드 실패: ${err instanceof Error ? err.message : String(err)}`);
+
   constructor() {
-    // One-shot GETs complete after a single emission — no teardown needed for a root singleton.
-    const onError = (what: string) => (err: unknown) =>
-      this.loadError.set(`${what} 로드 실패: ${err instanceof Error ? err.message : String(err)}`);
-    this.api.projects().subscribe({ next: (v) => this.projects.set(v), error: onError('projects') });
-    this.api.workItems().subscribe({ next: (v) => this.workItems.set(v), error: onError('work-items') });
-    this.api.flows().subscribe({ next: (v) => this.flows.set(v), error: onError('flows') });
-    this.api.decisions().subscribe({ next: (v) => this.decisions.set(v), error: onError('decisions') });
-    this.api.connections().subscribe({ next: (v) => this.connections.set(v), error: onError('connections') });
+    this.reload();
+    this.api.connections().subscribe({ next: (v) => this.connections.set(v), error: this.onError('connections') });
+  }
+
+  /** Re-fetch the projections that change as flows run (after a center prompt / live tick). */
+  reload(): void {
+    this.api.projects().subscribe({ next: (v) => this.projects.set(v), error: this.onError('projects') });
+    this.api.workItems().subscribe({ next: (v) => this.workItems.set(v), error: this.onError('work-items') });
+    this.api.flows().subscribe({ next: (v) => this.flows.set(v), error: this.onError('flows') });
+    this.api.decisions().subscribe({ next: (v) => this.decisions.set(v), error: this.onError('decisions') });
+  }
+
+  /** Center intake: submit a raw intent (optionally HITL-gated), then refresh. */
+  submitIntent(request: string, hitl = false): void {
+    this.api.submitIntent(request, hitl).subscribe({
+      next: () => this.reload(),
+      error: this.onError('intent'),
+    });
+  }
+
+  /** Called by LiveSync on each backend SSE event: re-pull snapshots + tick derived views. */
+  notifyLive(): void {
+    this.liveTick.update((t) => t + 1);
+    this.reload();
   }
 
   flowFor(workItem: WorkItemDto): FlowDto | undefined {
