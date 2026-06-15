@@ -89,8 +89,9 @@ export async function runFlow(flowType: FlowType, deps: RunFlowDeps): Promise<Fl
     }
     priorOutputs.push({ step: step.name, output });
 
-    // HITL gate: pause after Decide for human approval.
-    if (step.name === 'decide' && deps.hitl && deps.requestDecision) {
+    // HITL gate: blazewrit's model is "the human makes the decisions" — pause at Decide
+    // and surface the choice to the inbox (agent-initiated, not a user-toggled option).
+    if (step.name === 'decide' && deps.requestDecision) {
       await deps.store.setStatus(flowId, 'suspended');
       const answer = await deps.requestDecision({
         flowId,

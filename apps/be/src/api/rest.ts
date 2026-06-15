@@ -152,11 +152,15 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     };
   };
 
+  // Map the classified flow type to the work_item type enum (bug | feature | task).
+  const workItemType = (flowType: ReturnType<StubTriage['classify']>): string =>
+    flowType === 'bugfix' ? 'bug' : flowType === 'feature' ? 'feature' : 'task';
+
   /** Create the work item for a (now active) project and run its flow in the background. */
-  const launchFlow = (projectId: string, request: string, flowType: ReturnType<StubTriage['classify']>, hitl = false): string => {
+  const launchFlow = (projectId: string, request: string, flowType: ReturnType<StubTriage['classify']>): string => {
     const workItemId = newId();
     void (async () => {
-      await sql`insert into work_items (id, project_id, type, state, title) values (${workItemId}, ${projectId}, ${'feature'}, ${'in_flow'}, ${request})`;
+      await sql`insert into work_items (id, project_id, type, state, title) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request})`;
       flowHub.publish({ type: 'routed', workItemId, project: projectId });
       runFlow(flowType, {
         store: publishing(store, flowHub, stepHub),
@@ -165,7 +169,6 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         request,
         workItemId,
         onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
-        hitl,
         requestDecision: async (d) => {
           const id = newId();
           await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;
@@ -358,7 +361,6 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     })
     .post('/api/run', async ({ body }) => {
       const request = typeof body === 'object' && body && 'request' in body ? String((body as { request: unknown }).request) : '';
-      const hitl = typeof body === 'object' && body && 'hitl' in body ? Boolean((body as { hitl: unknown }).hitl) : false;
       const flowType = new StubTriage().classify(request);
       if (!getWorkflow(flowType)) return { error: 'no workflow for flow type', flowType };
 
@@ -369,7 +371,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       const route = routeProject(request, existing);
 
       if (route.kind === 'existing') {
-        const workItemId = launchFlow(route.project, request, flowType, hitl);
+        const workItemId = launchFlow(route.project, request, flowType);
         return { accepted: true, workItemId };
       }
 
