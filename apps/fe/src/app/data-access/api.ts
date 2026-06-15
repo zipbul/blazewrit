@@ -17,7 +17,18 @@ export interface ProjectVm {
   readonly id: string;
   readonly name: string;
   readonly status: 'up' | 'down';
+  /** Registration lifecycle: 'proposed' = ghost hearth awaiting approval, 'active' = live. */
+  readonly regStatus: 'proposed' | 'active';
   readonly activeCount: number;
+}
+
+/** An inter-project edge on the canvas (agent-proposed, user-confirmed). */
+export interface RelationshipVm {
+  readonly id: string;
+  readonly from: string;
+  readonly to: string;
+  readonly type: string;
+  readonly status: 'proposed' | 'confirmed';
 }
 
 /** A2A connection + agent health for a repo (runtime view, distinguishes silent vs dead). */
@@ -63,6 +74,10 @@ export class BlazewritApi {
 
   connections(): Observable<ConnectionVm[]> {
     return this.http.get<ConnectionVm[]>(`${this.base}/api/connections`);
+  }
+
+  relationships(): Observable<RelationshipVm[]> {
+    return this.http.get<RelationshipVm[]>(`${this.base}/api/relationships`);
   }
 
   /** Center intake: submit a raw intent; the backend (meta agent) triages + routes + runs. */

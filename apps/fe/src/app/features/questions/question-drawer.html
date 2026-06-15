@@ -1,0 +1,103 @@
+@if (isOpen()) {
+  <div class="scrim" (click)="close()" aria-hidden="true"></div>
+
+  <aside class="drawer glass" role="dialog" aria-modal="true" aria-label="질문함">
+    <header class="dhead">
+      <h2>질문함 <span class="count">{{ open().length }}</span></h2>
+      <button type="button" class="x" (click)="close()" aria-label="닫기">✕</button>
+    </header>
+
+    @if (current(); as d) {
+      <!-- focused triage: the agent waits on this one -->
+      <section class="focus" [class.blocking]="d.blocking"
+               [class.risk-high]="d.risk === 'high'" [class.risk-medium]="d.risk === 'medium'">
+        <div class="meta">
+          <span class="agent">{{ d.requestingAgent }}</span>
+          @if (d.flowId) { <span class="flow">flow {{ d.flowId }}</span> }
+          @if (d.risk) { <span class="risk" [class]="d.risk">{{ d.risk }} risk</span> }
+          @if (d.blocking) { <span class="block">⏸ 대기 중</span> }
+        </div>
+
+        <h3>{{ d.question }}</h3>
+
+        @if (d.context['why_asking']) {
+          <p class="ctx"><span class="k">왜</span> {{ d.context['why_asking'] }}</p>
+        }
+        @if (d.context['findings']) {
+          <p class="ctx"><span class="k">근거</span> {{ d.context['findings'] }}</p>
+        }
+
+        <div class="answer">
+          @switch (d.requestType) {
+            @case ('approval') {
+              <button type="button" class="btn ok" (click)="answer(d.id, 'approved')">승인</button>
+              <button type="button" class="btn no" (click)="answer(d.id, 'rejected')">거부</button>
+            }
+            @case ('free_text') {
+              @if (answers.controls[d.id]; as ctrl) {
+                <textarea class="ta" rows="3" [formControl]="ctrl" [attr.aria-label]="d.question"></textarea>
+                <button type="button" class="btn ok" [disabled]="ctrl.invalid" (click)="submitText(d.id)">제출</button>
+              }
+            }
+            @case ('multi_choice') {
+              <div class="options">
+                @for (o of d.options; track o.value) {
+                  <button type="button" class="opt" [class.selected]="isSelected(d.id, o.value)"
+                          [attr.aria-pressed]="isSelected(d.id, o.value)"
+                          [class.opt-high]="o.risk === 'high'" [class.opt-low]="o.risk === 'low'"
+                          (click)="toggle(d.id, o.value)">
+                    <span class="opt-label">
+                      <span class="check" aria-hidden="true">{{ isSelected(d.id, o.value) ? '☑' : '☐' }}</span>{{ o.label }}
+                      @if (o.recommended) { <span class="rec">추천</span> }
+                      @if (o.risk) { <span class="opt-risk" [class]="o.risk">{{ o.risk }}</span> }
+                    </span>
+                    @if (o.effect) { <span class="opt-effect">{{ o.effect }}</span> }
+                  </button>
+                }
+              </div>
+              <button type="button" class="btn ok" [disabled]="selectionCount(d.id) === 0"
+                      (click)="submitMulti(d.id)">제출 ({{ selectionCount(d.id) }})</button>
+            }
+            @default {
+              <div class="options">
+                @for (o of d.options; track o.value) {
+                  <button type="button" class="opt" [class.recommended]="o.recommended"
+                          [class.opt-high]="o.risk === 'high'" [class.opt-low]="o.risk === 'low'"
+                          (click)="answer(d.id, o.value)">
+                    <span class="opt-label">{{ o.label }}
+                      @if (o.recommended) { <span class="rec">추천</span> }
+                      @if (o.risk) { <span class="opt-risk" [class]="o.risk">{{ o.risk }}</span> }
+                    </span>
+                    @if (o.effect) { <span class="opt-effect">{{ o.effect }}</span> }
+                  </button>
+                }
+              </div>
+            }
+          }
+        </div>
+      </section>
+
+      <!-- compact queue: the rest, click to focus -->
+      @if (queue().length) {
+        <div class="qlbl">다음 <span>↑↓ 이동</span></div>
+        <ul class="queue">
+          @for (q of queue(); track q.id) {
+            <li>
+              <button type="button" class="qrow" (click)="focusQuestion(q.id)"
+                      [class.blocking]="q.blocking">
+                <span class="qagent">{{ q.requestingAgent }}</span>
+                <span class="qq">{{ q.question }}</span>
+                @if (q.risk) { <span class="qrisk" [class]="q.risk">{{ q.risk }}</span> }
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    } @else {
+      <section class="empty">
+        <div class="ok-dot"></div>
+        <p>대기 중인 질문이 없습니다.</p>
+      </section>
+    }
+  </aside>
+}

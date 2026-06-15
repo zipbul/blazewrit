@@ -1,6 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import type { WorkItemDto, FlowDto, DecisionRequestDto } from '@bw/dto';
-import { BlazewritApi, type ConnectionVm, type ProjectVm } from './api';
+import { BlazewritApi, type ConnectionVm, type ProjectVm, type RelationshipVm } from './api';
 
 /**
  * Workspace snapshot shared across the views (DECISIONS §15). A single root store loads
@@ -16,6 +16,7 @@ export class WorkspaceStore {
   readonly flows = signal<readonly FlowDto[]>([]);
   readonly decisions = signal<readonly DecisionRequestDto[]>([]);
   readonly connections = signal<readonly ConnectionVm[]>([]);
+  readonly relationships = signal<readonly RelationshipVm[]>([]);
 
   readonly activeCount = computed(
     () => this.workItems().filter((w) => w.state === 'in_flow').length,
@@ -45,6 +46,7 @@ export class WorkspaceStore {
     this.api.workItems().subscribe({ next: (v) => this.workItems.set(v), error: this.onError('work-items') });
     this.api.flows().subscribe({ next: (v) => this.flows.set(v), error: this.onError('flows') });
     this.api.decisions().subscribe({ next: (v) => this.decisions.set(v), error: this.onError('decisions') });
+    this.api.relationships().subscribe({ next: (v) => this.relationships.set(v), error: this.onError('relationships') });
   }
 
   /** Center intake: submit a raw intent (optionally HITL-gated), then refresh. */

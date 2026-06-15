@@ -2,30 +2,29 @@
   <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
 
   <header class="glass bar">
-    <span class="logo">◇ blaze<b>writ</b></span>
+    <span class="logo"><span class="mark">🜂</span> blaze<b>writ</b></span>
     <nav class="views" aria-label="Primary">
-      <a routerLink="/dashboard" routerLinkActive="on" ariaCurrentWhenActive="page">Dashboard</a>
-      <a routerLink="/board" routerLinkActive="on" ariaCurrentWhenActive="page">Board</a>
       <a routerLink="/canvas" routerLinkActive="on" ariaCurrentWhenActive="page">Canvas</a>
-      <a routerLink="/decisions" routerLinkActive="on" ariaCurrentWhenActive="page">
-        Decisions @if (pending() > 0) { <span class="badge">{{ pending() }}</span> }
-      </a>
-      <a routerLink="/connections" routerLinkActive="on" ariaCurrentWhenActive="page">Connections</a>
+      <a routerLink="/board" routerLinkActive="on" ariaCurrentWhenActive="page">Board</a>
     </nav>
-    <span class="live"><span class="dot"></span>{{ liveAgents() }} agents live · ⌘K</span>
+    <span class="live">
+      @if (pending() > 0) {
+        <button type="button" class="qbadge" (click)="openQuestions()">질문 {{ pending() }}</button>
+      }
+      <span class="dot"></span>{{ liveAgents() }} agents 작업 중 · ⌘K
+    </span>
   </header>
 
-  <form class="composer glass" (submit)="$event.preventDefault(); submitIntent(q.value, h.checked); q.value = ''">
+  <form class="composer glass" (submit)="$event.preventDefault(); submitIntent(q.value); q.value = ''">
     <input
       #q
       class="prompt"
       type="text"
       name="intent"
       autocomplete="off"
-      placeholder="의도를 입력하세요 — blazewrit이 분석해 워크플로우로 라우팅합니다…"
+      placeholder="작업 의도를 입력하세요 — blazewrit이 분석해 알맞은 프로젝트로 배정합니다…"
       aria-label="Center prompt" />
-    <label class="hitl"><input #h type="checkbox" /> 검토(HITL)</label>
-    <button type="submit" class="run">▶ Run</button>
+    <button type="submit" class="run">실행</button>
   </form>
 
   @if (loadError(); as err) {
@@ -36,6 +35,8 @@
     <router-outlet />
   </main>
 
+  <app-question-drawer />
+
   <footer class="glass status">
     @for (c of connections(); track c.projectId) {
       <span class="s">
@@ -43,7 +44,7 @@
               [class.ok]="c.status === 'connected'" [class.down]="c.status === 'disconnected'"></span>{{ c.projectId }}
       </span>
     }
-    <span class="s" [class.warn]="pending() > 0">⚑ {{ pending() }} decision{{ pending() === 1 ? '' : 's' }} pending</span>
+    <button type="button" class="s linkish" [class.warn]="pending() > 0" (click)="openQuestions()">⚑ {{ pending() }} 질문 대기</button>
     <span class="cmdk">⌘K</span>
   </footer>
 </div>

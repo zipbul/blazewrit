@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .research/
+
+# browser-verify artifacts
+.playwright-mcp/

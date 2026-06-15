@@ -171,7 +171,7 @@
 }
 .composer .prompt:focus { border-color: rgba(120, 200, 255, 0.7); }
 .composer .run {
-  background: linear-gradient(135deg, #2bd1ff, #6a8cff);
+  background: linear-gradient(135deg, #ff7a1a, #ffb347);
   color: #00121e;
   font-weight: 700;
   border: 0;
@@ -185,3 +185,18 @@
   display: flex; align-items: center; gap: 0.35rem;
   font-size: 0.8rem; color: var(--muted-foreground); white-space: nowrap; cursor: pointer;
 }
+
+/* 짚불 logo mark + question badge */
+.logo .mark { color: var(--primary); text-shadow: 0 0 12px rgba(224,107,46,.6); }
+.qbadge {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  color: #fff0e2; background: var(--destructive); border: none; cursor: pointer;
+  border-radius: 20px; padding: 3px 11px; text-decoration: none; margin-right: 4px;
+  animation: qpulse 1.6s ease-in-out infinite;
+}
+.qbadge:hover { filter: brightness(1.1); }
+@keyframes qpulse { 0%,100% { box-shadow: 0 0 0 rgba(210,85,63,0);} 50% { box-shadow: 0 0 12px rgba(210,85,63,.55);} }
+
+/* footer pending = link-style button */
+.status .linkish { background: transparent; border: none; cursor: pointer; font: inherit; padding: 0; }
+.status .linkish:hover { color: var(--foreground); }

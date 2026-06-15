@@ -121,23 +121,84 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   // HITL: decisionId -> resolver that resumes the suspended flow.
   const pendingDecisions = new Map<string, (answer: string) => void>();
 
+  const parseJson = (raw: unknown, fallback: unknown) =>
+    Array.isArray(raw) || (typeof raw === 'object' && raw !== null)
+      ? raw
+      : typeof raw === 'string' && raw
+        ? JSON.parse(raw)
+        : fallback;
+
+  // Meta-agent decisions (registration/connection) render as approve/reject in the UI.
+  const META_TYPES = new Set(['project_registration', 'connection']);
+
   const toDecisionDto = (row: Record<string, unknown>) => {
-    const raw = row.options;
-    const opts: string[] = Array.isArray(raw) ? raw : typeof raw === 'string' ? (JSON.parse(raw) as string[]) : [];
+    const dbType = row.request_type as string;
+    const opts = parseJson(row.options, []) as string[];
+    const meta = parseJson(row.meta, {}) as Record<string, unknown>;
+    const isMeta = META_TYPES.has(dbType);
     return {
-    id: row.id as string,
-    flowId: (row.flow_id as string) ?? '',
-    requestingAgent: 'decide',
-    status: row.status as string,
-    requestType: row.request_type as string,
-    question: row.question as string,
-    options: opts.map((o) => ({ label: o, value: o })),
-    context: {},
-    blocking: true,
-    createdAt: new Date(row.created_at as string).toISOString(),
-    ...(row.answered_at ? { answeredAt: new Date(row.answered_at as string).toISOString() } : {}),
-    ...(row.answer ? { answer: row.answer as string } : {}),
+      id: row.id as string,
+      flowId: (row.flow_id as string) ?? '',
+      requestingAgent: isMeta ? '메타' : 'decide',
+      status: row.status as string,
+      requestType: isMeta ? 'approval' : dbType,
+      question: row.question as string,
+      options: opts.map((o) => ({ label: o, value: o })),
+      context: meta,
+      blocking: !isMeta,
+      createdAt: new Date(row.created_at as string).toISOString(),
+      ...(row.answered_at ? { answeredAt: new Date(row.answered_at as string).toISOString() } : {}),
+      ...(row.answer ? { answer: row.answer as string } : {}),
     };
+  };
+
+  /** Create the work item for a (now active) project and run its flow in the background. */
+  const launchFlow = (projectId: string, request: string, flowType: ReturnType<StubTriage['classify']>, hitl = false): string => {
+    const workItemId = newId();
+    void (async () => {
+      await sql`insert into work_items (id, project_id, type, state, title) values (${workItemId}, ${projectId}, ${'feature'}, ${'in_flow'}, ${request})`;
+      flowHub.publish({ type: 'routed', workItemId, project: projectId });
+      runFlow(flowType, {
+        store: publishing(store, flowHub, stepHub),
+        executor: deps.executor ?? new PacedStepExecutor(),
+        newId,
+        request,
+        workItemId,
+        onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
+        hitl,
+        requestDecision: async (d) => {
+          const id = newId();
+          await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;
+          flowHub.publish({ type: 'decision-open', id, flowId: d.flowId });
+          return new Promise<string>((resolve) => pendingDecisions.set(id, resolve));
+        },
+        onLearning: async (l) => {
+          await sql`insert into learnings (id, flow_id, project_id, text) values (${newId()}, ${l.flowId}, ${projectId}, ${l.text})`;
+          flowHub.publish({ type: 'learning', flowId: l.flowId });
+        },
+      })
+        .then(async (result) => {
+          await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId}`;
+          flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
+        })
+        .catch((err) => flowHub.publish({ type: 'flow-error', workItemId, message: String(err) }));
+    })();
+    return workItemId;
+  };
+
+  /** Meta agent proposes wiring a newly-registered project to an existing one (agent-driven, user-approved). */
+  const proposeConnection = async (newProjectId: string): Promise<void> => {
+    const others = (await sql`
+      select id from projects where status = 'active' and id <> ${newProjectId} order by created_at desc limit 1
+    `) as Array<Record<string, unknown>>;
+    const target = others[0]?.id as string | undefined;
+    if (!target) return;
+    const relId = newId();
+    await sql`insert into relationships (id, from_project, to_project, type, status) values (${relId}, ${newProjectId}, ${target}, ${'depends'}, ${'proposed'})`;
+    const decId = newId();
+    const meta = JSON.stringify({ kind: 'connection', relationshipId: relId, from: newProjectId, to: target });
+    await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'connection'}, ${`«${newProjectId}» → «${target}» 두 프로젝트를 연결할까요?`}, ${'[]'}, ${meta})`;
+    flowHub.publish({ type: 'decision-open', id: decId });
   };
 
   return new Elysia()
@@ -150,10 +211,32 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     })
     .get('/api/projects', async () => {
       const rows = (await sql`
-        select project_id, count(*) filter (where state = 'in_flow')::int as active
-        from work_items group by project_id
+        select p.id, p.name, p.status as reg_status,
+               coalesce(c.active, 0)::int as active
+        from projects p
+        left join (
+          select project_id, count(*) filter (where state = 'in_flow') as active
+          from work_items group by project_id
+        ) c on c.project_id = p.id
+        order by p.created_at
       `) as Array<Record<string, unknown>>;
-      return rows.map((p) => ({ id: p.project_id as string, name: p.project_id as string, status: 'up', activeCount: p.active as number }));
+      return rows.map((p) => ({
+        id: p.id as string,
+        name: p.name as string,
+        status: 'up',
+        regStatus: p.reg_status as string, // 'proposed' | 'active'
+        activeCount: p.active as number,
+      }));
+    })
+    .get('/api/relationships', async () => {
+      const rows = (await sql`select * from relationships order by created_at`) as Array<Record<string, unknown>>;
+      return rows.map((r) => ({
+        id: r.id as string,
+        from: r.from_project as string,
+        to: r.to_project as string,
+        type: r.type as string,
+        status: r.status as string, // 'proposed' | 'confirmed'
+      }));
     })
     .get('/api/connections', () => [])
     .get('/api/decisions', async () => {
@@ -162,9 +245,33 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     })
     .post('/api/decisions/:id/answer', async ({ params, body }) => {
       const answer = typeof body === 'object' && body && 'answer' in body ? String((body as { answer: unknown }).answer) : '';
+      const before = ((await sql`select * from decisions where id = ${params.id}`) as Array<Record<string, unknown>>)[0];
       await sql`update decisions set answer = ${answer}, status = 'answered', answered_at = now() where id = ${params.id}`;
-      pendingDecisions.get(params.id)?.(answer); // resume the suspended flow
-      pendingDecisions.delete(params.id);
+
+      const dbType = before?.request_type as string | undefined;
+      const meta = (parseJson(before?.meta, {}) as Record<string, unknown>) ?? {};
+      const approved = answer === 'approved' || answer === 'approve';
+
+      if (dbType === 'project_registration') {
+        const projectId = meta.projectId as string;
+        if (approved) {
+          await sql`update projects set status = 'active' where id = ${projectId}`;
+          flowHub.publish({ type: 'project-activated', project: projectId });
+          launchFlow(projectId, meta.request as string, meta.flowType as ReturnType<StubTriage['classify']>);
+          await proposeConnection(projectId); // agent now proposes wiring it to a sibling project
+        } else {
+          await sql`delete from projects where id = ${projectId} and status = 'proposed'`;
+          flowHub.publish({ type: 'project-rejected', project: projectId });
+        }
+      } else if (dbType === 'connection') {
+        const relId = meta.relationshipId as string;
+        if (approved) await sql`update relationships set status = 'confirmed' where id = ${relId}`;
+        else await sql`delete from relationships where id = ${relId}`;
+      } else {
+        pendingDecisions.get(params.id)?.(answer); // resume the suspended flow
+        pendingDecisions.delete(params.id);
+      }
+
       flowHub.publish({ type: 'decision-answered', id: params.id, answer });
       const row = ((await sql`select * from decisions where id = ${params.id}`) as Array<Record<string, unknown>>)[0];
       return row ? toDecisionDto(row) : { id: params.id, answer };
@@ -255,42 +362,24 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       const flowType = new StubTriage().classify(request);
       if (!getWorkflow(flowType)) return { error: 'no workflow for flow type', flowType };
 
-      // Meta routing: pick (or create) the target project from the intent.
-      const existing = ((await sql`select distinct project_id from work_items`) as Array<Record<string, unknown>>).map(
-        (r) => r.project_id as string,
+      // Meta routing: route to an existing ACTIVE project, or propose a new one for approval.
+      const existing = ((await sql`select id from projects where status = 'active'`) as Array<Record<string, unknown>>).map(
+        (r) => r.id as string,
       );
       const route = routeProject(request, existing);
+
+      if (route.kind === 'existing') {
+        const workItemId = launchFlow(route.project, request, flowType, hitl);
+        return { accepted: true, workItemId };
+      }
+
+      // New project: register as 'proposed' and ask the user (agent-proposes / user-approves).
       const projectId = route.project;
-
-      const workItemId = newId();
-      await sql`insert into work_items (id, project_id, type, state, title) values (${workItemId}, ${projectId}, ${'feature'}, ${'in_flow'}, ${request})`;
-      flowHub.publish({ type: 'routed', workItemId, project: projectId, created: route.kind === 'create' });
-
-      void runFlow(flowType, {
-        store: publishing(store, flowHub, stepHub),
-        executor: deps.executor ?? new PacedStepExecutor(),
-        newId,
-        request,
-        workItemId,
-        onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
-        hitl,
-        requestDecision: async (d) => {
-          const id = newId();
-          await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;
-          flowHub.publish({ type: 'decision-open', id, flowId: d.flowId });
-          return new Promise<string>((resolve) => pendingDecisions.set(id, resolve));
-        },
-        onLearning: async (l) => {
-          await sql`insert into learnings (id, flow_id, project_id, text) values (${newId()}, ${l.flowId}, ${projectId}, ${l.text})`;
-          flowHub.publish({ type: 'learning', flowId: l.flowId });
-        },
-      })
-        .then(async (result) => {
-          await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId}`;
-          flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
-        })
-        .catch((err) => flowHub.publish({ type: 'flow-error', workItemId, message: String(err) }));
-
-      return { accepted: true, workItemId };
+      await sql`insert into projects (id, name, status) values (${projectId}, ${projectId}, ${'proposed'}) on conflict (id) do nothing`;
+      const decId = newId();
+      const meta = JSON.stringify({ kind: 'project_registration', projectId, request, flowType });
+      await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'project_registration'}, ${`새 프로젝트 «${projectId}»를 등록할까요?`}, ${'[]'}, ${meta})`;
+      flowHub.publish({ type: 'decision-open', id: decId, project: projectId });
+      return { accepted: true, pendingRegistration: true, projectId };
     });
 }

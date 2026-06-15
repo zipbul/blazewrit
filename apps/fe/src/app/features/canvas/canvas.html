@@ -1,56 +1,70 @@
 <div class="canvas">
   <h1 class="sr-only">Canvas</h1>
-  <svg class="wires" aria-hidden="true" focusable="false" preserveAspectRatio="none">
-    @for (n of nodes(); track n.item.id) {
-      <path [attr.d]="n.wire"></path>
-    }
-    <path class="live-wire" [attr.d]="liveWire"></path>
-  </svg>
 
-  @if (project(); as p) {
-    <div class="glass node proj">
-      <div class="h">PROJECT</div>
-      <div class="nm">{{ p.name }}</div>
-      <div class="st" [class.ok]="p.status === 'up'">
-        <span class="b" role="img" [attr.aria-label]="p.name + ': ' + p.status"></span>{{ p.activeCount }} active · {{ p.status }}
-      </div>
-    </div>
-  }
+  <section class="map" #mapEl>
+    <h2 class="lbl">Fleet</h2>
+    <button class="add" type="button" (click)="addProject()"
+            title="작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다">+ 프로젝트</button>
 
-  @for (n of nodes(); track n.item.id) {
-    <div class="glass node task" [class.focus]="n.focus" [style.top.px]="n.top">
-      <div class="id">#{{ n.item.id }} · {{ n.flow?.flowType }}</div>
-      <div class="t">{{ n.item.title }}</div>
-      <div class="flowrow">
-        @for (step of n.steps; track step.name; let last = $last) {
-          <span class="fn" role="img" [attr.aria-label]="step.name + ': ' + step.state"
-                [class.dn]="step.state === 'done'" [class.ac]="step.state === 'active'"
-                [class.gh]="step.state === 'pending'"></span>
-          @if (!last) { <span class="fs" [class.dn]="step.state === 'done'"></span> }
-        }
-      </div>
-      <div class="badge" [class.dim]="n.flow?.currentStep === 'ground'">▸ {{ n.flow?.currentStep }}</div>
-    </div>
-  }
-
-  <div class="glass node livenode">
-    <div class="h"><span class="pd"></span>LIVE · agent&#64;{{ project()?.id }}</div>
-    <div class="lv" role="log" aria-live="polite" aria-relevant="additions" aria-label="에이전트 활동 스트림">
-      @for (line of liveLines(); track $index) {
-        @switch (line.kind) {
-          @case ('tool') { <div><span class="c">{{ line.text }}</span></div> }
-          @case ('ok') { <div><span class="ok">{{ line.text }}</span></div> }
-          @default { <div>{{ line.text }}</div> }
-        }
-      } @empty {
-        <div>스트림 대기 중…</div>
+    <!-- relationship edges (confirmed solid / proposed dashed) -->
+    <svg class="links" [attr.width]="mapWidth()" [attr.height]="mapHeight()" aria-hidden="true">
+      @for (e of edges(); track e.id) {
+        <path [attr.d]="e.d" class="edge" [class.proposed]="e.proposed"></path>
+        <text [attr.x]="e.lx" [attr.y]="e.ly" class="edge-lbl">{{ e.label }}</text>
       }
-    </div>
-  </div>
+    </svg>
 
-  <div class="glass zoom">
-    <button type="button" aria-label="Zoom in"><span aria-hidden="true">+</span></button>
-    <button type="button" aria-label="Zoom out"><span aria-hidden="true">−</span></button>
-    <button type="button" aria-label="Fit to screen"><span aria-hidden="true">⤢</span></button>
-  </div>
+    @for (h of placed(); track h.id) {
+      <button class="hearth" type="button"
+              [class.sel]="h.selected" [class.idle]="!h.active && !h.ghost"
+              [class.lit]="h.active" [class.flagged]="h.flagged" [class.ghost]="h.ghost"
+              [style.left.px]="h.x" [style.top.px]="h.y"
+              (click)="select(h.focusItemId)">
+        @if (h.flagged) { <span class="qtag">질문</span> }
+        @if (h.ghost) {
+          <div class="nm">＋ {{ h.name }}</div>
+          <div class="mt">등록 대기 (승인 필요)</div>
+        } @else {
+          <div class="nm">{{ h.active ? '🔥' : '🪵' }} {{ h.name }}</div>
+          <div class="mt">{{ h.active ? 'flow · ' + (h.flagged ? '멈춤(대기)' : '진행 중') : 'idle' }}</div>
+          <div class="bar"><i [style.width.%]="h.progress * 100"></i></div>
+        }
+      </button>
+    } @empty {
+      <div class="empty">아직 프로젝트가 없습니다. 위 입력창에 작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다.</div>
+    }
+  </section>
+
+  <aside class="rail">
+    @if (focus(); as f) {
+      <h2 class="lbl">Focus · {{ focusFlow()?.flowType }}</h2>
+      <div class="pid">{{ f.projectId }}</div>
+      <div class="task">{{ f.title }}</div>
+      @if (focusFlow(); as fl) { <span class="pill">{{ fl.currentStep }} · {{ fl.status }}</span> }
+
+      @if (metro(); as m) {
+        <div class="metro">
+          @for (step of m.steps; track step.name; let last = $last) {
+            <div class="st">
+              <span class="n" role="img" [attr.aria-label]="step.name + ': ' + step.state"
+                    [class.dn]="step.state === 'done'" [class.ac]="step.state === 'active'" [class.gh]="step.state === 'pending'"></span>
+              <small [class.dn]="step.state === 'done'" [class.cur]="step.state === 'active'">{{ abbr(step.name) }}</small>
+            </div>
+            @if (!last) { <span class="sg" [class.dn]="step.state === 'done'"></span> }
+          }
+        </div>
+        @if (m.reviewerFailed) { <div class="retry">↺ {{ m.activeStep }}-reviewer ✗ → 재시도 ×{{ m.attempts }}</div> }
+      }
+
+      <div class="live" role="log" aria-live="polite">
+        @for (line of liveLines(); track $index) {
+          <div class="ln {{ line.kind }}">{{ line.text }}</div>
+        } @empty {
+          <div class="ln dim">스트림 대기 중…</div>
+        }
+      </div>
+    } @else {
+      <div class="empty">화로를 선택하면 진행 상황이 여기에 표시됩니다.</div>
+    }
+  </aside>
 </div>

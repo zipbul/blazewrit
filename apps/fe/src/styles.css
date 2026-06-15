@@ -13,59 +13,61 @@
 :root {
   color-scheme: dark;
 
-  --font-sans: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Spline Sans Mono', ui-monospace, 'SFMono-Regular', monospace;
-  --radius: 0.625rem;
+  --font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --font-sans: var(--font-serif);
+  --font-mono: 'Spline Sans Mono', ui-monospace, 'SFMono-Regular', 'Consolas', monospace;
+  --radius: 0.5rem;
 
-  /* base surfaces */
-  --background: #0a0816;
-  --foreground: #edecf4;
-  --card: rgba(18, 15, 30, 0.55);
-  --card-foreground: #edecf4;
-  --popover: #14111f;
-  --popover-foreground: #edecf4;
-  --muted: rgba(255, 255, 255, 0.04);
-  --muted-foreground: #9b96b4;
-  --border: rgba(255, 255, 255, 0.08);
-  --input: rgba(255, 255, 255, 0.08);
+  /* base surfaces — 짚불: 밤의 화로 (warm espresso dark) */
+  --background: #15100a;
+  --foreground: #efe3cf;
+  --card: rgba(31, 24, 16, 0.55);
+  --card-foreground: #efe3cf;
+  --popover: #1f1810;
+  --popover-foreground: #efe3cf;
+  --muted: rgba(224, 180, 120, 0.04);
+  --muted-foreground: #a8967a; /* 재(ash)·밀짚(straw) gray */
+  --faint: #6f6453;
+  --border: rgba(224, 180, 120, 0.13);
+  --input: rgba(224, 180, 120, 0.13);
 
-  /* accents */
-  --primary: #5ec8ec;
-  --primary-foreground: #06121a;
-  --secondary: rgba(255, 255, 255, 0.06);
-  --secondary-foreground: #edecf4;
-  --accent: #9d86f0;
-  --accent-foreground: #0c0820;
-  --ring: #5ec8ec;
+  /* accents — 불꽃(flame) */
+  --primary: #e06b2e; /* active = 타오르는 화염 */
+  --primary-foreground: #1a0d04;
+  --secondary: rgba(224, 180, 120, 0.06);
+  --secondary-foreground: #efe3cf;
+  --accent: #d4a24a; /* 잔불(ember) 황금 */
+  --accent-foreground: #1a0d04;
+  --ring: #e06b2e;
 
   /* signal */
-  --destructive: #f07d92;
-  --destructive-foreground: #1a0a0e;
-  --success: #4fd9a4;
-  --warning: #f0bd5e;
+  --destructive: #d2553f;
+  --destructive-foreground: #1a0a08;
+  --success: #d4a24a; /* done = 잔불(ember) 황금 */
+  --warning: #e9b85c;
 
   /* sidebar (Spartan expects these) */
-  --sidebar: #0c0a1a;
-  --sidebar-foreground: #edecf4;
-  --sidebar-primary: #5ec8ec;
-  --sidebar-primary-foreground: #06121a;
-  --sidebar-accent: rgba(255, 255, 255, 0.06);
-  --sidebar-accent-foreground: #edecf4;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #5ec8ec;
+  --sidebar: #1a130c;
+  --sidebar-foreground: #efe3cf;
+  --sidebar-primary: #e06b2e;
+  --sidebar-primary-foreground: #1a0d04;
+  --sidebar-accent: rgba(224, 180, 120, 0.06);
+  --sidebar-accent-foreground: #efe3cf;
+  --sidebar-border: rgba(224, 180, 120, 0.13);
+  --sidebar-ring: #e06b2e;
 
-  /* glass + mesh (M-dark 고유 토큰) */
-  --glass: rgba(18, 15, 30, 0.55);
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-blur: 24px;
-  --glass-radius: 1rem;
-  --glass-shadow: 0 14px 44px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  /* WCAG AA: 5.45:1 on --background (was #5f5a80 = 3.08:1, failed) */
-  --faint: #8782a6;
+  /* glass + mesh (warm hearth) */
+  --glass: rgba(31, 24, 16, 0.55);
+  --glass-border: rgba(224, 180, 120, 0.13);
+  --glass-blur: 20px;
+  --glass-radius: 0.75rem;
+  --glass-shadow: 0 14px 44px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 220, 180, 0.05);
+  /* warm ash gray, readable on espresso --background */
+  --faint: #94856e;
+  /* firelight glow in the dark */
   --mesh:
-    radial-gradient(42% 45% at 18% 8%, rgba(94, 200, 236, 0.12), transparent),
-    radial-gradient(40% 42% at 86% 14%, rgba(157, 134, 240, 0.12), transparent),
-    radial-gradient(46% 50% at 60% 100%, rgba(79, 217, 164, 0.07), transparent);
+    radial-gradient(48% 50% at 86% -8%, rgba(224, 107, 46, 0.12), transparent),
+    radial-gradient(40% 44% at -6% 110%, rgba(212, 162, 74, 0.07), transparent);
 }
 
 @layer base {
