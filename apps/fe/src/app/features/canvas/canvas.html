@@ -1,97 +1,51 @@
 <div class="canvas">
   <h1 class="sr-only">Canvas</h1>
 
-  <section class="map" #mapEl>
-    <h2 class="lbl">Fleet</h2>
+  <div class="bar">
+    <span class="lbl">Fleet</span>
     <button class="add" type="button" (click)="addProject()"
             title="작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다">+ 프로젝트</button>
+  </div>
 
-    <!-- relationship edges (confirmed solid / proposed dashed) -->
-    <svg class="links" [attr.width]="mapWidth()" [attr.height]="mapHeight()" aria-hidden="true">
-      @for (e of edges(); track e.id) {
-        <path [attr.d]="e.d" class="edge" [class.proposed]="e.proposed"></path>
-        <text [attr.x]="e.lx" [attr.y]="e.ly" class="edge-lbl">{{ e.label }}</text>
-      }
-    </svg>
-
-    @for (h of placed(); track h.id) {
-      <button class="hearth" type="button"
-              [class.sel]="h.selected" [class.idle]="!h.active && !h.ghost"
-              [class.lit]="h.active" [class.flagged]="h.flagged" [class.ghost]="h.ghost"
-              [style.left.px]="h.x" [style.top.px]="h.y"
-              (click)="selectProject(h.id)">
-        @if (h.flagged) { <span class="qtag">질문</span> }
-        <!-- orbiting embers = concurrent in-flight tasks -->
-        @if (h.embers.length) {
-          <span class="orbit" aria-hidden="true">
-            @for (a of h.embers; track $index) {
-              <span class="ember" [style.transform]="'rotate(' + a + 'deg) translateY(-30px)'"></span>
-            }
-          </span>
+  <section class="map" #mapEl>
+    <div class="field" [style.width.px]="fieldWidth()" [style.height.px]="fieldHeight()">
+      <!-- dependency edges (confirmed solid / proposed dashed) -->
+      <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()" aria-hidden="true">
+        @for (e of edges(); track e.id) {
+          <path [attr.d]="e.d" class="edge" [class.proposed]="e.proposed"></path>
+          <text [attr.x]="e.lx" [attr.y]="e.ly" class="edge-lbl">{{ e.label }}</text>
         }
-        @if (h.ghost) {
-          <div class="nm">＋ {{ h.name }}</div>
-          <div class="mt">등록 대기 (승인 필요)</div>
-        } @else {
-          <div class="nm">{{ h.active ? '🔥' : '🪵' }} {{ h.name }}</div>
-          <div class="mt">{{ h.active ? h.activeCount + '개 작업 중' : 'idle' }}{{ h.flagged ? ' · 질문 대기' : '' }}</div>
-        }
-      </button>
-    } @empty {
-      <div class="empty">아직 프로젝트가 없습니다. 위 입력창에 작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다.</div>
-    }
-  </section>
+      </svg>
 
-  <aside class="rail">
-    <!-- TASK mode: a selected task's flow detail -->
-    @if (selection()?.kind === 'task' && focus(); as f) {
-      <button class="back" type="button" (click)="selectProject(f.projectId)">‹ {{ f.projectId }}</button>
-      <h2 class="lbl">Task · {{ focusFlow()?.flowType }}</h2>
-      <div class="task">{{ f.title }}</div>
-      @if (focusFlow(); as fl) { <span class="pill">{{ fl.currentStep }} · {{ fl.status }}</span> }
-
-      @if (metro(); as m) {
-        <div class="metro">
-          @for (step of m.steps; track step.name; let last = $last) {
-            <div class="st">
-              <span class="n" role="img" [attr.aria-label]="step.name + ': ' + step.state"
-                    [class.dn]="step.state === 'done'" [class.ac]="step.state === 'active'" [class.gh]="step.state === 'pending'"></span>
-              <small [class.dn]="step.state === 'done'" [class.cur]="step.state === 'active'">{{ abbr(step.name) }}</small>
-            </div>
-            @if (!last) { <span class="sg" [class.dn]="step.state === 'done'"></span> }
-          }
-        </div>
-        @if (m.reviewerFailed) { <div class="retry">↺ {{ m.activeStep }}-reviewer ✗ → 재시도 ×{{ m.attempts }}</div> }
-      }
-
-      <div class="live" role="log" aria-live="polite">
-        @for (line of liveLines(); track $index) {
-          <div class="ln {{ line.kind }}">{{ line.text }}</div>
-        } @empty {
-          <div class="ln dim">스트림 대기 중…</div>
-        }
-      </div>
-    }
-    <!-- PROJECT mode: the project's dossier (task list) -->
-    @else if (dossier(); as d) {
-      <h2 class="lbl">Project</h2>
-      <div class="task">{{ d.projectId }}</div>
-      <span class="pill" [class.warn]="d.flagged">{{ d.tasks.length }} 작업{{ d.flagged ? ' · 질문 대기' : '' }}</span>
-
-      <div class="tasks">
-        @for (t of d.tasks; track t.id) {
-          <button class="trow" type="button" (click)="selectTask(t.id)">
-            <span class="tdot" [class.run]="t.state === 'in_flow'" [class.done]="t.state === 'done'"></span>
-            <span class="ttitle">{{ t.title }}</span>
-            <span class="tmeta">{{ t.flowType ?? t.type }}{{ t.currentStep ? ' · ' + abbr(t.currentStep) : '' }}</span>
+      @for (g of groups(); track g.id) {
+        <section class="group" [class.sel]="g.selected" [class.idle]="!g.active && !g.ghost"
+                 [class.lit]="g.active" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
+                 [style.left.px]="g.x" [style.top.px]="g.y" [style.width.px]="g.w">
+          <button class="ghead" type="button" (click)="selectProject(g.id)">
+            <span class="gname">{{ g.ghost ? '＋' : (g.active ? '🔥' : '🪵') }} {{ g.name }}</span>
+            <span class="gmeta">{{ g.ghost ? '등록 대기' : (g.active ? g.activeCount + ' 작업 중' : 'idle') }}</span>
+            @if (g.flagged) { <span class="qtag">질문</span> }
           </button>
-        } @empty {
-          <div class="ln dim">아직 작업이 없습니다.</div>
-        }
-      </div>
-    }
-    @else {
-      <div class="empty">화로를 선택하면 그 프로젝트의 작업이 여기에 표시됩니다.</div>
-    }
-  </aside>
+
+          @if (!g.ghost) {
+            <div class="gbody">
+              @for (c of g.chips; track c.id) {
+                <button class="chip" type="button" (click)="selectTask(c.id, $event)"
+                        [class.run]="c.state === 'in_flow'" [class.done]="c.state === 'done'">
+                  <span class="cdot"></span>
+                  <span class="ctitle">{{ c.title }}</span>
+                  @if (c.stepLabel) { <span class="cstep">{{ c.stepLabel }}</span> }
+                </button>
+              } @empty {
+                <div class="cempty">작업 없음</div>
+              }
+              @if (g.extra) { <div class="cmore">+{{ g.extra }} 더보기</div> }
+            </div>
+          }
+        </section>
+      } @empty {
+        <div class="empty">아직 프로젝트가 없습니다. 위 입력창에 작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다.</div>
+      }
+    </div>
+  </section>
 </div>
