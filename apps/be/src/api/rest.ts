@@ -4,9 +4,11 @@ import { runFlow } from '../orchestrator/orchestrator';
 import { PgOrchestratorStore } from '../orchestrator/infra/pg-store';
 import { PacedStepExecutor } from '../orchestrator/paced-executor';
 import { StubTriage } from '../triage/triage';
-import { getWorkflow } from '../harness/workflows';
 import { routeProject } from '../meta/router';
 import { seedProjectCard } from '../a2a/agent-card';
+import { parseJsonRpc } from '../a2a/jsonrpc';
+import { errorResponse } from '../a2a/types';
+import { JSON_RPC_ERRORS, A2A_ERRORS } from '@bw/dto';
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
 import type { AgentEvent, OrchestratorStore, StepExecutor } from '../orchestrator/types';
 
@@ -111,6 +113,8 @@ export interface RestDeps {
   /** Step executor for /api/run; defaults to the paced stub (no LLM). Pass AgentStepExecutor for real runs. */
   executor?: StepExecutor;
   newId?: () => string;
+  /** Origin used for the central→project A2A call (real HTTP message/send to our own endpoint). */
+  selfBaseUrl?: string;
 }
 
 /** REST + SSE surface the Angular UI consumes (DECISIONS §13), backed by Postgres. */
@@ -119,6 +123,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const stepHub = new StepStreamHub();
   const store = new PgOrchestratorStore(sql);
   const newId = deps.newId ?? (() => crypto.randomUUID());
+  const selfBaseUrl = deps.selfBaseUrl ?? 'http://localhost:4500';
   // HITL: decisionId -> resolver that resumes the suspended flow.
   const pendingDecisions = new Map<string, (answer: string) => void>();
 
@@ -157,35 +162,42 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const workItemType = (flowType: ReturnType<StubTriage['classify']>): string =>
     flowType === 'bugfix' ? 'bug' : flowType === 'feature' ? 'feature' : 'task';
 
-  /** Create the work item for a (now active) project and run its flow in the background. */
-  const launchFlow = (projectId: string, request: string, flowType: ReturnType<StubTriage['classify']>): string => {
+  /**
+   * Project-side task handler (reached via the A2A message/send endpoint): triage the
+   * inbound intent into a flow, then run it in the background. This is the single triage
+   * call site — both human-origin (central router) and project-origin traffic land here.
+   */
+  const dispatchTask = (projectId: string, request: string): string => {
+    const flowType = new StubTriage().classify(request);
     const workItemId = newId();
+    // Background execution. Guarded so a failed task never crashes the server process.
     void (async () => {
-      await sql`insert into work_items (id, project_id, type, state, title) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request})`;
-      flowHub.publish({ type: 'routed', workItemId, project: projectId });
-      runFlow(flowType, {
-        store: publishing(store, flowHub, stepHub),
-        executor: deps.executor ?? new PacedStepExecutor(),
-        newId,
-        request,
-        workItemId,
-        onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
-        requestDecision: async (d) => {
-          const id = newId();
-          await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;
-          flowHub.publish({ type: 'decision-open', id, flowId: d.flowId });
-          return new Promise<string>((resolve) => pendingDecisions.set(id, resolve));
-        },
-        onLearning: async (l) => {
-          await sql`insert into learnings (id, flow_id, project_id, text) values (${newId()}, ${l.flowId}, ${projectId}, ${l.text})`;
-          flowHub.publish({ type: 'learning', flowId: l.flowId });
-        },
-      })
-        .then(async (result) => {
-          await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId}`;
-          flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
-        })
-        .catch((err) => flowHub.publish({ type: 'flow-error', workItemId, message: String(err) }));
+      try {
+        await sql`insert into work_items (id, project_id, type, state, title) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request})`;
+        flowHub.publish({ type: 'routed', workItemId, project: projectId });
+        const result = await runFlow(flowType, {
+          store: publishing(store, flowHub, stepHub),
+          executor: deps.executor ?? new PacedStepExecutor(),
+          newId,
+          request,
+          workItemId,
+          onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
+          requestDecision: async (d) => {
+            const id = newId();
+            await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;
+            flowHub.publish({ type: 'decision-open', id, flowId: d.flowId });
+            return new Promise<string>((resolve) => pendingDecisions.set(id, resolve));
+          },
+          onLearning: async (l) => {
+            await sql`insert into learnings (id, flow_id, project_id, text) values (${newId()}, ${l.flowId}, ${projectId}, ${l.text})`;
+            flowHub.publish({ type: 'learning', flowId: l.flowId });
+          },
+        });
+        await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId}`;
+        flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
+      } catch (err) {
+        flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
+      }
     })();
     return workItemId;
   };
@@ -200,6 +212,27 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     }
     const stored = parseJson(row.card, {}) as Record<string, unknown>;
     return stored.name ? stored : seedProjectCard({ projectId: row.id as string, name: row.name as string, intent: row.name as string });
+  };
+
+  /**
+   * Central → project dispatch over REAL A2A: a JSON-RPC message/send HTTP call to the
+   * target project's own /agents/:id/a2a endpoint (loopback). Same call shape a separate
+   * process or a sibling project would use — splitting later is just a different host.
+   */
+  const dispatchViaA2A = async (projectId: string, intent: string): Promise<{ taskId?: string }> => {
+    const envelope = {
+      jsonrpc: '2.0',
+      id: newId(),
+      method: 'message/send',
+      params: { message: { kind: 'message', messageId: newId(), role: 'user', parts: [{ kind: 'text', text: intent }] } },
+    };
+    const res = await fetch(`${selfBaseUrl}/agents/${encodeURIComponent(projectId)}/a2a`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope),
+    });
+    const json = (await res.json()) as { result?: { id?: string } };
+    return { taskId: json.result?.id };
   };
 
   /** Meta agent proposes wiring a newly-registered project to an existing one (agent-driven, user-approved). */
@@ -247,6 +280,29 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     // A2A Agent Card discovery (spec §5). Standard path is agent-card.json; agent.json kept as a legacy alias.
     .get('/agents/:projectId/.well-known/agent-card.json', ({ params, set }) => serveCard(params.projectId, set))
     .get('/agents/:projectId/.well-known/agent.json', ({ params, set }) => serveCard(params.projectId, set))
+    // A2A JSON-RPC endpoint (spec §7): the project agent receives a task. message/send triages
+    // the inbound intent and runs the flow; this is the one path human-origin + project-origin land on.
+    .post(
+      '/agents/:projectId/a2a',
+      async ({ params, body, set }) => {
+        const parsed = parseJsonRpc(typeof body === 'string' ? body : '');
+        if (!parsed.ok) return parsed.response;
+        const req = parsed.request;
+        if (req.method !== 'message/send') {
+          return errorResponse(req.id ?? null, JSON_RPC_ERRORS.METHOD_NOT_FOUND, 'Method not found');
+        }
+        const exists = ((await sql`select 1 from projects where id = ${params.projectId}`) as unknown[]).length > 0;
+        if (!exists) {
+          set.status = 404;
+          return errorResponse(req.id ?? null, A2A_ERRORS.TASK_NOT_FOUND ?? -32001, 'unknown project');
+        }
+        const message = (req.params as { message?: { parts?: Array<{ kind: string; text?: string }> } } | undefined)?.message;
+        const intent = message?.parts?.find((p) => p.kind === 'text')?.text ?? '';
+        const taskId = dispatchTask(params.projectId, intent);
+        return { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
+      },
+      { parse: 'text' },
+    )
     .get('/api/relationships', async () => {
       const rows = (await sql`select * from relationships order by created_at`) as Array<Record<string, unknown>>;
       return rows.map((r) => ({
@@ -278,7 +334,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           const card = seedProjectCard({ projectId, name: projectId, intent: meta.request as string });
           await sql`update projects set status = 'active', card = ${JSON.stringify(card)} where id = ${projectId}`;
           flowHub.publish({ type: 'project-activated', project: projectId });
-          launchFlow(projectId, meta.request as string, meta.flowType as ReturnType<StubTriage['classify']>);
+          await dispatchViaA2A(projectId, meta.request as string); // dispatch the intent over real A2A
           await proposeConnection(projectId); // agent now proposes wiring it to a sibling project
         } else {
           await sql`delete from projects where id = ${projectId} and status = 'proposed'`;
@@ -377,27 +433,26 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       });
       return new Response(stream, { headers: { 'content-type': 'text/event-stream', ...CORS } });
     })
+    // Central META ROUTER: pick the target project, then dispatch the RAW intent to it over
+    // real A2A (the project triages + runs). Central does not classify the flow type.
     .post('/api/run', async ({ body }) => {
       const request = typeof body === 'object' && body && 'request' in body ? String((body as { request: unknown }).request) : '';
-      const flowType = new StubTriage().classify(request);
-      if (!getWorkflow(flowType)) return { error: 'no workflow for flow type', flowType };
 
-      // Meta routing: route to an existing ACTIVE project, or propose a new one for approval.
       const existing = ((await sql`select id from projects where status = 'active'`) as Array<Record<string, unknown>>).map(
         (r) => r.id as string,
       );
       const route = routeProject(request, existing);
 
       if (route.kind === 'existing') {
-        const workItemId = launchFlow(route.project, request, flowType);
-        return { accepted: true, workItemId };
+        const { taskId } = await dispatchViaA2A(route.project, request);
+        return { accepted: true, workItemId: taskId };
       }
 
       // New project: register as 'proposed' and ask the user (agent-proposes / user-approves).
       const projectId = route.project;
       await sql`insert into projects (id, name, status) values (${projectId}, ${projectId}, ${'proposed'}) on conflict (id) do nothing`;
       const decId = newId();
-      const meta = JSON.stringify({ kind: 'project_registration', projectId, request, flowType });
+      const meta = JSON.stringify({ kind: 'project_registration', projectId, request });
       await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'project_registration'}, ${`새 프로젝트 «${projectId}»를 등록할까요?`}, ${'[]'}, ${meta})`;
       flowHub.publish({ type: 'decision-open', id: decId, project: projectId });
       return { accepted: true, pendingRegistration: true, projectId };

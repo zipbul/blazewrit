@@ -1,3 +1,4 @@
+import './seal'; // baker: seal all @bw/dto recipes once before any validate (A2A JSON-RPC ingress)
 import { SQL } from 'bun';
 import { createRestApi } from './api/rest';
 import { ensureSchema } from './infra/schema';
@@ -20,5 +21,5 @@ const executor = real
     })
   : undefined;
 
-createRestApi(sql, { executor }).listen(port);
+createRestApi(sql, { executor, selfBaseUrl: `http://localhost:${port}` }).listen(port);
 console.log(`blazewrit REST API on :${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'})`);
