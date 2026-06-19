@@ -42,8 +42,8 @@ test('reuses an incoming contextId', async () => {
   expect(task.contextId).toBe('ctx-given');
 });
 
-test('rejects when triage picks a flow type with no workflow', async () => {
-  // "리팩터" -> refactor, which has no workflow definition yet
+test('runs a non-feature flow (refactor) to completion', async () => {
+  // "리팩터" -> refactor, which now has its own workflow definition
   const task = await runner().run(message('이 코드 리팩터해줘'));
-  expect(task.status.state).toBe('rejected');
+  expect(task.status.state).toBe('completed');
 });

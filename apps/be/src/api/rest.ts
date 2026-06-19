@@ -6,6 +6,7 @@ import { PacedStepExecutor } from '../orchestrator/paced-executor';
 import { StubTriage } from '../triage/triage';
 import { getWorkflow } from '../harness/workflows';
 import { routeProject } from '../meta/router';
+import { seedProjectCard } from '../a2a/agent-card';
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
 import type { AgentEvent, OrchestratorStore, StepExecutor } from '../orchestrator/types';
 
@@ -189,6 +190,18 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     return workItemId;
   };
 
+  /** Resolve a project's served Agent Card (stored domain card, or a name-derived fallback). */
+  const serveCard = async (projectId: string, set: { status?: number | string }) => {
+    const rows = (await sql`select id, name, card from projects where id = ${projectId}`) as Array<Record<string, unknown>>;
+    const row = rows[0];
+    if (!row) {
+      set.status = 404;
+      return { error: 'project not found', projectId };
+    }
+    const stored = parseJson(row.card, {}) as Record<string, unknown>;
+    return stored.name ? stored : seedProjectCard({ projectId: row.id as string, name: row.name as string, intent: row.name as string });
+  };
+
   /** Meta agent proposes wiring a newly-registered project to an existing one (agent-driven, user-approved). */
   const proposeConnection = async (newProjectId: string): Promise<void> => {
     const others = (await sql`
@@ -231,6 +244,9 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         activeCount: p.active as number,
       }));
     })
+    // A2A Agent Card discovery (spec §5). Standard path is agent-card.json; agent.json kept as a legacy alias.
+    .get('/agents/:projectId/.well-known/agent-card.json', ({ params, set }) => serveCard(params.projectId, set))
+    .get('/agents/:projectId/.well-known/agent.json', ({ params, set }) => serveCard(params.projectId, set))
     .get('/api/relationships', async () => {
       const rows = (await sql`select * from relationships order by created_at`) as Array<Record<string, unknown>>;
       return rows.map((r) => ({
@@ -258,7 +274,9 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       if (dbType === 'project_registration') {
         const projectId = meta.projectId as string;
         if (approved) {
-          await sql`update projects set status = 'active' where id = ${projectId}`;
+          // Activate + seed the project's A2A Agent Card (common base + a domain skill from the intent).
+          const card = seedProjectCard({ projectId, name: projectId, intent: meta.request as string });
+          await sql`update projects set status = 'active', card = ${JSON.stringify(card)} where id = ${projectId}`;
           flowHub.publish({ type: 'project-activated', project: projectId });
           launchFlow(projectId, meta.request as string, meta.flowType as ReturnType<StubTriage['classify']>);
           await proposeConnection(projectId); // agent now proposes wiring it to a sibling project

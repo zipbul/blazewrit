@@ -85,6 +85,7 @@ test('threads a prior step output into a later step and into review', async () =
   expect(groundOutputUnderReview).toBe('ground-output');
 });
 
-test('throws for a flow type without a workflow', async () => {
-  await expect(runFlow('research', { store, executor: executor(), newId, request: 'add login' })).rejects.toThrow();
+test('runs a non-feature flow (research) to completion using its own step sequence', async () => {
+  const result = await runFlow('research', { store, executor: executor(), newId, request: 'compare auth libs' });
+  expect(result.status).toBe('completed');
 });

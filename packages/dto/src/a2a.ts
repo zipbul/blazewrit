@@ -158,6 +158,18 @@ export interface AgentSkill {
   name: string;
   description: string;
   tags: string[];
+  examples?: string[];
+}
+
+export interface AgentProvider {
+  organization: string;
+  url?: string;
+}
+
+export interface AgentCapabilities {
+  streaming: boolean;
+  pushNotifications: boolean;
+  stateTransitionHistory?: boolean;
 }
 
 export interface AgentCard {
@@ -165,7 +177,15 @@ export interface AgentCard {
   description: string;
   url: string;
   version: string;
-  capabilities: { streaming: boolean; pushNotifications: boolean };
+  /** A2A spec version this card conforms to. */
+  protocolVersion?: string;
+  provider?: AgentProvider;
+  /** Preferred A2A transport binding (e.g. 'JSONRPC'). */
+  preferredTransport?: string;
+  capabilities: AgentCapabilities;
+  /** Named security schemes (spec §5). */
+  securitySchemes?: Record<string, unknown>;
+  security?: Array<Record<string, string[]>>;
   defaultInputModes: string[];
   defaultOutputModes: string[];
   skills: AgentSkill[];

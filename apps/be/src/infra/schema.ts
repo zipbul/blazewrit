@@ -67,6 +67,8 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     status text not null default 'active',
     created_at timestamptz not null default now()
   )`;
+  // A2A Agent Card (domain layer): per-project skills/description; common base merged in code.
+  await sql`alter table projects add column if not exists card jsonb not null default '{}'::jsonb`;
   // Inter-project edges: status 'proposed' (agent-suggested) | 'confirmed'.
   await sql`create table if not exists relationships (
     id text primary key,
