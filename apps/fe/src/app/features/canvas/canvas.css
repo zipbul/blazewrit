@@ -42,8 +42,21 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .hearth .mt { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted-foreground); margin-top: 6px; }
-.hearth .bar { height: 3px; background: rgba(224, 180, 120, 0.12); border-radius: 2px; margin-top: 11px; overflow: hidden; }
-.hearth .bar i { display: block; height: 100%; background: linear-gradient(135deg, var(--primary), var(--accent)); transition: width 0.5s ease; }
+
+/* orbiting embers = concurrent in-flight tasks (activity overlay on the project node) */
+.orbit {
+  position: absolute; top: 50%; left: 50%; width: 0; height: 0; z-index: 1;
+  animation: orbitSpin 9s linear infinite; pointer-events: none;
+}
+.ember {
+  position: absolute; top: 0; left: 0; width: 6px; height: 6px; margin: -3px;
+  border-radius: 50%; background: var(--primary);
+  box-shadow: 0 0 7px var(--primary), 0 0 12px rgba(224, 107, 46, 0.6);
+  animation: emberFlick 1.6s ease-in-out infinite;
+}
+@keyframes orbitSpin { to { transform: rotate(360deg); } }
+@keyframes emberFlick { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+
 .qtag {
   position: absolute; top: -9px; right: -6px; font-family: var(--font-mono); font-size: 9.5px;
   background: var(--destructive); color: #fff0e2; border-radius: 10px; padding: 1px 7px;
@@ -51,7 +64,7 @@
 
 .empty { font-family: var(--font-mono); font-size: 12.5px; color: var(--faint); padding: 30px 6px; line-height: 1.7; max-width: 420px; }
 
-/* ── rail (focus detail) ── */
+/* ── rail (project dossier / task detail) ── */
 .rail { padding: 22px 6px 24px 22px; overflow: auto; min-height: 0; }
 .pid { font-family: var(--font-mono); font-size: 11px; color: var(--faint); margin-top: 14px; }
 .task { font-size: 23px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; margin: 4px 0 4px; }
@@ -59,6 +72,25 @@
   display: inline-block; font-family: var(--font-mono); font-size: 11px; color: var(--primary);
   border: 1px solid var(--primary); border-radius: 20px; padding: 2px 11px; margin: 8px 0 18px;
 }
+.pill.warn { color: var(--destructive); border-color: var(--destructive); }
+.back {
+  font-family: var(--font-mono); font-size: 11px; color: var(--muted-foreground);
+  background: transparent; border: none; cursor: pointer; padding: 0; margin-bottom: 10px;
+}
+.back:hover { color: var(--foreground); }
+
+/* dossier task list */
+.tasks { display: flex; flex-direction: column; gap: 4px; }
+.trow {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; cursor: pointer;
+  background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 9px 10px; color: var(--foreground);
+}
+.trow:hover { background: var(--card); border-color: var(--border); }
+.tdot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
+.tdot.run { background: var(--primary); box-shadow: 0 0 8px var(--primary); animation: emberFlick 1.6s ease-in-out infinite; }
+.tdot.done { background: var(--accent); }
+.ttitle { flex: 1; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmeta { font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); flex-shrink: 0; }
 
 /* metro */
 .metro { display: flex; align-items: center; margin: 6px 0 22px; flex-wrap: nowrap; }

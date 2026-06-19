@@ -8,43 +8,60 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import type { WorkItemDto } from '@bw/dto';
 import { WorkspaceStore } from '../../data-access/workspace-store';
 import { FocusLive } from '../../data-access/focus-live';
 import { UiState } from '../../data-access/ui-state';
-import { FLOW_STEPS } from '../../data-access/flow-model';
 
 const CARD_W = 168;
 const CARD_H = 86;
 const COL_W = 210; // horizontal spacing between hearths
 const ROW_H = 184; // vertical spacing between rows
 const TOP = 78; // clear the Fleet label + add button row
+const MAX_EMBERS = 6; // orbiting embers shown before collapsing to +N
 
 interface Placed {
   readonly id: string;
   readonly name: string;
-  readonly active: boolean;
+  readonly active: boolean; // has ≥1 in-flight task
   readonly ghost: boolean; // proposed project awaiting approval
-  readonly flagged: boolean; // has an open question on its flow
+  readonly flagged: boolean; // has an open question
   readonly selected: boolean;
-  readonly progress: number; // 0..1 of the active flow
-  readonly focusItemId: string | null;
-  readonly x: number; // px
-  readonly y: number; // px
-  readonly cx: number; // center px
+  readonly activeCount: number; // concurrent in-flight tasks
+  readonly embers: number[]; // orbit angles (deg), one per active task (capped)
+  readonly x: number;
+  readonly y: number;
+  readonly cx: number;
   readonly cy: number;
 }
 
 interface Edge {
   readonly id: string;
-  readonly d: string; // svg path
+  readonly d: string;
   readonly proposed: boolean;
   readonly label: string;
   readonly lx: number;
   readonly ly: number;
 }
 
-/** Canvas = a spatial fleet map (projects as hearths scattered across the field, with
- *  relationship edges + ghost hearths for proposed projects) + the live detail rail. */
+interface DossierTask {
+  readonly id: string;
+  readonly title: string;
+  readonly type: string;
+  readonly state: string;
+  readonly flowType?: string;
+  readonly currentStep?: string;
+  readonly status?: string;
+  readonly flagged: boolean;
+}
+
+type Selection = { kind: 'project'; id: string } | { kind: 'task'; id: string } | null;
+
+/**
+ * Canvas = the PROJECT GRAPH (nodes = projects, edges = relationships) with a live ACTIVITY
+ * overlay (orbiting embers = concurrent tasks, A2A flow on edges). Task-level detail (the
+ * flow metro/stream) is NOT painted on a node — it opens in the rail when a task is selected.
+ */
 @Component({
   selector: 'app-canvas',
   templateUrl: './canvas.html',
@@ -60,6 +77,10 @@ export class Canvas {
   protected readonly mapWidth = signal(900);
   private readonly mapViewHeight = signal(560);
 
+  /** What the rail shows: a project dossier, a task's flow, or nothing. */
+  protected readonly selection = signal<Selection>(null);
+
+  // Task-flow detail (rail, task mode) — driven by FocusLive when a task is selected.
   protected readonly focus = this.live.focus;
   protected readonly focusFlow = this.live.focusFlow;
   protected readonly metro = this.live.metro;
@@ -79,7 +100,7 @@ export class Canvas {
     });
   }
 
-  /** Project ids that have an unanswered question on their active flow → hearth gets flagged. */
+  /** Project ids with an unanswered question → flagged. */
   private readonly flaggedProjects = computed(() => {
     const items = this.store.workItems();
     const byFlow = new Map(items.map((w) => [w.activeFlowId ?? '', w.projectId]));
@@ -91,23 +112,25 @@ export class Canvas {
     return ids;
   });
 
-  /** Hearths placed across the map on a deterministic organic scatter (pixel space). */
+  private selectedProjectId(): string | null {
+    const s = this.selection();
+    if (s?.kind === 'project') return s.id;
+    if (s?.kind === 'task') return this.store.workItems().find((w) => w.id === s.id)?.projectId ?? null;
+    return null;
+  }
+
+  /** Project nodes placed on a centered organic scatter, carrying their aggregate activity. */
   protected readonly placed = computed<Placed[]>(() => {
     const items = this.store.workItems();
-    const focusId = this.live.focus()?.id ?? null;
     const flagged = this.flaggedProjects();
+    const selProject = this.selectedProjectId();
     const projects = this.store.projects();
     const w = this.mapWidth();
     const n = projects.length;
-    // Scatter hearths in a 2-wide brick pattern so they use the vertical field instead of
-    // clustering in one flat top row; bounded so they never collide with the add button/rail.
     const fit = Math.max(1, Math.floor((w - 40) / COL_W));
     const cols = Math.max(1, Math.min(fit, 2, n));
-
-    // Center the hearth cluster in the map (both axes) so it sits as a balanced
-    // constellation instead of jamming into the top-left corner (matches the v4 scatter).
     const rows = Math.max(1, Math.ceil(n / cols));
-    const clusterH = (rows - 1) * ROW_H + CARD_H + 48; // +48 for the brick stagger
+    const clusterH = (rows - 1) * ROW_H + CARD_H + 48;
     const offsetY = Math.max(TOP, (this.mapViewHeight() - clusterH) / 2);
     const usedCols = Math.min(cols, n);
     const clusterW = (usedCols - 1) * COL_W + CARD_W + (rows > 1 ? 34 : 0);
@@ -117,28 +140,20 @@ export class Canvas {
       const col = i % cols;
       const row = Math.floor(i / cols);
       const projItems = items.filter((wi) => wi.projectId === p.id);
-      const activeItem = projItems.find((wi) => this.store.flowFor(wi)?.status === 'active');
-      const flow = activeItem ? this.store.flowFor(activeItem) : null;
-
-      let progress = 0;
-      if (flow) {
-        const steps = FLOW_STEPS[flow.flowType] ?? [];
-        const idx = steps.indexOf(flow.currentStep);
-        progress = steps.length > 1 && idx >= 0 ? idx / (steps.length - 1) : 0;
-      }
-
+      const activeCount = projItems.filter((wi) => wi.state === 'in_flow').length;
+      const shown = Math.min(activeCount, MAX_EMBERS);
+      const embers = Array.from({ length: shown }, (_, k) => (360 / Math.max(1, shown)) * k);
       const x = offsetX + col * COL_W + (row % 2) * 34;
-      const y = offsetY + row * ROW_H + (col % 2) * 48; // brick-stagger columns for an organic scatter
-      const focusItem = activeItem ?? projItems[0] ?? null;
+      const y = offsetY + row * ROW_H + (col % 2) * 48;
       return {
         id: p.id,
         name: p.name,
-        active: !!activeItem,
+        active: activeCount > 0,
         ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id),
-        selected: !!focusId && projItems.some((wi) => wi.id === focusId),
-        progress,
-        focusItemId: focusItem?.id ?? null,
+        selected: selProject === p.id,
+        activeCount,
+        embers,
         x,
         y,
         cx: x + CARD_W / 2,
@@ -147,7 +162,7 @@ export class Canvas {
     });
   });
 
-  /** Edges between hearths from relationship data (confirmed solid / proposed dashed). */
+  /** Relationship edges (confirmed solid / proposed dashed), anchored on the dominant axis. */
   protected readonly edges = computed<Edge[]>(() => {
     const byId = new Map(this.placed().map((h) => [h.id, h]));
     return this.store
@@ -156,9 +171,6 @@ export class Canvas {
         const a = byId.get(r.from);
         const b = byId.get(r.to);
         if (!a || !b) return null;
-        // Anchor on the dominant axis: side-by-side cards connect left↔right edges,
-        // stacked cards connect top↔bottom edges — so the line always exits the side
-        // that actually faces the other card (never loops back around).
         const horizontal = Math.abs(b.cx - a.cx) >= Math.abs(b.cy - a.cy);
         let x1: number, y1: number, x2: number, y2: number, c1x: number, c1y: number, c2x: number, c2y: number;
         if (horizontal) {
@@ -195,7 +207,32 @@ export class Canvas {
     return (ys.length ? Math.max(...ys) : 0) + CARD_H + 60;
   });
 
-  /** Short metro labels so the 8-step flow fits one row in the 360px rail (matches v4). */
+  /** Project dossier (rail, project mode): the project's tasks with their flow status. */
+  protected readonly dossier = computed(() => {
+    const pid = this.selectedProjectId();
+    if (!pid || this.selection()?.kind !== 'project') return null;
+    const flagged = this.flaggedProjects().has(pid);
+    const tasks: DossierTask[] = this.store
+      .workItems()
+      .filter((w) => w.projectId === pid)
+      .map((w) => this.toDossierTask(w));
+    return { projectId: pid, flagged, tasks };
+  });
+
+  private toDossierTask(w: WorkItemDto): DossierTask {
+    const flow = this.store.flowFor(w);
+    return {
+      id: w.id,
+      title: w.title,
+      type: w.type,
+      state: w.state,
+      flowType: flow?.flowType,
+      currentStep: flow?.currentStep,
+      status: flow?.status,
+      flagged: false,
+    };
+  }
+
   private static readonly STEP_ABBR: Record<string, string> = {
     ground: 'grnd', investigate: 'inv', decide: 'dec', spec: 'spec',
     test: 'test', implement: 'impl', verify: 'vfy', reflect: 'rfl', report: 'rpt',
@@ -204,8 +241,12 @@ export class Canvas {
     return Canvas.STEP_ABBR[step] ?? step.slice(0, 4);
   }
 
-  protected select(workItemId: string | null): void {
-    if (workItemId) this.live.select(workItemId);
+  protected selectProject(id: string): void {
+    this.selection.set({ kind: 'project', id });
+  }
+  protected selectTask(id: string): void {
+    this.selection.set({ kind: 'task', id });
+    this.live.select(id);
   }
 
   /** "+ 프로젝트": projects are intent-driven — focus the center prompt so the agent can propose one. */
