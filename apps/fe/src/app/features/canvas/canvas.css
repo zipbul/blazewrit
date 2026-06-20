@@ -17,14 +17,19 @@
 
 .links { position: absolute; inset: 0; overflow: visible; }
 
-/* organic project regions (drawn firelight territories) */
-.blob { cursor: pointer; transition: stroke 0.3s ease; fill: url(#hearthIdle); stroke: rgba(150, 132, 104, 0.28); stroke-width: 1; }
-.blob.idle { fill: url(#hearthIdle); stroke: rgba(150, 132, 104, 0.28); }
-.blob.lit { fill: url(#hearthLit); stroke: rgba(224, 107, 46, 0.55); stroke-width: 1.5; animation: breathe 3.4s ease-in-out infinite; }
-.blob.ghost { fill: url(#hearthLit); stroke: var(--primary); stroke-width: 1.5; stroke-dasharray: 5 6; animation: dash 1.2s linear infinite; }
-.blob.flagged { stroke: var(--destructive); stroke-width: 2; }
-.blob.sel { stroke: var(--primary); stroke-width: 2.5; filter: drop-shadow(0 0 14px rgba(224, 107, 46, 0.6)); }
-@keyframes breathe { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
+/* project region = a soft POOL OF FIRELIGHT (feathered, no hard outline) */
+.glow { fill: url(#hearthIdle); stroke: none; pointer-events: none; }
+.glow.lit { fill: url(#hearthLit); animation: breathe 3.6s ease-in-out infinite; }
+.glow.flagged { fill: url(#hearthFlag); }
+.glow.ghost { fill: url(#hearthLit); animation: breathe 1.8s ease-in-out infinite; }
+@keyframes breathe { 0%,100% { opacity: 0.8; } 50% { opacity: 1; } }
+
+/* near-invisible definition rim; clickable; lights up on hover/selection */
+.rim { fill: transparent; stroke: rgba(224, 180, 120, 0.12); stroke-width: 1; cursor: pointer; transition: stroke 0.25s ease; }
+.rim:hover { stroke: rgba(224, 107, 46, 0.5); }
+.rim.ghost { stroke: var(--primary); stroke-dasharray: 5 6; opacity: 0.7; animation: dash 1.2s linear infinite; }
+.rim.flagged { stroke: rgba(210, 85, 63, 0.55); }
+.rim.sel { stroke: var(--primary); stroke-width: 1.75; filter: drop-shadow(0 0 10px rgba(224, 107, 46, 0.5)); }
 @keyframes dash { to { stroke-dashoffset: -22; } }
 
 /* curved dependency trails (A2A rides them as sparks) */

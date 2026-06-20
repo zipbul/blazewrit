@@ -331,7 +331,7 @@ export class Canvas {
   }
   private interactive(t: EventTarget | null): boolean {
     const el = t as Element | null;
-    return !!el && (!!el.closest('.emb') || (el as SVGElement).classList?.contains('blob'));
+    return !!el && (!!el.closest('.emb') || (el as SVGElement).classList?.contains('rim'));
   }
   protected onPointerDown(e: PointerEvent): void {
     if (this.interactive(e.target)) return;

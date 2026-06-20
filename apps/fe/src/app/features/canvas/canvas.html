@@ -17,22 +17,37 @@
 
       <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()">
         <defs>
-          <radialGradient id="hearthLit" cx="50%" cy="46%" r="62%">
-            <stop offset="0%" stop-color="rgba(224,107,46,0.34)" />
-            <stop offset="55%" stop-color="rgba(224,107,46,0.12)" />
-            <stop offset="100%" stop-color="rgba(224,107,46,0)" />
+          <radialGradient id="hearthLit" cx="50%" cy="44%" r="60%">
+            <stop offset="0%" stop-color="rgba(246,160,82,0.46)" />
+            <stop offset="32%" stop-color="rgba(224,107,46,0.22)" />
+            <stop offset="66%" stop-color="rgba(150,56,24,0.08)" />
+            <stop offset="100%" stop-color="rgba(150,56,24,0)" />
           </radialGradient>
-          <radialGradient id="hearthIdle" cx="50%" cy="46%" r="62%">
-            <stop offset="0%" stop-color="rgba(150,132,104,0.12)" />
+          <radialGradient id="hearthIdle" cx="50%" cy="44%" r="60%">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.13)" />
+            <stop offset="70%" stop-color="rgba(150,132,104,0.04)" />
             <stop offset="100%" stop-color="rgba(150,132,104,0)" />
           </radialGradient>
+          <radialGradient id="hearthFlag" cx="50%" cy="44%" r="60%">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.4)" />
+            <stop offset="40%" stop-color="rgba(210,85,63,0.18)" />
+            <stop offset="100%" stop-color="rgba(210,85,63,0)" />
+          </radialGradient>
+          <filter id="soften" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="7" />
+          </filter>
         </defs>
 
-        <!-- organic project regions (drawn firelight boundaries) -->
+        <!-- project regions = soft pools of firelight (no hard outline) -->
         @for (g of regions(); track g.id) {
-          <path [attr.d]="g.blob" class="blob"
-                [class.sel]="g.selected" [class.idle]="!g.active && !g.ghost"
+          <path [attr.d]="g.blob" class="glow"
                 [class.lit]="g.active" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
+                filter="url(#soften)"></path>
+        }
+        <!-- faint definition ring (very subtle), brighter when selected -->
+        @for (g of regions(); track g.id) {
+          <path [attr.d]="g.blob" class="rim"
+                [class.sel]="g.selected" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
                 (click)="selectProject(g.id)"></path>
         }
 
