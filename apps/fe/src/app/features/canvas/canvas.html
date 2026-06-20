@@ -16,22 +16,33 @@
          [style.transform]="'translate(' + panX() + 'px,' + panY() + 'px) scale(' + zoom() + ')'">
 
       <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()">
-        <!-- curved dependency trails -->
-        @for (t of trails(); track t.id) {
-          <path [attr.d]="t.d" class="trail" [class.proposed]="t.proposed"></path>
-          <text [attr.x]="t.lx" [attr.y]="t.ly" class="trail-lbl">depends</text>
-        }
-        <!-- A2A flow sparks -->
-        @for (l of flowLinks(); track l.id) {
-          <path [attr.d]="l.d" class="flowlink"></path>
-          <circle r="3.4" class="spark"><animateMotion dur="2s" repeatCount="indefinite" [attr.path]="l.d" /></circle>
-        }
-        <!-- organic project regions (drawn boundaries) -->
+        <defs>
+          <radialGradient id="hearthLit" cx="50%" cy="46%" r="62%">
+            <stop offset="0%" stop-color="rgba(224,107,46,0.34)" />
+            <stop offset="55%" stop-color="rgba(224,107,46,0.12)" />
+            <stop offset="100%" stop-color="rgba(224,107,46,0)" />
+          </radialGradient>
+          <radialGradient id="hearthIdle" cx="50%" cy="46%" r="62%">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.12)" />
+            <stop offset="100%" stop-color="rgba(150,132,104,0)" />
+          </radialGradient>
+        </defs>
+
+        <!-- organic project regions (drawn firelight boundaries) -->
         @for (g of regions(); track g.id) {
           <path [attr.d]="g.blob" class="blob"
                 [class.sel]="g.selected" [class.idle]="!g.active && !g.ghost"
                 [class.lit]="g.active" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
                 (click)="selectProject(g.id)"></path>
+        }
+
+        <!-- dependency trails (boundary-anchored); A2A communication rides them as sparks -->
+        @for (t of trails(); track t.id) {
+          <path [attr.id]="'tr-' + t.id" [attr.d]="t.d" class="trail" [class.proposed]="t.proposed"></path>
+          <text [attr.x]="t.lx" [attr.y]="t.ly" class="trail-lbl">depends</text>
+          @if (t.hasFlow) {
+            <circle r="3.4" class="spark"><animateMotion dur="2.2s" repeatCount="indefinite" [attr.path]="t.d" /></circle>
+          }
         }
       </svg>
 

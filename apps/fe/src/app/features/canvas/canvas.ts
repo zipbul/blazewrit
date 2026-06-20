@@ -44,10 +44,10 @@ interface Region {
   readonly cy: number;
   readonly top: number; // boundary top (for label)
   readonly blob: string;
+  readonly poly: P[]; // padded boundary polygon (for precise trail anchoring)
 }
 
-interface Trail { readonly id: string; readonly d: string; readonly proposed: boolean; readonly lx: number; readonly ly: number; }
-interface FlowLink { readonly id: string; readonly d: string; }
+interface Trail { readonly id: string; readonly d: string; readonly proposed: boolean; readonly hasFlow: boolean; readonly lx: number; readonly ly: number; }
 interface Node { id: string; r: number; x: number; y: number; }
 
 type Selection = { kind: 'project'; id: string } | { kind: 'task'; id: string } | null;
@@ -85,29 +85,45 @@ function smoothClosed(p: ReadonlyArray<P>): string {
   return d + ' Z';
 }
 
-/** Boundary that always CONTAINS the points: hull (or circle fallback) padded outward + smoothed. */
-function regionBoundary(pts: P[], cx: number, cy: number, seed: string): string {
+/** Ray from (cx,cy) toward (tx,ty); returns where it crosses the polygon (boundary anchor). */
+function rayHit(cx: number, cy: number, poly: P[], tx: number, ty: number): P {
+  const dx = tx - cx, dy = ty - cy;
+  let best: P | null = null, bestT = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i]!, b = poly[(i + 1) % poly.length]!;
+    const ex = b.x - a.x, ey = b.y - a.y;
+    const denom = dx * ey - dy * ex;
+    if (Math.abs(denom) < 1e-6) continue;
+    const t = ((a.x - cx) * ey - (a.y - cy) * ex) / denom;
+    const s = ((a.x - cx) * dy - (a.y - cy) * dx) / denom;
+    if (t > 0 && s >= 0 && s <= 1 && t < bestT) { bestT = t; best = { x: cx + dx * t, y: cy + dy * t }; }
+  }
+  return best ?? { x: cx, y: cy };
+}
+
+/** Boundary that always CONTAINS the points: hull (or circle fallback) padded outward + smoothed.
+ *  Returns the smoothed path AND the padded polygon (for precise edge anchoring of trails). */
+function regionBoundary(pts: P[], cx: number, cy: number, seed: string): { path: string; poly: P[] } {
   const hull = convexHull(pts);
+  let poly: P[];
   if (hull.length < 3) {
-    // 0–2 points → padded circle around the centroid through the farthest point
     const far = pts.reduce((m, q) => Math.max(m, Math.hypot(q.x - cx, q.y - cy)), 0);
     const R = far + PAD + 18;
-    const ring = Array.from({ length: 12 }, (_, k) => {
-      const a = (k / 12) * Math.PI * 2;
-      const rr = R * (0.94 + 0.08 * wobble(`${seed}:${k}`));
+    poly = Array.from({ length: 14 }, (_, k) => {
+      const a = (k / 14) * Math.PI * 2;
+      const rr = R * (0.95 + 0.07 * wobble(`${seed}:${k}`));
       return { x: cx + Math.cos(a) * rr, y: cy + Math.sin(a) * rr };
     });
-    return smoothClosed(ring);
+  } else {
+    const gx = hull.reduce((s, q) => s + q.x, 0) / hull.length;
+    const gy = hull.reduce((s, q) => s + q.y, 0) / hull.length;
+    poly = hull.map((q, k) => {
+      const dx = q.x - gx, dy = q.y - gy, d = Math.hypot(dx, dy) || 1;
+      const pad = PAD * (0.92 + 0.14 * wobble(`${seed}:${k}`));
+      return { x: q.x + (dx / d) * pad, y: q.y + (dy / d) * pad };
+    });
   }
-  // centroid of hull, push each vertex outward by PAD (+ subtle wobble for life)
-  const gx = hull.reduce((s, q) => s + q.x, 0) / hull.length;
-  const gy = hull.reduce((s, q) => s + q.y, 0) / hull.length;
-  const padded = hull.map((q, k) => {
-    const dx = q.x - gx, dy = q.y - gy, d = Math.hypot(dx, dy) || 1;
-    const pad = PAD * (0.9 + 0.18 * wobble(`${seed}:${k}`));
-    return { x: q.x + (dx / d) * pad, y: q.y + (dy / d) * pad };
-  });
-  return smoothClosed(padded);
+  return { path: smoothClosed(poly), poly };
 }
 
 /**
@@ -247,15 +263,15 @@ export class Canvas {
       }
       pts.push({ x: nd.x, y: nd.y - 8 }); // pull the top in toward the label
       if (!embers.length) pts.push({ x: nd.x, y: nd.y });
-      const blob = regionBoundary(pts, nd.x, nd.y, p.id);
-      const top = Math.min(...pts.map((q) => q.y)) - PAD;
+      const { path: blob, poly } = regionBoundary(pts, nd.x, nd.y, p.id);
+      const top = Math.min(...poly.map((q) => q.y)) - 4;
 
       return {
         id: p.id, name: p.name,
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
         activeCount, embers, extra: Math.max(0, projItems.length - shown.length),
-        cx: nd.x, cy: nd.y, top, blob,
+        cx: nd.x, cy: nd.y, top, blob, poly,
       };
     });
   });
@@ -269,44 +285,43 @@ export class Canvas {
     return (r.length ? Math.max(...r.map((x) => x.cy + 160)) : 0) + MARGIN;
   });
 
-  protected readonly trails = computed<Trail[]>(() => {
-    const lay = this.layout();
-    return this.store.relationships().map((r) => {
-      const a = lay.get(r.from), b = lay.get(r.to);
-      if (!a || !b) return null;
-      const ang = Math.atan2(b.y - a.y, b.x - a.x);
-      const sx = a.x + Math.cos(ang) * a.r, sy = a.y + Math.sin(ang) * a.r;
-      const ex = b.x - Math.cos(ang) * b.r, ey = b.y - Math.sin(ang) * b.r;
-      const mx = (sx + ex) / 2, my = (sy + ey) / 2;
-      const off = 28 * wobble(r.id || `${r.from}-${r.to}`);
-      const px = mx + Math.cos(ang + Math.PI / 2) * off, py = my + Math.sin(ang + Math.PI / 2) * off;
-      return {
-        id: r.id, proposed: r.status === 'proposed',
-        d: `M ${sx.toFixed(1)} ${sy.toFixed(1)} Q ${px.toFixed(1)} ${py.toFixed(1)} ${ex.toFixed(1)} ${ey.toFixed(1)}`,
-        lx: px, ly: py - 5,
-      };
-    }).filter((t): t is Trail => t !== null);
-  });
-
-  protected readonly flowLinks = computed<FlowLink[]>(() => {
-    const lay = this.layout();
+  /** Pairs of projects that share a contextId = an A2A flow channel (its trail gets a spark). */
+  private readonly flowPairs = computed(() => {
     const byCtx = new Map<string, Set<string>>();
     for (const w of this.store.workItems()) {
       if (!w.contextId) continue;
       const s = byCtx.get(w.contextId) ?? new Set<string>(); s.add(w.projectId); byCtx.set(w.contextId, s);
     }
-    const links: FlowLink[] = [];
-    for (const [ctx, projSet] of byCtx) {
-      const projs = [...projSet].map((id) => lay.get(id)).filter((nd): nd is Node => !!nd);
-      if (projs.length < 2) continue;
-      const hub = projs[0]!;
-      for (let i = 1; i < projs.length; i++) {
-        const b = projs[i]!;
-        const mx = (hub.x + b.x) / 2, my = (hub.y + b.y) / 2 - 32;
-        links.push({ id: `${ctx}-${i}`, d: `M ${hub.x.toFixed(1)} ${hub.y.toFixed(1)} Q ${mx.toFixed(1)} ${my.toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}` });
+    const pairs = new Set<string>();
+    for (const projSet of byCtx.values()) {
+      const ids = [...projSet];
+      for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+        pairs.add([ids[i], ids[j]].sort().join('|'));
       }
     }
-    return links;
+    return pairs;
+  });
+
+  /** Dependency trails, anchored precisely on each region's drawn boundary; A2A rides them. */
+  protected readonly trails = computed<Trail[]>(() => {
+    const byId = new Map(this.regions().map((g) => [g.id, g]));
+    const flow = this.flowPairs();
+    return this.store.relationships().map((r) => {
+      const a = byId.get(r.from), b = byId.get(r.to);
+      if (!a || !b) return null;
+      const s = rayHit(a.cx, a.cy, a.poly, b.cx, b.cy); // exact point on A's boundary toward B
+      const e = rayHit(b.cx, b.cy, b.poly, a.cx, a.cy); // exact point on B's boundary toward A
+      const ang = Math.atan2(e.y - s.y, e.x - s.x);
+      const mx = (s.x + e.x) / 2, my = (s.y + e.y) / 2;
+      const off = 22 * wobble(r.id || `${r.from}-${r.to}`);
+      const px = mx + Math.cos(ang + Math.PI / 2) * off, py = my + Math.sin(ang + Math.PI / 2) * off;
+      return {
+        id: r.id, proposed: r.status === 'proposed',
+        hasFlow: flow.has([r.from, r.to].sort().join('|')),
+        d: `M ${s.x.toFixed(1)} ${s.y.toFixed(1)} Q ${px.toFixed(1)} ${py.toFixed(1)} ${e.x.toFixed(1)} ${e.y.toFixed(1)}`,
+        lx: px, ly: py - 5,
+      };
+    }).filter((t): t is Trail => t !== null);
   });
 
   protected onWheel(e: WheelEvent): void {

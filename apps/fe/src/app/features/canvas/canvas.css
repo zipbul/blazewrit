@@ -18,21 +18,20 @@
 .links { position: absolute; inset: 0; overflow: visible; }
 
 /* organic project regions (drawn firelight territories) */
-.blob { cursor: pointer; transition: fill 0.3s ease, stroke 0.3s ease; }
-.blob.idle { fill: rgba(150, 132, 104, 0.05); stroke: rgba(150, 132, 104, 0.25); stroke-width: 1; }
-.blob.lit { fill: rgba(224, 107, 46, 0.10); stroke: rgba(224, 107, 46, 0.5); stroke-width: 1.5; animation: breathe 3.4s ease-in-out infinite; }
-.blob.ghost { fill: rgba(224, 107, 46, 0.05); stroke: var(--primary); stroke-width: 1.5; stroke-dasharray: 5 6; animation: dash 1.2s linear infinite; }
+.blob { cursor: pointer; transition: stroke 0.3s ease; fill: url(#hearthIdle); stroke: rgba(150, 132, 104, 0.28); stroke-width: 1; }
+.blob.idle { fill: url(#hearthIdle); stroke: rgba(150, 132, 104, 0.28); }
+.blob.lit { fill: url(#hearthLit); stroke: rgba(224, 107, 46, 0.55); stroke-width: 1.5; animation: breathe 3.4s ease-in-out infinite; }
+.blob.ghost { fill: url(#hearthLit); stroke: var(--primary); stroke-width: 1.5; stroke-dasharray: 5 6; animation: dash 1.2s linear infinite; }
 .blob.flagged { stroke: var(--destructive); stroke-width: 2; }
-.blob.sel { stroke: var(--primary); stroke-width: 2.5; filter: drop-shadow(0 0 12px rgba(224, 107, 46, 0.55)); }
-@keyframes breathe { 0%,100% { fill: rgba(224,107,46,0.08); } 50% { fill: rgba(224,107,46,0.15); } }
+.blob.sel { stroke: var(--primary); stroke-width: 2.5; filter: drop-shadow(0 0 14px rgba(224, 107, 46, 0.6)); }
+@keyframes breathe { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
 @keyframes dash { to { stroke-dashoffset: -22; } }
 
-/* curved trails (dependencies) + flow sparks (A2A) */
-.trail { stroke: var(--accent); stroke-width: 1.5; fill: none; opacity: 0.45; }
+/* curved dependency trails (A2A rides them as sparks) */
+.trail { stroke: var(--accent); stroke-width: 1.5; fill: none; opacity: 0.5; }
 .trail.proposed { stroke: var(--primary); stroke-dasharray: 4 5; opacity: 0.8; animation: dash 1s linear infinite; }
 .trail-lbl { font-family: var(--font-mono); font-size: 9px; fill: var(--faint); text-anchor: middle; }
-.flowlink { stroke: var(--primary); stroke-width: 1; fill: none; opacity: 0.22; stroke-dasharray: 2 7; }
-.spark { fill: var(--primary); filter: drop-shadow(0 0 5px var(--primary)); }
+.spark { fill: var(--primary); filter: drop-shadow(0 0 6px var(--primary)); }
 
 /* floating project label */
 .rlabel {
