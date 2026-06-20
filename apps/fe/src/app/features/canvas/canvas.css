@@ -49,9 +49,9 @@
 /* task embers floating inside a region */
 .emb {
   position: absolute; transform: translate(-50%, -50%);
-  display: flex; align-items: center; gap: 6px; max-width: 168px; cursor: pointer;
-  background: rgba(22, 16, 10, 0.66); border: 1px solid transparent; border-radius: 14px;
-  padding: 3px 9px 3px 7px; color: var(--foreground); backdrop-filter: blur(1px);
+  display: flex; align-items: center; gap: 6px; width: 152px; cursor: pointer;
+  background: rgba(22, 16, 10, 0.55); border: 1px solid transparent; border-radius: 14px;
+  padding: 3px 10px 3px 8px; color: var(--foreground); backdrop-filter: blur(1px);
 }
 .emb:hover { border-color: var(--border); background: rgba(38, 29, 19, 0.85); }
 .edot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }

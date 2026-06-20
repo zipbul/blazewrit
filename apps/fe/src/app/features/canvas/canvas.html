@@ -37,7 +37,7 @@
 
       <!-- floating labels + task embers (HTML, above blobs) -->
       @for (g of regions(); track g.id) {
-        <div class="rlabel" [style.left.px]="g.cx" [style.top.px]="g.cy - g.r - 4">
+        <div class="rlabel" [style.left.px]="g.cx" [style.top.px]="g.top">
           <span class="rname">{{ g.ghost ? '＋' : (g.active ? '🔥' : '🪵') }} {{ g.name }}</span>
           <span class="rmeta">{{ g.ghost ? '등록 대기' : (g.active ? g.activeCount + ' 작업 중' : 'idle') }}{{ g.extra ? ' · +' + g.extra : '' }}</span>
           @if (g.flagged) { <span class="qtag">질문</span> }
