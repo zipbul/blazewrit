@@ -17,35 +17,38 @@
 
 .links { position: absolute; inset: 0; overflow: visible; }
 
-/* project region = FIRE: 잉걸 bed glow + tapering flame tongues + spark fountain.
-   All fire layers use mix-blend-mode:screen so they ADD light to the dark canvas (glow,
-   not muddy brown). Task embers (HTML, on top) stay normal-blended and legible. */
-.aura { fill: url(#auraIdle); mix-blend-mode: screen; }
+/* project region = 잉걸 base glow + 달아오른 불기운(turbulence plume) + 분수 불티(spark fountain). */
+.aura { fill: url(#auraIdle); }
 .cloud.lit .aura { fill: url(#auraLit); animation: breathe 3.6s ease-in-out infinite; }
 .cloud.flagged .aura { fill: url(#auraFlag); }
 .cloud.ghost .aura { fill: url(#auraLit); animation: breathe 1.9s ease-in-out infinite; }
 @keyframes breathe { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
 
-/* flame tongues — only when the hearth is alight; flicker licks UP from the base */
-.flame { fill: url(#flameLit); mix-blend-mode: screen; transform-box: fill-box; transform-origin: 50% 100%; display: none; }
-.cloud.lit .flame, .cloud.ghost .flame, .cloud.flagged .flame { display: block; animation: lick 2.4s ease-in-out infinite; }
-.cloud.flagged .flame { fill: url(#flameFlag); }
-@keyframes lick {
-  0%,100% { transform: scaleY(1) scaleX(1); }
-  40%     { transform: scaleY(1.07) scaleX(0.96); }
-  70%     { transform: scaleY(0.95) scaleX(1.03); }
+/* 달아오른 불기운 plume — only when the hearth is alight */
+.plumebox { overflow: visible; display: none; }
+.cloud.lit .plumebox, .cloud.ghost .plumebox, .cloud.flagged .plumebox { display: block; }
+.plume { fill: url(#plumeLit); transform-box: fill-box; transform-origin: 50% 100%; }
+.cloud.lit .plume, .cloud.ghost .plume, .cloud.flagged .plume { animation: plumeSway 5s ease-in-out infinite; }
+.cloud.flagged .plume { fill: url(#plumeFlag); }
+/* bulk sway (lean + stretch) layered on top of the internal turbulence churn */
+@keyframes plumeSway {
+  0%   { transform: translateX(-2px) scaleY(0.95) rotate(-1.6deg); opacity: 0.7; }
+  26%  { transform: translateX(1.5px) scaleY(1.06) rotate(0.8deg); opacity: 0.96; }
+  52%  { transform: translateX(2.5px) scaleY(1.0)  rotate(1.7deg); opacity: 1; }
+  76%  { transform: translateX(-1px) scaleY(1.07)  rotate(-0.5deg); opacity: 0.9; }
+  100% { transform: translateX(-2px) scaleY(0.95) rotate(-1.6deg); opacity: 0.7; }
 }
 
-/* spark fountain — only when alight */
+/* spark fountain — only when the hearth is alight */
 .fountain { display: none; }
 .cloud.lit .fountain, .cloud.ghost .fountain, .cloud.flagged .fountain { display: block; }
-.fspark { fill: #ffce8a; opacity: 0; mix-blend-mode: screen; filter: drop-shadow(0 0 3px rgba(246, 160, 82, 0.9)); }
-.cloud.flagged .fspark { fill: #f6a890; }
+.fspark { fill: #f6a052; opacity: 0; filter: drop-shadow(0 0 3px rgba(246, 160, 82, 0.8)); }
+.cloud.flagged .fspark { fill: #f08a64; }
 
-.core { fill: url(#coreLit); opacity: 0; mix-blend-mode: screen; }
+.core { fill: url(#coreLit); opacity: 0; }
 .cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: pulse 2.2s ease-in-out infinite; }
 .cloud.flagged .core { opacity: 0.7; }
-@keyframes pulse { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
+@keyframes pulse { 0%,100% { opacity: 0.8; } 50% { opacity: 1; } }
 .cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: flickerCore 2.4s ease-in-out infinite; }
 .cloud.flagged .core { opacity: 0.7; }
 @keyframes flickerCore { 0%,100% { opacity: 0.85; } 45% { opacity: 1; } 70% { opacity: 0.78; } }

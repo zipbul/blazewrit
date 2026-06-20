@@ -24,19 +24,18 @@ interface Region {
   active: boolean; ghost: boolean; flagged: boolean; selected: boolean;
   activeCount: number;
   cx: number; cy: number; hitR: number; top: number;
-  bedRx: number; bedRy: number; coreR: number; // 잉걸 베드 (ember bed glow, holds tasks)
-  flames: Flame[]; // hand-built tapering flame tongues (2–3 forked licks), additive
+  auraRx: number; auraRy: number; coreR: number; // ember base glow
+  seed: number; px: number; py: number; pw: number; ph: number; // 달아오른 불기운: turbulence plume box
+  churn: number; delay: number; // per-project anim timing (desync so the field looks alive)
   fountain: FSpark[]; // 분수 불티: rising spark fountain
   embers: Ember[]; extra: number;
 }
 
-/** One flame tongue: a tapering Bézier path (local base at 0,0, tip up), leaned + flicker pace. */
-interface Flame { d: string; bx: number; by: number; lean: number; dur: number; }
-
-/** Tapering flame tongue: wide convex base → pinched sharp tip at (wob,-h). Base half-width w. */
-function tonguePath(h: number, w: number, wob: number): string {
-  return `M ${(-w).toFixed(1)} 0 C ${(-w * 0.72).toFixed(1)} ${(-h * 0.34).toFixed(1)}, ${(-w * 0.3).toFixed(1)} ${(-h * 0.78).toFixed(1)}, ${wob.toFixed(1)} ${(-h).toFixed(1)} C ${(w * 0.3).toFixed(1)} ${(-h * 0.78).toFixed(1)}, ${(w * 0.72).toFixed(1)} ${(-h * 0.34).toFixed(1)}, ${w.toFixed(1)} 0 Z`;
-}
+/**
+ * "달아오른 불기운" plume silhouette — a FULL, soft incandescent body (not a thin streak),
+ * drawn in a 120×128 box, base at (60,120), soft rounded top (~y10). Turbulence displaces it.
+ */
+const PLUME_PATH = 'M38 120 C22 96 22 70 40 44 C48 32 48 22 56 12 C59 9 63 9 66 13 C73 23 73 33 80 46 C98 72 98 96 82 120 C72 128 48 128 38 120 Z';
 
 interface Trail { id: string; d: string; proposed: boolean; hasFlow: boolean; lx: number; ly: number; }
 interface Node { id: string; r: number; x: number; y: number; }
@@ -80,6 +79,7 @@ export class Canvas {
   private drag: { x: number; y: number; px: number; py: number } | null = null;
 
   protected readonly selection = signal<Selection>(null);
+  protected readonly PLUME = PLUME_PATH;
 
   constructor() {
     afterNextRender(() => {
@@ -166,38 +166,33 @@ export class Canvas {
       const cx = nd.x, cy = nd.y;
       const base = this.baseR(p.id);
       const r = rng(p.id);
-      // 잉걸 베드: a wide, flat, bright ember bed — the body that holds the tasks.
-      const bedRx = base * (0.9 + r() * 0.22);
-      const bedRy = bedRx * 0.32;
-      const coreR = bedRx * 0.5;
-      const by = cy + bedRy * 0.2; // flame base sits on the bed
-      // Flame: 2–3 hand-built tapering tongues rising from the bed (taller than wide, forked tips).
-      const flameW = bedRx * 0.62; // main tongue half-width (base ≈ bed width)
-      const flameH = bedRx * 2.0;  // clearly vertical (≈1.6× its own width)
-      const flames: Flame[] = [];
-      // main tongue
-      flames.push({ d: tonguePath(flameH, flameW, (r() - 0.5) * flameW * 0.5), bx: cx, by, lean: (r() - 0.5) * 8, dur: 2.2 + r() * 1.2 });
-      // 1–2 side licks (shorter, slimmer, leaned, offset) → forked tips
-      const licks = 1 + Math.floor(r() * 2);
-      for (let i = 0; i < licks; i++) {
-        const side = i === 0 ? -1 : 1;
-        const h = flameH * (0.5 + r() * 0.28);
-        const w = flameW * (0.45 + r() * 0.22);
-        flames.push({ d: tonguePath(h, w, (r() - 0.5) * w * 0.4), bx: cx + side * flameW * (0.5 + r() * 0.4), by, lean: side * (10 + r() * 16), dur: 1.8 + r() * 1.4 });
-      }
-      const hitR = Math.max(bedRx, flameH * 0.55);
-      const minTop = by - flameH;
-      // 분수 불티: a fountain of sparks rising from the bed, drifting outward and fading.
-      const F = 8 + Math.floor(r() * 6);
+      // 잉걸 베드: a FLAT ember bed (not a circle) that the plume rises from and holds the tasks.
+      const auraRx = base * (0.95 + r() * 0.3);
+      const auraRy = base * (0.34 + r() * 0.12);
+      const coreR = base * 0.34;
+      // 분수 불티: a fountain of sparks rising from the base and drifting outward as they fade.
+      const baseY = cy + auraRy * 0.45;
+      const F = 16 + Math.floor(r() * 10); // sparks
       const fountain: FSpark[] = Array.from({ length: F }, () => {
-        const sx = cx + (r() - 0.5) * bedRx * 0.6;
-        const h = flameH * (0.6 + r() * 0.7);
-        const dx = (r() - 0.5) * bedRx * 0.9;
+        const sx = cx + (r() - 0.5) * auraRx * 0.5;
+        const h = base * (0.8 + r() * 1.5);          // rise height (varied)
+        const dx = (r() - 0.5) * auraRx * 1.1;        // outward drift → fountain spread
         const dur = 1.6 + r() * 1.6;
-        const begin = -(r() * dur);
-        const rr = 0.8 + r() * 1.5;
-        return { sx, dx, y0: by, y1: by - h, r: rr, dur, begin };
+        const begin = -(r() * dur);                   // negative → mid-flight at load (staggered)
+        const rr = 0.8 + r() * 1.7;
+        return { sx, dx, y0: baseY, y1: baseY - h, r: rr, dur, begin };
       });
+      // 달아오른 불기운: a turbulence-displaced incandescent plume (gallery effect), rendered in a
+      // nested 120×128 svg. Box aspect == viewBox aspect → NO non-uniform stretch (no thin streak).
+      const pw = base * 1.55, ph = pw * (128 / 120);
+      const baseAnchorY = cy + auraRy * 0.1;        // plume rises from the bed
+      const px = cx - pw / 2;
+      const py = baseAnchorY - (120 / 128) * ph;    // local y=120 (plume base) → bed
+      const seed = Math.floor(r() * 90);
+      const churn = 3.4 + (seed % 6) * 0.5;   // 3.4–6.4s turbulence/sway period, varied per project
+      const delay = -(seed % 7) * 0.6;        // negative offset → not all swaying in lockstep
+      const hitR = Math.max(auraRx, ph * 0.5);
+      const minTop = py + (10 / 128) * ph;
 
       const projItems = items.filter((w) => w.projectId === p.id)
         .sort((a, b) => (a.state === 'in_flow' ? 0 : 1) - (b.state === 'in_flow' ? 0 : 1));
@@ -218,7 +213,7 @@ export class Canvas {
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
         activeCount, cx, cy, hitR: hitR + 6, top: minTop - 6,
-        bedRx, bedRy, coreR, flames, fountain,
+        auraRx, auraRy, coreR, seed, px, py, pw, ph, churn, delay, fountain,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });
