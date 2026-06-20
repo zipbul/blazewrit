@@ -17,18 +17,19 @@
 
 .links { position: absolute; inset: 0; overflow: visible; }
 
-/* project region = an EMBER CLOUD / NEBULA (lobes + core + flame tip), shape fixed per id */
-.lobe { fill: url(#cloudIdle); }
-.cloud.lit .lobe { fill: url(#cloudLit); }
-.cloud.flagged .lobe { fill: url(#cloudFlag); }
-.cloud.ghost .lobe { fill: url(#cloudLit); }
-.cloud.lit { animation: breathe 3.8s ease-in-out infinite; }
-.cloud.ghost { animation: breathe 1.9s ease-in-out infinite; }
-@keyframes breathe { 0%,100% { opacity: 0.82; } 50% { opacity: 1; } }
+/* project region = an EMBER NEBULA: random lobes FUSED by the gooey filter into one organic
+   body (no bead pattern), shape fixed per project id. Lobes are solid (gooey needs alpha);
+   the group opacity makes the fused body a translucent ember field. */
+.lobe { fill: #6f6453; }
+.cloud.lit .lobe { fill: #e06b2e; }
+.cloud.flagged .lobe { fill: #d2553f; }
+.cloud.ghost .lobe { fill: #e06b2e; }
+.lobes { opacity: 0.26; }
+.cloud.lit .lobes { opacity: 0.42; animation: breathe 4s ease-in-out infinite; }
+.cloud.flagged .lobes { opacity: 0.4; }
+.cloud.ghost .lobes { opacity: 0.34; animation: breathe 1.9s ease-in-out infinite; }
+@keyframes breathe { 0%,100% { opacity: 0.36; } 50% { opacity: 0.5; } }
 
-.tip { fill: url(#cloudIdle); opacity: 0.55; }
-.cloud.lit .tip, .cloud.ghost .tip { fill: url(#cloudLit); }
-.cloud.flagged .tip { fill: url(#cloudFlag); }
 .core { fill: url(#coreLit); opacity: 0; }
 .cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: flickerCore 2.4s ease-in-out infinite; }
 .cloud.flagged .core { opacity: 0.7; }

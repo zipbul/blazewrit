@@ -24,7 +24,7 @@ interface Region {
   active: boolean; ghost: boolean; flagged: boolean; selected: boolean;
   activeCount: number;
   cx: number; cy: number; hitR: number; top: number;
-  lobes: Lobe[]; coreR: number; flameTip: string; sparks: Spark[];
+  lobes: Lobe[]; coreR: number; sparks: Spark[];
   embers: Ember[]; extra: number;
 }
 
@@ -156,30 +156,26 @@ export class Canvas {
       const cx = nd.x, cy = nd.y;
       const base = this.baseR(p.id);
       const r = rng(p.id);
-      const rot = r() * Math.PI * 2;
-      const xstretch = 1.18 + r() * 0.24; // spread WIDE
-      const ystretch = 0.58 + r() * 0.16; // flatter (less tall)
-
-      // ember nebula: overlapping soft lobes, spread horizontally
-      const K = 5 + Math.floor(r() * 3); // 5–7 lobes (fuller cloud)
+      // ember nebula: lobes scattered at FULLY RANDOM angle/distance/size (no ring pattern),
+      // then merged into one organic shape by the gooey metaball filter in the template.
+      const N = 7 + Math.floor(r() * 5); // 7–11 blobs
       const lobes: Lobe[] = [];
-      for (let k = 0; k < K; k++) {
-        const ang = rot + (k / K) * Math.PI * 2 + (r() - 0.5) * 0.7;
-        const dist = base * (0.36 + r() * 0.34);
-        const lr = base * (0.50 + r() * 0.32);
-        lobes.push({ x: cx + Math.cos(ang) * dist * xstretch, y: cy + Math.sin(ang) * dist * ystretch, r: lr });
+      let hitR = base * 0.6;
+      let minTop = cy;
+      for (let k = 0; k < N; k++) {
+        const ang = r() * Math.PI * 2;
+        const dist = base * (0.04 + r() * 0.72);
+        const lr = base * (0.30 + r() * 0.5);
+        const lx = cx + Math.cos(ang) * dist * 1.15; // mild horizontal bias for spread
+        const ly = cy + Math.sin(ang) * dist * 0.82;
+        lobes.push({ x: lx, y: ly, r: lr });
+        hitR = Math.max(hitR, Math.hypot(lx - cx, ly - cy) + lr);
+        minTop = Math.min(minTop, ly - lr);
       }
-      // gentle, low flame lick (not a spike)
-      const tipH = base * (0.40 + r() * 0.30);
-      const half = base * (0.36 + r() * 0.18);
-      const baseY = cy - base * 0.24;
-      const apexY = baseY - tipH;
-      const sway = (r() - 0.5) * half * 0.7;
-      const flameTip = `M ${(cx + sway).toFixed(1)} ${apexY.toFixed(1)} C ${(cx + half).toFixed(1)} ${(baseY - tipH * 0.45).toFixed(1)} ${(cx + half).toFixed(1)} ${baseY.toFixed(1)} ${cx.toFixed(1)} ${baseY.toFixed(1)} C ${(cx - half).toFixed(1)} ${baseY.toFixed(1)} ${(cx - half).toFixed(1)} ${(baseY - tipH * 0.45).toFixed(1)} ${(cx + sway).toFixed(1)} ${apexY.toFixed(1)} Z`;
-      // faint drifting sparks (nebula)
-      const sparks: Spark[] = Array.from({ length: 5 + Math.floor(r() * 4) }, () => {
-        const a = r() * Math.PI * 2, dd = base * (0.55 + r() * 0.7);
-        return { x: cx + Math.cos(a) * dd * xstretch, y: cy + Math.sin(a) * dd * ystretch - r() * base * 0.3, r: 0.8 + r() * 1.4 };
+      // faint drifting sparks (nebula), scattered around the cloud
+      const sparks: Spark[] = Array.from({ length: 5 + Math.floor(r() * 5) }, () => {
+        const a = r() * Math.PI * 2, dd = base * (0.5 + r() * 0.85);
+        return { x: cx + Math.cos(a) * dd * 1.1, y: cy + Math.sin(a) * dd * 0.82, r: 0.8 + r() * 1.5 };
       });
 
       const projItems = items.filter((w) => w.projectId === p.id)
@@ -200,8 +196,8 @@ export class Canvas {
         id: p.id, name: p.name,
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
-        activeCount, cx, cy, hitR: base * 1.4, top: apexY - 6,
-        lobes, coreR: base * 0.55, flameTip, sparks,
+        activeCount, cx, cy, hitR: hitR + 6, top: minTop - 6,
+        lobes, coreR: base * 0.55, sparks,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });

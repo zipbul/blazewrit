@@ -31,26 +31,29 @@
             <stop offset="100%" stop-color="rgba(210,85,63,0)" />
           </radialGradient>
           <radialGradient id="coreLit" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="rgba(255,210,150,0.85)" />
-            <stop offset="40%" stop-color="rgba(246,160,82,0.4)" />
+            <stop offset="0%" stop-color="rgba(255,210,150,0.9)" />
+            <stop offset="40%" stop-color="rgba(246,160,82,0.42)" />
             <stop offset="100%" stop-color="rgba(224,107,46,0)" />
           </radialGradient>
           <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="6" /></filter>
-          <filter id="softer" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="9" /></filter>
+          <!-- gooey/metaball: blur then alpha-threshold so scattered lobes FUSE into one organic shape -->
+          <filter id="goo" x="-70%" y="-70%" width="240%" height="240%">
+            <feGaussianBlur stdDeviation="13" result="b" />
+            <feColorMatrix in="b" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -10" result="g" />
+            <feGaussianBlur in="g" stdDeviation="3.5" />
+          </filter>
         </defs>
 
         @for (g of regions(); track g.id) {
           <g class="cloud" [class.lit]="g.active" [class.idle]="!g.active && !g.ghost"
              [class.flagged]="g.flagged" [class.ghost]="g.ghost">
-            <!-- ember nebula lobes -->
-            <g filter="url(#softer)">
+            <!-- scattered lobes fused into one organic ember body -->
+            <g class="lobes" filter="url(#goo)">
               @for (lo of g.lobes; track $index) {
                 <circle class="lobe" [attr.cx]="lo.x" [attr.cy]="lo.y" [attr.r]="lo.r" />
               }
             </g>
-            <!-- blended upward flame tip -->
-            <path class="tip" [attr.d]="g.flameTip" filter="url(#soften)" />
-            <!-- bright core -->
+            <!-- bright firelight core -->
             <circle class="core" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.coreR" filter="url(#soften)" />
             <!-- drifting sparks -->
             @for (s of g.sparks; track $index) {
