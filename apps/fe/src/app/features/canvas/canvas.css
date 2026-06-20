@@ -17,18 +17,14 @@
 
 .links { position: absolute; inset: 0; overflow: visible; }
 
-/* project region = an EMBER NEBULA: random lobes FUSED by the gooey filter into one organic
-   body (no bead pattern), shape fixed per project id. Lobes are solid (gooey needs alpha);
-   the group opacity makes the fused body a translucent ember field. */
-.lobe { fill: #6f6453; }
-.cloud.lit .lobe { fill: #e06b2e; }
-.cloud.flagged .lobe { fill: #d2553f; }
-.cloud.ghost .lobe { fill: #e06b2e; }
-.lobes { opacity: 0.26; }
-.cloud.lit .lobes { opacity: 0.42; animation: breathe 4s ease-in-out infinite; }
-.cloud.flagged .lobes { opacity: 0.4; }
-.cloud.ghost .lobes { opacity: 0.34; animation: breathe 1.9s ease-in-out infinite; }
-@keyframes breathe { 0%,100% { opacity: 0.36; } 50% { opacity: 0.5; } }
+/* project region = a RADIANT ember spread (sun-like, all directions, fading) whose edge is
+   broken into irregular flickering flame wisps by a per-id turbulence filter — not round,
+   random, soft. Shape fixed per project id via the turbulence seed. */
+.corona { fill: url(#coronaIdle); opacity: 0.6; }
+.cloud.lit .corona { fill: url(#coronaLit); opacity: 0.7; animation: breathe 4.2s ease-in-out infinite; }
+.cloud.flagged .corona { fill: url(#coronaFlag); opacity: 0.7; }
+.cloud.ghost .corona { fill: url(#coronaLit); opacity: 0.6; animation: breathe 2s ease-in-out infinite; }
+@keyframes breathe { 0%,100% { opacity: 0.6; } 50% { opacity: 0.82; } }
 
 .core { fill: url(#coreLit); opacity: 0; }
 .cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: flickerCore 2.4s ease-in-out infinite; }

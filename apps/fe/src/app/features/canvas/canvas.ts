@@ -15,7 +15,6 @@ import { UiState } from '../../data-access/ui-state';
 const MARGIN = 180;
 const ROW = 28; // ember vertical gap
 
-interface Lobe { x: number; y: number; r: number; }
 interface Spark { x: number; y: number; r: number; }
 interface Ember { id: string; title: string; state: string; step?: string; x: number; y: number; }
 
@@ -24,7 +23,8 @@ interface Region {
   active: boolean; ghost: boolean; flagged: boolean; selected: boolean;
   activeCount: number;
   cx: number; cy: number; hitR: number; top: number;
-  lobes: Lobe[]; coreR: number; sparks: Spark[];
+  rx: number; ry: number; seed: number; scale: number; // radiant ellipse + turbulence distortion
+  coreR: number; sparks: Spark[];
   embers: Ember[]; extra: number;
 }
 
@@ -156,26 +156,19 @@ export class Canvas {
       const cx = nd.x, cy = nd.y;
       const base = this.baseR(p.id);
       const r = rng(p.id);
-      // ember nebula: lobes scattered at FULLY RANDOM angle/distance/size (no ring pattern),
-      // then merged into one organic shape by the gooey metaball filter in the template.
-      const N = 7 + Math.floor(r() * 5); // 7–11 blobs
-      const lobes: Lobe[] = [];
-      let hitR = base * 0.6;
-      let minTop = cy;
-      for (let k = 0; k < N; k++) {
-        const ang = r() * Math.PI * 2;
-        const dist = base * (0.04 + r() * 0.72);
-        const lr = base * (0.30 + r() * 0.5);
-        const lx = cx + Math.cos(ang) * dist * 1.15; // mild horizontal bias for spread
-        const ly = cy + Math.sin(ang) * dist * 0.82;
-        lobes.push({ x: lx, y: ly, r: lr });
-        hitR = Math.max(hitR, Math.hypot(lx - cx, ly - cy) + lr);
-        minTop = Math.min(minTop, ly - lr);
-      }
-      // faint drifting sparks (nebula), scattered around the cloud
-      const sparks: Spark[] = Array.from({ length: 5 + Math.floor(r() * 5) }, () => {
-        const a = r() * Math.PI * 2, dd = base * (0.5 + r() * 0.85);
-        return { x: cx + Math.cos(a) * dd * 1.1, y: cy + Math.sin(a) * dd * 0.82, r: 0.8 + r() * 1.5 };
+      // Radiant ember region: a soft glow that spreads in ALL directions (sun-like) and fades,
+      // on an off-round ELLIPSE base, with its edge broken into irregular flickering wisps by a
+      // per-project turbulence-displacement filter (seed from id = unique & fixed, not round).
+      const rx = base * (0.96 + r() * 0.46);
+      const ry = base * (0.70 + r() * 0.34);
+      const seed = Math.floor(r() * 1000);
+      const scale = 16 + r() * 16; // displacement amount — irregular but not excessive
+      const hitR = Math.max(rx, ry) + scale + 4;
+      const minTop = cy - ry - scale - 4;
+      // faint sparks scattered all around (within the radiant spread)
+      const sparks: Spark[] = Array.from({ length: 6 + Math.floor(r() * 6) }, () => {
+        const a = r() * Math.PI * 2, dd = 0.4 + r() * 0.75;
+        return { x: cx + Math.cos(a) * rx * dd, y: cy + Math.sin(a) * ry * dd, r: 0.7 + r() * 1.5 };
       });
 
       const projItems = items.filter((w) => w.projectId === p.id)
@@ -197,7 +190,7 @@ export class Canvas {
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
         activeCount, cx, cy, hitR: hitR + 6, top: minTop - 6,
-        lobes, coreR: base * 0.55, sparks,
+        rx, ry, seed, scale, coreR: base * 0.55, sparks,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });

@@ -35,24 +35,36 @@
             <stop offset="40%" stop-color="rgba(246,160,82,0.42)" />
             <stop offset="100%" stop-color="rgba(224,107,46,0)" />
           </radialGradient>
+          <radialGradient id="coronaLit" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(246,160,82,0.5)" />
+            <stop offset="42%" stop-color="rgba(224,107,46,0.18)" />
+            <stop offset="100%" stop-color="rgba(224,107,46,0)" />
+          </radialGradient>
+          <radialGradient id="coronaIdle" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.16)" />
+            <stop offset="100%" stop-color="rgba(150,132,104,0)" />
+          </radialGradient>
+          <radialGradient id="coronaFlag" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.46)" />
+            <stop offset="100%" stop-color="rgba(210,85,63,0)" />
+          </radialGradient>
           <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="6" /></filter>
-          <!-- gooey/metaball: blur then alpha-threshold so scattered lobes FUSE into one organic shape -->
-          <filter id="goo" x="-70%" y="-70%" width="240%" height="240%">
-            <feGaussianBlur stdDeviation="13" result="b" />
-            <feColorMatrix in="b" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -10" result="g" />
-            <feGaussianBlur in="g" stdDeviation="3.5" />
-          </filter>
         </defs>
 
-        @for (g of regions(); track g.id) {
+        @for (g of regions(); track g.id; let i = $index) {
+          <!-- per-project flame distortion: turbulence breaks the radiant ellipse into irregular,
+               flickering, sun-like wisps that spread all directions and fade. seed = fixed per id. -->
+          <filter [attr.id]="'fx' + i" x="-70%" y="-70%" width="240%" height="240%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.011 0.015" numOctaves="2" [attr.seed]="g.seed" result="n">
+              <animate attributeName="baseFrequency" dur="9s" values="0.011 0.015;0.014 0.019;0.011 0.015" repeatCount="indefinite" />
+            </feTurbulence>
+            <feDisplacementMap in="SourceGraphic" in2="n" [attr.scale]="g.scale" />
+          </filter>
           <g class="cloud" [class.lit]="g.active" [class.idle]="!g.active && !g.ghost"
              [class.flagged]="g.flagged" [class.ghost]="g.ghost">
-            <!-- scattered lobes fused into one organic ember body -->
-            <g class="lobes" filter="url(#goo)">
-              @for (lo of g.lobes; track $index) {
-                <circle class="lobe" [attr.cx]="lo.x" [attr.cy]="lo.y" [attr.r]="lo.r" />
-              }
-            </g>
+            <!-- radiant ember spread, edge distorted into flame wisps -->
+            <ellipse class="corona" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.rx]="g.rx" [attr.ry]="g.ry"
+                     [attr.filter]="'url(#fx' + i + ')'" />
             <!-- bright firelight core -->
             <circle class="core" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.coreR" filter="url(#soften)" />
             <!-- drifting sparks -->
