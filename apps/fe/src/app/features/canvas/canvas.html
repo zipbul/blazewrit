@@ -35,29 +35,57 @@
             <stop offset="45%" stop-color="rgba(246,160,82,0.5)" />
             <stop offset="100%" stop-color="rgba(224,107,46,0)" />
           </radialGradient>
-          <!-- 달아오른 불기운: radiant heat glow (hot center → transparent) -->
-          <radialGradient id="auraLit" cx="50%" cy="54%" r="55%">
-            <stop offset="0%" stop-color="rgba(246,150,72,0.4)" />
-            <stop offset="45%" stop-color="rgba(224,107,46,0.16)" />
-            <stop offset="100%" stop-color="rgba(192,57,43,0)" />
+          <!-- ember base glow (잉걸) -->
+          <radialGradient id="auraLit" cx="50%" cy="58%" r="60%">
+            <stop offset="0%" stop-color="rgba(246,160,82,0.7)" />
+            <stop offset="35%" stop-color="rgba(224,107,46,0.4)" />
+            <stop offset="100%" stop-color="rgba(224,107,46,0)" />
           </radialGradient>
-          <radialGradient id="auraIdle" cx="50%" cy="54%" r="55%">
-            <stop offset="0%" stop-color="rgba(150,132,104,0.13)" />
+          <radialGradient id="auraIdle" cx="50%" cy="58%" r="60%">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.16)" />
             <stop offset="100%" stop-color="rgba(150,132,104,0)" />
           </radialGradient>
-          <radialGradient id="auraFlag" cx="50%" cy="54%" r="55%">
-            <stop offset="0%" stop-color="rgba(240,120,90,0.4)" />
+          <radialGradient id="auraFlag" cx="50%" cy="58%" r="60%">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.55)" />
             <stop offset="100%" stop-color="rgba(210,85,63,0)" />
           </radialGradient>
-          <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3" /></filter>
+          <!-- 불기운 plume gradient: hot base → ash, fading at the top (from the gallery card) -->
+          <linearGradient id="plumeLit" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stop-color="rgba(246,160,82,0.7)" />
+            <stop offset="35%" stop-color="rgba(224,107,46,0.45)" />
+            <stop offset="75%" stop-color="rgba(111,100,83,0.22)" />
+            <stop offset="100%" stop-color="rgba(111,100,83,0)" />
+          </linearGradient>
+          <linearGradient id="plumeFlag" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.7)" />
+            <stop offset="55%" stop-color="rgba(210,85,63,0.3)" />
+            <stop offset="100%" stop-color="rgba(210,85,63,0)" />
+          </linearGradient>
+          <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.5" /></filter>
         </defs>
 
-        @for (g of regions(); track g.id) {
+        @for (g of regions(); track g.id; let i = $index) {
+          <!-- per-project turbulence so each 불기운 plume distorts differently (gallery bE_glow9) -->
+          <filter [attr.id]="'plm' + i" x="-70%" y="-40%" width="240%" height="180%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.014 0.024" numOctaves="4" [attr.seed]="g.seed" result="n">
+              <animate attributeName="baseFrequency" dur="13s" values="0.014 0.024;0.02 0.018;0.014 0.024" repeatCount="indefinite" />
+            </feTurbulence>
+            <feDisplacementMap in="SourceGraphic" in2="n" scale="34" xChannelSelector="R" yChannelSelector="G" result="disp" />
+            <feGaussianBlur in="disp" stdDeviation="3" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="b" /></feMerge>
+          </filter>
           <g class="cloud" [class.lit]="g.active" [class.idle]="!g.active && !g.ghost"
              [class.flagged]="g.flagged" [class.ghost]="g.ghost">
-            <!-- 달아오른 불기운: radiant heat-glow body (holds the tasks), breathing -->
+            <!-- 잉걸 base glow (holds the tasks) -->
             <ellipse class="aura" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.rx]="g.auraRx" [attr.ry]="g.auraRy"
                      filter="url(#soften)" />
+            <!-- 달아오른 불기운: turbulence-displaced incandescent plume (nested svg keeps the filter look) -->
+            <svg class="plumebox" [attr.x]="g.px" [attr.y]="g.py" [attr.width]="g.pw" [attr.height]="g.ph"
+                 viewBox="0 0 160 150" preserveAspectRatio="none">
+              <g [attr.filter]="'url(#plm' + i + ')'">
+                <path class="plume" [attr.d]="PLUME" />
+              </g>
+            </svg>
             <!-- 분수 불티: spark fountain rising + drifting outward, fading -->
             <g class="fountain">
               @for (s of g.fountain; track $index) {

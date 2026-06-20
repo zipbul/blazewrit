@@ -24,10 +24,14 @@ interface Region {
   active: boolean; ghost: boolean; flagged: boolean; selected: boolean;
   activeCount: number;
   cx: number; cy: number; hitR: number; top: number;
-  auraRx: number; auraRy: number; coreR: number; // 달아오른 불기운: radiant heat glow body
+  auraRx: number; auraRy: number; coreR: number; // ember base glow
+  seed: number; px: number; py: number; pw: number; ph: number; // 달아오른 불기운: turbulence plume box
   fountain: FSpark[]; // 분수 불티: rising spark fountain
   embers: Ember[]; extra: number;
 }
+
+/** "달아오른 불기운" plume silhouette (gallery card), drawn in a 160×150 box, base at (80,142). */
+const PLUME_PATH = 'M80 142 C66 112 60 92 72 66 C82 46 80 30 78 14 C90 28 100 44 92 68 C84 92 96 112 80 142 Z';
 
 interface Trail { id: string; d: string; proposed: boolean; hasFlow: boolean; lx: number; ly: number; }
 interface Node { id: string; r: number; x: number; y: number; }
@@ -71,6 +75,7 @@ export class Canvas {
   private drag: { x: number; y: number; px: number; py: number } | null = null;
 
   protected readonly selection = signal<Selection>(null);
+  protected readonly PLUME = PLUME_PATH;
 
   constructor() {
     afterNextRender(() => {
@@ -174,8 +179,15 @@ export class Canvas {
         const rr = 0.8 + r() * 1.7;
         return { sx, dx, y0: baseY, y1: baseY - h, r: rr, dur, begin };
       });
-      const hitR = Math.max(auraRx, base * 2);
-      const minTop = cy - base * 2;
+      // 달아오른 불기운: a turbulence-displaced incandescent plume (gallery effect), rendered in a
+      // nested 160×150 svg so its filter keeps its look when scaled to this region.
+      const pw = base * 1.9, ph = base * 2.7;
+      const baseAnchorY = cy + auraRy * 0.32;
+      const px = cx - pw / 2;
+      const py = baseAnchorY - (142 / 150) * ph; // local y=142 (plume base) → region base
+      const seed = Math.floor(r() * 90);
+      const hitR = Math.max(auraRx, ph * 0.46);
+      const minTop = py + (10 / 150) * ph;
 
       const projItems = items.filter((w) => w.projectId === p.id)
         .sort((a, b) => (a.state === 'in_flow' ? 0 : 1) - (b.state === 'in_flow' ? 0 : 1));
@@ -196,7 +208,7 @@ export class Canvas {
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
         activeCount, cx, cy, hitR: hitR + 6, top: minTop - 6,
-        auraRx, auraRy, coreR, fountain,
+        auraRx, auraRy, coreR, seed, px, py, pw, ph, fountain,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });
