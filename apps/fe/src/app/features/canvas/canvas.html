@@ -2,53 +2,56 @@
   <h1 class="sr-only">Canvas</h1>
 
   <div class="bar">
-    <span class="lbl">Fleet</span>
+    <span class="lbl">Hearths</span>
+    <button class="ghostbtn" type="button" (click)="resetView()" title="시야 초기화">⊙ 맞춤</button>
     <button class="add" type="button" (click)="addProject()"
             title="작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다">+ 프로젝트</button>
   </div>
 
-  <section class="map" #mapEl>
-    <div class="field" [style.width.px]="fieldWidth()" [style.height.px]="fieldHeight()">
-      <!-- project→project dependency edges + cross-project flow links (with A2A embers) -->
+  <section class="map" #mapEl (wheel)="onWheel($event)"
+           (pointerdown)="onPointerDown($event)" (pointermove)="onPointerMove($event)"
+           (pointerup)="onPointerUp()" (pointerleave)="onPointerUp()">
+    <div class="field"
+         [style.width.px]="fieldWidth()" [style.height.px]="fieldHeight()"
+         [style.transform]="'translate(' + panX() + 'px,' + panY() + 'px) scale(' + zoom() + ')'">
+
+      <!-- trails (dependencies) + flow links (A2A sparks) -->
       <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()" aria-hidden="true">
-        @for (e of edges(); track e.id) {
-          <path [attr.d]="e.d" class="edge" [class.proposed]="e.proposed"></path>
-          <text [attr.x]="e.lx" [attr.y]="e.ly" class="edge-lbl">{{ e.label }}</text>
+        @for (t of trails(); track t.id) {
+          <path [attr.d]="t.d" class="trail" [class.proposed]="t.proposed"></path>
+          <text [attr.x]="t.lx" [attr.y]="t.ly" class="trail-lbl">depends</text>
         }
         @for (l of flowLinks(); track l.id) {
-          <path [attr.id]="'fl-' + l.id" [attr.d]="l.d" class="flowlink"></path>
-          <circle r="3.2" class="flowember">
-            <animateMotion dur="1.8s" repeatCount="indefinite" [attr.path]="l.d" />
-          </circle>
+          <path [attr.d]="l.d" class="flowlink"></path>
+          <circle r="3.4" class="spark"><animateMotion dur="2s" repeatCount="indefinite" [attr.path]="l.d" /></circle>
         }
       </svg>
 
-      @for (g of groups(); track g.id) {
-        <section class="group" [class.sel]="g.selected" [class.idle]="!g.active && !g.ghost"
-                 [class.lit]="g.active" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
-                 [style.left.px]="g.x" [style.top.px]="g.y" [style.width.px]="g.w">
-          <button class="ghead" type="button" (click)="selectProject(g.id)">
-            <span class="gname">{{ g.ghost ? '＋' : (g.active ? '🔥' : '🪵') }} {{ g.name }}</span>
-            <span class="gmeta">{{ g.ghost ? '등록 대기' : (g.active ? g.activeCount + ' 작업 중' : 'idle') }}</span>
+      @for (g of regions(); track g.id) {
+        <div class="region" [class.sel]="g.selected" [class.idle]="!g.active && !g.ghost"
+             [class.lit]="g.active" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
+             [style.left.px]="g.cx" [style.top.px]="g.cy"
+             [style.--glow.px]="g.glow">
+          <div class="aura"></div>
+          <button class="rhead" type="button" (click)="selectProject(g.id)">
+            <span class="rname">{{ g.ghost ? '＋' : (g.active ? '🔥' : '🪵') }} {{ g.name }}</span>
+            <span class="rmeta">{{ g.ghost ? '등록 대기' : (g.active ? g.activeCount + ' 작업 중' : 'idle') }}</span>
             @if (g.flagged) { <span class="qtag">질문</span> }
           </button>
-
           @if (!g.ghost) {
-            <div class="gbody">
-              @for (c of g.chips; track c.id) {
-                <button class="chip" type="button" (click)="selectTask(c.id, $event)"
-                        [class.run]="c.state === 'in_flow'" [class.done]="c.state === 'done'">
-                  <span class="cdot"></span>
-                  <span class="ctitle">{{ c.title }}</span>
-                  @if (c.stepLabel) { <span class="cstep">{{ c.stepLabel }}</span> }
+            <div class="rbody">
+              @for (e of g.embers; track e.id) {
+                <button class="emb" type="button" (click)="selectTask(e.id, $event)"
+                        [class.run]="e.state === 'in_flow'" [class.done]="e.state === 'done'">
+                  <span class="edot"></span>
+                  <span class="etitle">{{ e.title }}</span>
+                  @if (e.step) { <span class="estep">{{ e.step }}</span> }
                 </button>
-              } @empty {
-                <div class="cempty">작업 없음</div>
-              }
-              @if (g.extra) { <div class="cmore">+{{ g.extra }} 더보기</div> }
+              } @empty { <div class="eempty">작업 없음</div> }
+              @if (g.extra) { <div class="emore">+{{ g.extra }}</div> }
             </div>
           }
-        </section>
+        </div>
       } @empty {
         <div class="empty">아직 프로젝트가 없습니다. 위 입력창에 작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다.</div>
       }
