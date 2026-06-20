@@ -17,27 +17,23 @@
 
 .links { position: absolute; inset: 0; overflow: visible; }
 
-/* project region = FIRE: pointed flame licks radiating from a glowing base, each lick filled
-   with a vertical hot→cool gradient (hot at base, fading at the sharp tip). Shape fixed per id. */
-.baseglow { fill: url(#baseGlowIdle); }
-.cloud.lit .baseglow { fill: url(#baseGlowLit); }
-.cloud.flagged .baseglow { fill: url(#baseGlowLit); }
+/* project region = 달아오른 불기운(radiant heat glow body) + 분수 불티(rising spark fountain).
+   The aura is the body that holds the tasks; the fountain gives living fire motion. */
+.aura { fill: url(#auraIdle); }
+.cloud.lit .aura { fill: url(#auraLit); animation: breathe 3.6s ease-in-out infinite; }
+.cloud.flagged .aura { fill: url(#auraFlag); }
+.cloud.ghost .aura { fill: url(#auraLit); animation: breathe 1.9s ease-in-out infinite; }
+@keyframes breathe { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
 
-.tongue { fill: url(#flameIdle); transform-box: fill-box; transform-origin: bottom; }
-.cloud.lit .tongue { fill: url(#flameLit); animation: lick 2.6s ease-in-out infinite; }
-.cloud.flagged .tongue { fill: url(#flameFlag); animation: lick 2.6s ease-in-out infinite; }
-.cloud.ghost .tongue { fill: url(#flameLit); animation: lick 1.6s ease-in-out infinite; }
+/* spark fountain — only when the hearth is alight */
+.fountain { display: none; }
+.cloud.lit .fountain, .cloud.ghost .fountain, .cloud.flagged .fountain { display: block; }
+.fspark { fill: #f6a052; opacity: 0; filter: drop-shadow(0 0 3px rgba(246, 160, 82, 0.8)); }
+.cloud.flagged .fspark { fill: #f08a64; }
 
 .core { fill: url(#coreLit); opacity: 0; }
 .cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: pulse 2.2s ease-in-out infinite; }
 .cloud.flagged .core { opacity: 0.7; }
-
-/* flame lick: stretch/shrink along its length (base anchored), slight sway */
-@keyframes lick {
-  0%,100% { transform: scaleY(1) scaleX(1); }
-  30%     { transform: scaleY(1.16) scaleX(0.9); }
-  60%     { transform: scaleY(0.9) scaleX(1.06); }
-}
 @keyframes pulse { 0%,100% { opacity: 0.8; } 50% { opacity: 1; } }
 .cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: flickerCore 2.4s ease-in-out infinite; }
 .cloud.flagged .core { opacity: 0.7; }

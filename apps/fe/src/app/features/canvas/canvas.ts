@@ -15,20 +15,19 @@ import { UiState } from '../../data-access/ui-state';
 const MARGIN = 180;
 const ROW = 28; // ember vertical gap
 
-interface Spark { x: number; y: number; r: number; }
 interface Ember { id: string; title: string; state: string; step?: string; x: number; y: number; }
+/** A spark in the fountain: rises from y0→y1 while drifting sx→sx+dx, fading. */
+interface FSpark { sx: number; dx: number; y0: number; y1: number; r: number; dur: number; begin: number; }
 
 interface Region {
   id: string; name: string;
   active: boolean; ghost: boolean; flagged: boolean; selected: boolean;
   activeCount: number;
   cx: number; cy: number; hitR: number; top: number;
-  tongues: Tongue[]; glowR: number; coreR: number; // pointed flame licks + base ember glow
-  sparks: Spark[];
+  auraRx: number; auraRy: number; coreR: number; // 달아오른 불기운: radiant heat glow body
+  fountain: FSpark[]; // 분수 불티: rising spark fountain
   embers: Ember[]; extra: number;
 }
-
-interface Tongue { d: string; deg: number; dur: number; }
 
 interface Trail { id: string; d: string; proposed: boolean; hasFlow: boolean; lx: number; ly: number; }
 interface Node { id: string; r: number; x: number; y: number; }
@@ -158,31 +157,25 @@ export class Canvas {
       const cx = nd.x, cy = nd.y;
       const base = this.baseR(p.id);
       const r = rng(p.id);
-      // POINTED flame tongues radiating from the center — sharp tips, hot base → cool fading tip
-      // (vertical gradient), biased & longer upward. This reads as fire, not a soft blob.
-      const K = 16 + Math.floor(r() * 7); // 16–22 licks
-      const tongues: Tongue[] = [];
-      let hitR = base * 0.5, minTop = cy;
-      for (let k = 0; k < K; k++) {
-        const deg = (k / K) * 360 + (r() - 0.5) * 30; // uneven angles; 0° = straight up
-        const rad = (deg * Math.PI) / 180;
-        const up = Math.cos(rad); // 1 up, -1 down
-        let len = base * (0.45 + r() * 0.85) * (1 + 0.55 * Math.max(0, up));
-        if (r() < 0.3) len *= 1.3; // occasional long lick
-        const w = len * (0.10 + r() * 0.07); // slim
-        // local tongue points UP (tip at 0,-len), base width 2w at y=0; sharp tip
-        const d = `M ${(-w).toFixed(1)} 0 C ${(-w * 0.6).toFixed(1)} ${(-len * 0.5).toFixed(1)}, ${(-w * 0.14).toFixed(1)} ${(-len * 0.92).toFixed(1)}, 0 ${(-len).toFixed(1)} C ${(w * 0.14).toFixed(1)} ${(-len * 0.92).toFixed(1)}, ${(w * 0.6).toFixed(1)} ${(-len * 0.5).toFixed(1)}, ${w.toFixed(1)} 0 Z`;
-        tongues.push({ d, deg, dur: 2 + r() * 1.8 });
-        const tipx = cx + Math.sin(rad) * len, tipy = cy - Math.cos(rad) * len;
-        hitR = Math.max(hitR, Math.hypot(tipx - cx, tipy - cy));
-        minTop = Math.min(minTop, tipy);
-      }
-      const glowR = base * 0.8;
-      // rising sparks above the base
-      const sparks: Spark[] = Array.from({ length: 5 + Math.floor(r() * 5) }, () => {
-        const up = r();
-        return { x: cx + (r() - 0.5) * base * 1.1 * (1 - up * 0.5), y: cy - up * base * 1.4, r: 0.7 + r() * 1.4 };
+      // 달아오른 불기운: a hot radiant heat glow (the region body that holds the tasks),
+      // slightly elliptical + per-id size so it isn't a uniform circle.
+      const auraRx = base * (1.0 + r() * 0.35);
+      const auraRy = base * (0.78 + r() * 0.26);
+      const coreR = base * 0.42;
+      // 분수 불티: a fountain of sparks rising from the base and drifting outward as they fade.
+      const baseY = cy + auraRy * 0.45;
+      const F = 16 + Math.floor(r() * 10); // sparks
+      const fountain: FSpark[] = Array.from({ length: F }, () => {
+        const sx = cx + (r() - 0.5) * auraRx * 0.5;
+        const h = base * (0.8 + r() * 1.5);          // rise height (varied)
+        const dx = (r() - 0.5) * auraRx * 1.1;        // outward drift → fountain spread
+        const dur = 1.6 + r() * 1.6;
+        const begin = -(r() * dur);                   // negative → mid-flight at load (staggered)
+        const rr = 0.8 + r() * 1.7;
+        return { sx, dx, y0: baseY, y1: baseY - h, r: rr, dur, begin };
       });
+      const hitR = Math.max(auraRx, base * 2);
+      const minTop = cy - base * 2;
 
       const projItems = items.filter((w) => w.projectId === p.id)
         .sort((a, b) => (a.state === 'in_flow' ? 0 : 1) - (b.state === 'in_flow' ? 0 : 1));
@@ -203,7 +196,7 @@ export class Canvas {
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
         activeCount, cx, cy, hitR: hitR + 6, top: minTop - 6,
-        tongues, glowR, coreR: base * 0.34, sparks,
+        auraRx, auraRy, coreR, fountain,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });

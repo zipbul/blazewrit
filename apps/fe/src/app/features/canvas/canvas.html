@@ -35,51 +35,44 @@
             <stop offset="45%" stop-color="rgba(246,160,82,0.5)" />
             <stop offset="100%" stop-color="rgba(224,107,46,0)" />
           </radialGradient>
-          <radialGradient id="baseGlowLit" cx="50%" cy="55%" r="55%">
-            <stop offset="0%" stop-color="rgba(224,107,46,0.28)" />
-            <stop offset="100%" stop-color="rgba(224,107,46,0)" />
-          </radialGradient>
-          <radialGradient id="baseGlowIdle" cx="50%" cy="55%" r="55%">
-            <stop offset="0%" stop-color="rgba(150,132,104,0.14)" />
-            <stop offset="100%" stop-color="rgba(150,132,104,0)" />
-          </radialGradient>
-          <!-- vertical FIRE gradient: hot at base (bottom) → cool, fading at the tip (top) -->
-          <linearGradient id="flameLit" x1="0" y1="1" x2="0" y2="0">
-            <stop offset="0%" stop-color="rgba(255,214,140,0.92)" />
-            <stop offset="38%" stop-color="rgba(232,132,47,0.6)" />
+          <!-- 달아오른 불기운: radiant heat glow (hot center → transparent) -->
+          <radialGradient id="auraLit" cx="50%" cy="54%" r="55%">
+            <stop offset="0%" stop-color="rgba(246,150,72,0.4)" />
+            <stop offset="45%" stop-color="rgba(224,107,46,0.16)" />
             <stop offset="100%" stop-color="rgba(192,57,43,0)" />
-          </linearGradient>
-          <linearGradient id="flameIdle" x1="0" y1="1" x2="0" y2="0">
-            <stop offset="0%" stop-color="rgba(150,132,104,0.4)" />
+          </radialGradient>
+          <radialGradient id="auraIdle" cx="50%" cy="54%" r="55%">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.13)" />
             <stop offset="100%" stop-color="rgba(150,132,104,0)" />
-          </linearGradient>
-          <linearGradient id="flameFlag" x1="0" y1="1" x2="0" y2="0">
-            <stop offset="0%" stop-color="rgba(240,120,90,0.85)" />
+          </radialGradient>
+          <radialGradient id="auraFlag" cx="50%" cy="54%" r="55%">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.4)" />
             <stop offset="100%" stop-color="rgba(210,85,63,0)" />
-          </linearGradient>
-          <filter id="soften" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.2" /></filter>
+          </radialGradient>
+          <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3" /></filter>
         </defs>
 
         @for (g of regions(); track g.id) {
           <g class="cloud" [class.lit]="g.active" [class.idle]="!g.active && !g.ghost"
              [class.flagged]="g.flagged" [class.ghost]="g.ghost">
-            <!-- soft ember base glow (haze behind the licks) -->
-            <circle class="baseglow" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.glowR" />
-            <!-- pointed flame licks radiating from the center (each rotated to its direction;
-                 inner path flickers via scaleY so it doesn't fight the positioning transform) -->
-            <g filter="url(#soften)">
-              @for (t of g.tongues; track $index) {
-                <g [attr.transform]="'translate(' + g.cx + ' ' + g.cy + ') rotate(' + t.deg + ')'">
-                  <path class="tongue" [attr.d]="t.d" [style.animation-duration]="t.dur + 's'" />
-                </g>
+            <!-- 달아오른 불기운: radiant heat-glow body (holds the tasks), breathing -->
+            <ellipse class="aura" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.rx]="g.auraRx" [attr.ry]="g.auraRy"
+                     filter="url(#soften)" />
+            <!-- 분수 불티: spark fountain rising + drifting outward, fading -->
+            <g class="fountain">
+              @for (s of g.fountain; track $index) {
+                <circle class="fspark" [attr.cx]="s.sx" [attr.cy]="s.y0" [attr.r]="s.r">
+                  <animate attributeName="cy" [attr.from]="s.y0" [attr.to]="s.y1"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                  <animate attributeName="cx" [attr.values]="s.sx + ';' + (s.sx + s.dx)"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0;1;0.9;0"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                </circle>
               }
             </g>
             <!-- hot core -->
-            <circle class="core" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.coreR" />
-            <!-- rising sparks -->
-            @for (s of g.sparks; track $index) {
-              <circle class="sparkdot" [attr.cx]="s.x" [attr.cy]="s.y" [attr.r]="s.r" />
-            }
+            <circle class="core" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.coreR" filter="url(#soften)" />
             <!-- selection ring + click target -->
             <circle class="hit" [class.sel]="g.selected" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.hitR"
                     (click)="selectProject(g.id)" />
