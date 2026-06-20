@@ -31,34 +31,52 @@
             <stop offset="100%" stop-color="rgba(210,85,63,0)" />
           </radialGradient>
           <radialGradient id="coreLit" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="rgba(255,210,150,0.9)" />
-            <stop offset="40%" stop-color="rgba(246,160,82,0.42)" />
+            <stop offset="0%" stop-color="rgba(255,224,170,0.95)" />
+            <stop offset="45%" stop-color="rgba(246,160,82,0.5)" />
             <stop offset="100%" stop-color="rgba(224,107,46,0)" />
           </radialGradient>
-          <radialGradient id="coronaLit" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="rgba(246,160,82,0.5)" />
-            <stop offset="42%" stop-color="rgba(224,107,46,0.18)" />
+          <radialGradient id="baseGlowLit" cx="50%" cy="55%" r="55%">
+            <stop offset="0%" stop-color="rgba(224,107,46,0.28)" />
             <stop offset="100%" stop-color="rgba(224,107,46,0)" />
           </radialGradient>
-          <radialGradient id="coronaIdle" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="rgba(150,132,104,0.16)" />
+          <radialGradient id="baseGlowIdle" cx="50%" cy="55%" r="55%">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.14)" />
             <stop offset="100%" stop-color="rgba(150,132,104,0)" />
           </radialGradient>
-          <radialGradient id="coronaFlag" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="rgba(240,120,90,0.46)" />
+          <!-- vertical FIRE gradient: hot at base (bottom) → cool, fading at the tip (top) -->
+          <linearGradient id="flameLit" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stop-color="rgba(255,214,140,0.92)" />
+            <stop offset="38%" stop-color="rgba(232,132,47,0.6)" />
+            <stop offset="100%" stop-color="rgba(192,57,43,0)" />
+          </linearGradient>
+          <linearGradient id="flameIdle" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.4)" />
+            <stop offset="100%" stop-color="rgba(150,132,104,0)" />
+          </linearGradient>
+          <linearGradient id="flameFlag" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.85)" />
             <stop offset="100%" stop-color="rgba(210,85,63,0)" />
-          </radialGradient>
-          <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.4" /></filter>
+          </linearGradient>
+          <filter id="soften" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.2" /></filter>
         </defs>
 
         @for (g of regions(); track g.id) {
           <g class="cloud" [class.lit]="g.active" [class.idle]="!g.active && !g.ghost"
-             [class.flagged]="g.flagged" [class.ghost]="g.ghost" filter="url(#soften)">
-            <!-- flame silhouette: jagged tongues radiating all directions, fades to tips -->
-            <path class="flame" [attr.d]="g.flame" [style.animation-duration]="g.animDur + 's'" />
-            <!-- brighter inner core flame -->
-            <path class="flamecore" [attr.d]="g.flameCore" [style.animation-duration]="(g.animDur * 0.8) + 's'" />
-            <!-- drifting sparks -->
+             [class.flagged]="g.flagged" [class.ghost]="g.ghost">
+            <!-- soft ember base glow (haze behind the licks) -->
+            <circle class="baseglow" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.glowR" />
+            <!-- pointed flame licks radiating from the center (each rotated to its direction;
+                 inner path flickers via scaleY so it doesn't fight the positioning transform) -->
+            <g filter="url(#soften)">
+              @for (t of g.tongues; track $index) {
+                <g [attr.transform]="'translate(' + g.cx + ' ' + g.cy + ') rotate(' + t.deg + ')'">
+                  <path class="tongue" [attr.d]="t.d" [style.animation-duration]="t.dur + 's'" />
+                </g>
+              }
+            </g>
+            <!-- hot core -->
+            <circle class="core" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.coreR" />
+            <!-- rising sparks -->
             @for (s of g.sparks; track $index) {
               <circle class="sparkdot" [attr.cx]="s.x" [attr.cy]="s.y" [attr.r]="s.r" />
             }

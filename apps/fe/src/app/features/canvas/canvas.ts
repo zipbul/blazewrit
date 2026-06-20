@@ -23,10 +23,12 @@ interface Region {
   active: boolean; ghost: boolean; flagged: boolean; selected: boolean;
   activeCount: number;
   cx: number; cy: number; hitR: number; top: number;
-  flame: string; flameCore: string; animDur: number; // flame silhouette + inner core + flicker pace
+  tongues: Tongue[]; glowR: number; coreR: number; // pointed flame licks + base ember glow
   sparks: Spark[];
   embers: Ember[]; extra: number;
 }
+
+interface Tongue { d: string; deg: number; dur: number; }
 
 interface Trail { id: string; d: string; proposed: boolean; hasFlow: boolean; lx: number; ly: number; }
 interface Node { id: string; r: number; x: number; y: number; }
@@ -41,44 +43,6 @@ function rng(seed: string): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/** Closed Catmull-Rom → cubic bezier through points (organic smoothing). */
-function smoothClosed(p: ReadonlyArray<{ x: number; y: number }>): string {
-  const n = p.length;
-  if (n < 3) return '';
-  let d = `M ${p[0]!.x.toFixed(1)} ${p[0]!.y.toFixed(1)}`;
-  for (let i = 0; i < n; i++) {
-    const p0 = p[(i - 1 + n) % n]!, p1 = p[i]!, p2 = p[(i + 1) % n]!, p3 = p[(i + 2) % n]!;
-    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
-    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
-    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
-  }
-  return d + ' Z';
-}
-
-/**
- * Build a flame silhouette as a polar contour: spokes with high radius variance (long tongues
- * + short valleys), biased upward, smoothed into licking curves. The shape IS a flame before
- * any filter — never a circle. Deterministic from the rng. `k` scales the whole thing (inner core).
- */
-function flameContour(r: () => number, cx: number, cy: number, base: number, k = 1): { path: string; hitR: number; topY: number } {
-  const N = 13 + Math.floor(r() * 4); // 13–16 tongues
-  const pts: { x: number; y: number }[] = [];
-  let hitR = 0, topY = cy;
-  for (let i = 0; i < N; i++) {
-    const ang = (i / N) * Math.PI * 2 + (r() - 0.5) * 0.18; // jittered angle (no even pattern)
-    const up = 0.5 - 0.5 * Math.sin(ang); // 1 at top (svg y-down), 0 at bottom
-    let rad = base * (0.5 + r() * 0.95) * k; // high variance: valleys vs tongues
-    rad *= 1 + 0.55 * up;                    // flames flare upward
-    if (r() < 0.34) rad *= 1.28;             // occasional extra-long tongue (any direction)
-    const x = cx + Math.cos(ang) * rad;
-    const y = cy + Math.sin(ang) * rad * 0.9; // slightly flatter
-    pts.push({ x, y });
-    hitR = Math.max(hitR, Math.hypot(x - cx, y - cy));
-    topY = Math.min(topY, y);
-  }
-  return { path: smoothClosed(pts), hitR, topY };
 }
 
 /**
@@ -194,17 +158,30 @@ export class Canvas {
       const cx = nd.x, cy = nd.y;
       const base = this.baseR(p.id);
       const r = rng(p.id);
-      // Flame silhouette (jagged tongues radiating all directions, upward-biased) + inner core.
-      // The shape itself is a flame — never a circle. Fixed per id.
-      const outer = flameContour(r, cx, cy, base, 1);
-      const inner = flameContour(r, cx, cy, base, 0.6);
-      const hitR = outer.hitR + 4;
-      const minTop = outer.topY - 4;
-      const animDur = 2.4 + (r() * 1.6); // flicker pace, desynced per project
-      // faint sparks scattered all around (within the radiant spread)
-      const sparks: Spark[] = Array.from({ length: 6 + Math.floor(r() * 6) }, () => {
-        const a = r() * Math.PI * 2, dd = base * (0.4 + r() * 0.85);
-        return { x: cx + Math.cos(a) * dd, y: cy + Math.sin(a) * dd * 0.9, r: 0.7 + r() * 1.5 };
+      // POINTED flame tongues radiating from the center — sharp tips, hot base → cool fading tip
+      // (vertical gradient), biased & longer upward. This reads as fire, not a soft blob.
+      const K = 16 + Math.floor(r() * 7); // 16–22 licks
+      const tongues: Tongue[] = [];
+      let hitR = base * 0.5, minTop = cy;
+      for (let k = 0; k < K; k++) {
+        const deg = (k / K) * 360 + (r() - 0.5) * 30; // uneven angles; 0° = straight up
+        const rad = (deg * Math.PI) / 180;
+        const up = Math.cos(rad); // 1 up, -1 down
+        let len = base * (0.45 + r() * 0.85) * (1 + 0.55 * Math.max(0, up));
+        if (r() < 0.3) len *= 1.3; // occasional long lick
+        const w = len * (0.10 + r() * 0.07); // slim
+        // local tongue points UP (tip at 0,-len), base width 2w at y=0; sharp tip
+        const d = `M ${(-w).toFixed(1)} 0 C ${(-w * 0.6).toFixed(1)} ${(-len * 0.5).toFixed(1)}, ${(-w * 0.14).toFixed(1)} ${(-len * 0.92).toFixed(1)}, 0 ${(-len).toFixed(1)} C ${(w * 0.14).toFixed(1)} ${(-len * 0.92).toFixed(1)}, ${(w * 0.6).toFixed(1)} ${(-len * 0.5).toFixed(1)}, ${w.toFixed(1)} 0 Z`;
+        tongues.push({ d, deg, dur: 2 + r() * 1.8 });
+        const tipx = cx + Math.sin(rad) * len, tipy = cy - Math.cos(rad) * len;
+        hitR = Math.max(hitR, Math.hypot(tipx - cx, tipy - cy));
+        minTop = Math.min(minTop, tipy);
+      }
+      const glowR = base * 0.8;
+      // rising sparks above the base
+      const sparks: Spark[] = Array.from({ length: 5 + Math.floor(r() * 5) }, () => {
+        const up = r();
+        return { x: cx + (r() - 0.5) * base * 1.1 * (1 - up * 0.5), y: cy - up * base * 1.4, r: 0.7 + r() * 1.4 };
       });
 
       const projItems = items.filter((w) => w.projectId === p.id)
@@ -226,7 +203,7 @@ export class Canvas {
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
         activeCount, cx, cy, hitR: hitR + 6, top: minTop - 6,
-        flame: outer.path, flameCore: inner.path, animDur, sparks,
+        tongues, glowR, coreR: base * 0.34, sparks,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });

@@ -17,23 +17,28 @@
 
 .links { position: absolute; inset: 0; overflow: visible; }
 
-/* project region = a FLAME silhouette: jagged tongues radiating in all directions, filled with
-   a radial gradient that fades to transparent at the tips. Shape fixed per project id.
-   Flicker = gentle scale/skew about the path's own center (desynced via animation-duration). */
-.flame { fill: url(#coronaIdle); transform-box: fill-box; transform-origin: center; }
-.cloud.lit .flame { fill: url(#coronaLit); animation: flicker 3s ease-in-out infinite; }
-.cloud.flagged .flame { fill: url(#coronaFlag); }
-.cloud.ghost .flame { fill: url(#coronaLit); animation: flicker 2s ease-in-out infinite; }
+/* project region = FIRE: pointed flame licks radiating from a glowing base, each lick filled
+   with a vertical hot→cool gradient (hot at base, fading at the sharp tip). Shape fixed per id. */
+.baseglow { fill: url(#baseGlowIdle); }
+.cloud.lit .baseglow { fill: url(#baseGlowLit); }
+.cloud.flagged .baseglow { fill: url(#baseGlowLit); }
 
-.flamecore { fill: url(#coreLit); opacity: 0; transform-box: fill-box; transform-origin: center; }
-.cloud.lit .flamecore, .cloud.ghost .flamecore { opacity: 0.85; animation: flicker 2.4s ease-in-out infinite reverse; }
-.cloud.flagged .flamecore { opacity: 0.6; }
+.tongue { fill: url(#flameIdle); transform-box: fill-box; transform-origin: bottom; }
+.cloud.lit .tongue { fill: url(#flameLit); animation: lick 2.6s ease-in-out infinite; }
+.cloud.flagged .tongue { fill: url(#flameFlag); animation: lick 2.6s ease-in-out infinite; }
+.cloud.ghost .tongue { fill: url(#flameLit); animation: lick 1.6s ease-in-out infinite; }
 
-@keyframes flicker {
-  0%,100% { transform: scale(1) skewX(0deg); }
-  35%     { transform: scale(1.03, 0.97) skewX(-1.5deg); }
-  70%     { transform: scale(0.98, 1.04) skewX(1.2deg); }
+.core { fill: url(#coreLit); opacity: 0; }
+.cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: pulse 2.2s ease-in-out infinite; }
+.cloud.flagged .core { opacity: 0.7; }
+
+/* flame lick: stretch/shrink along its length (base anchored), slight sway */
+@keyframes lick {
+  0%,100% { transform: scaleY(1) scaleX(1); }
+  30%     { transform: scaleY(1.16) scaleX(0.9); }
+  60%     { transform: scaleY(0.9) scaleX(1.06); }
 }
+@keyframes pulse { 0%,100% { opacity: 0.8; } 50% { opacity: 1; } }
 .cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: flickerCore 2.4s ease-in-out infinite; }
 .cloud.flagged .core { opacity: 0.7; }
 @keyframes flickerCore { 0%,100% { opacity: 0.85; } 45% { opacity: 1; } 70% { opacity: 0.78; } }
