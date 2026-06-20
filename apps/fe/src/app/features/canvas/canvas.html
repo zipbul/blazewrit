@@ -48,25 +48,16 @@
             <stop offset="0%" stop-color="rgba(240,120,90,0.46)" />
             <stop offset="100%" stop-color="rgba(210,85,63,0)" />
           </radialGradient>
-          <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="6" /></filter>
+          <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.4" /></filter>
         </defs>
 
-        @for (g of regions(); track g.id; let i = $index) {
-          <!-- per-project flame distortion: turbulence breaks the radiant ellipse into irregular,
-               flickering, sun-like wisps that spread all directions and fade. seed = fixed per id. -->
-          <filter [attr.id]="'fx' + i" x="-70%" y="-70%" width="240%" height="240%">
-            <feTurbulence type="fractalNoise" baseFrequency="0.011 0.015" numOctaves="2" [attr.seed]="g.seed" result="n">
-              <animate attributeName="baseFrequency" dur="9s" values="0.011 0.015;0.014 0.019;0.011 0.015" repeatCount="indefinite" />
-            </feTurbulence>
-            <feDisplacementMap in="SourceGraphic" in2="n" [attr.scale]="g.scale" />
-          </filter>
+        @for (g of regions(); track g.id) {
           <g class="cloud" [class.lit]="g.active" [class.idle]="!g.active && !g.ghost"
-             [class.flagged]="g.flagged" [class.ghost]="g.ghost">
-            <!-- radiant ember spread, edge distorted into flame wisps -->
-            <ellipse class="corona" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.rx]="g.rx" [attr.ry]="g.ry"
-                     [attr.filter]="'url(#fx' + i + ')'" />
-            <!-- bright firelight core -->
-            <circle class="core" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.coreR" filter="url(#soften)" />
+             [class.flagged]="g.flagged" [class.ghost]="g.ghost" filter="url(#soften)">
+            <!-- flame silhouette: jagged tongues radiating all directions, fades to tips -->
+            <path class="flame" [attr.d]="g.flame" [style.animation-duration]="g.animDur + 's'" />
+            <!-- brighter inner core flame -->
+            <path class="flamecore" [attr.d]="g.flameCore" [style.animation-duration]="(g.animDur * 0.8) + 's'" />
             <!-- drifting sparks -->
             @for (s of g.sparks; track $index) {
               <circle class="sparkdot" [attr.cx]="s.x" [attr.cy]="s.y" [attr.r]="s.r" />

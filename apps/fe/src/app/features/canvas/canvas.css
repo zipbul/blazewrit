@@ -17,16 +17,23 @@
 
 .links { position: absolute; inset: 0; overflow: visible; }
 
-/* project region = a RADIANT ember spread (sun-like, all directions, fading) whose edge is
-   broken into irregular flickering flame wisps by a per-id turbulence filter — not round,
-   random, soft. Shape fixed per project id via the turbulence seed. */
-.corona { fill: url(#coronaIdle); opacity: 0.6; }
-.cloud.lit .corona { fill: url(#coronaLit); opacity: 0.7; animation: breathe 4.2s ease-in-out infinite; }
-.cloud.flagged .corona { fill: url(#coronaFlag); opacity: 0.7; }
-.cloud.ghost .corona { fill: url(#coronaLit); opacity: 0.6; animation: breathe 2s ease-in-out infinite; }
-@keyframes breathe { 0%,100% { opacity: 0.6; } 50% { opacity: 0.82; } }
+/* project region = a FLAME silhouette: jagged tongues radiating in all directions, filled with
+   a radial gradient that fades to transparent at the tips. Shape fixed per project id.
+   Flicker = gentle scale/skew about the path's own center (desynced via animation-duration). */
+.flame { fill: url(#coronaIdle); transform-box: fill-box; transform-origin: center; }
+.cloud.lit .flame { fill: url(#coronaLit); animation: flicker 3s ease-in-out infinite; }
+.cloud.flagged .flame { fill: url(#coronaFlag); }
+.cloud.ghost .flame { fill: url(#coronaLit); animation: flicker 2s ease-in-out infinite; }
 
-.core { fill: url(#coreLit); opacity: 0; }
+.flamecore { fill: url(#coreLit); opacity: 0; transform-box: fill-box; transform-origin: center; }
+.cloud.lit .flamecore, .cloud.ghost .flamecore { opacity: 0.85; animation: flicker 2.4s ease-in-out infinite reverse; }
+.cloud.flagged .flamecore { opacity: 0.6; }
+
+@keyframes flicker {
+  0%,100% { transform: scale(1) skewX(0deg); }
+  35%     { transform: scale(1.03, 0.97) skewX(-1.5deg); }
+  70%     { transform: scale(0.98, 1.04) skewX(1.2deg); }
+}
 .cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: flickerCore 2.4s ease-in-out infinite; }
 .cloud.flagged .core { opacity: 0.7; }
 @keyframes flickerCore { 0%,100% { opacity: 0.85; } 45% { opacity: 1; } 70% { opacity: 0.78; } }

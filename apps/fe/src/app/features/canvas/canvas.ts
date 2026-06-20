@@ -23,8 +23,8 @@ interface Region {
   active: boolean; ghost: boolean; flagged: boolean; selected: boolean;
   activeCount: number;
   cx: number; cy: number; hitR: number; top: number;
-  rx: number; ry: number; seed: number; scale: number; // radiant ellipse + turbulence distortion
-  coreR: number; sparks: Spark[];
+  flame: string; flameCore: string; animDur: number; // flame silhouette + inner core + flicker pace
+  sparks: Spark[];
   embers: Ember[]; extra: number;
 }
 
@@ -41,6 +41,44 @@ function rng(seed: string): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+/** Closed Catmull-Rom → cubic bezier through points (organic smoothing). */
+function smoothClosed(p: ReadonlyArray<{ x: number; y: number }>): string {
+  const n = p.length;
+  if (n < 3) return '';
+  let d = `M ${p[0]!.x.toFixed(1)} ${p[0]!.y.toFixed(1)}`;
+  for (let i = 0; i < n; i++) {
+    const p0 = p[(i - 1 + n) % n]!, p1 = p[i]!, p2 = p[(i + 1) % n]!, p3 = p[(i + 2) % n]!;
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+  return d + ' Z';
+}
+
+/**
+ * Build a flame silhouette as a polar contour: spokes with high radius variance (long tongues
+ * + short valleys), biased upward, smoothed into licking curves. The shape IS a flame before
+ * any filter — never a circle. Deterministic from the rng. `k` scales the whole thing (inner core).
+ */
+function flameContour(r: () => number, cx: number, cy: number, base: number, k = 1): { path: string; hitR: number; topY: number } {
+  const N = 13 + Math.floor(r() * 4); // 13–16 tongues
+  const pts: { x: number; y: number }[] = [];
+  let hitR = 0, topY = cy;
+  for (let i = 0; i < N; i++) {
+    const ang = (i / N) * Math.PI * 2 + (r() - 0.5) * 0.18; // jittered angle (no even pattern)
+    const up = 0.5 - 0.5 * Math.sin(ang); // 1 at top (svg y-down), 0 at bottom
+    let rad = base * (0.5 + r() * 0.95) * k; // high variance: valleys vs tongues
+    rad *= 1 + 0.55 * up;                    // flames flare upward
+    if (r() < 0.34) rad *= 1.28;             // occasional extra-long tongue (any direction)
+    const x = cx + Math.cos(ang) * rad;
+    const y = cy + Math.sin(ang) * rad * 0.9; // slightly flatter
+    pts.push({ x, y });
+    hitR = Math.max(hitR, Math.hypot(x - cx, y - cy));
+    topY = Math.min(topY, y);
+  }
+  return { path: smoothClosed(pts), hitR, topY };
 }
 
 /**
@@ -156,19 +194,17 @@ export class Canvas {
       const cx = nd.x, cy = nd.y;
       const base = this.baseR(p.id);
       const r = rng(p.id);
-      // Radiant ember region: a soft glow that spreads in ALL directions (sun-like) and fades,
-      // on an off-round ELLIPSE base, with its edge broken into irregular flickering wisps by a
-      // per-project turbulence-displacement filter (seed from id = unique & fixed, not round).
-      const rx = base * (0.96 + r() * 0.46);
-      const ry = base * (0.70 + r() * 0.34);
-      const seed = Math.floor(r() * 1000);
-      const scale = 16 + r() * 16; // displacement amount — irregular but not excessive
-      const hitR = Math.max(rx, ry) + scale + 4;
-      const minTop = cy - ry - scale - 4;
+      // Flame silhouette (jagged tongues radiating all directions, upward-biased) + inner core.
+      // The shape itself is a flame — never a circle. Fixed per id.
+      const outer = flameContour(r, cx, cy, base, 1);
+      const inner = flameContour(r, cx, cy, base, 0.6);
+      const hitR = outer.hitR + 4;
+      const minTop = outer.topY - 4;
+      const animDur = 2.4 + (r() * 1.6); // flicker pace, desynced per project
       // faint sparks scattered all around (within the radiant spread)
       const sparks: Spark[] = Array.from({ length: 6 + Math.floor(r() * 6) }, () => {
-        const a = r() * Math.PI * 2, dd = 0.4 + r() * 0.75;
-        return { x: cx + Math.cos(a) * rx * dd, y: cy + Math.sin(a) * ry * dd, r: 0.7 + r() * 1.5 };
+        const a = r() * Math.PI * 2, dd = base * (0.4 + r() * 0.85);
+        return { x: cx + Math.cos(a) * dd, y: cy + Math.sin(a) * dd * 0.9, r: 0.7 + r() * 1.5 };
       });
 
       const projItems = items.filter((w) => w.projectId === p.id)
@@ -190,7 +226,7 @@ export class Canvas {
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
         activeCount, cx, cy, hitR: hitR + 6, top: minTop - 6,
-        rx, ry, seed, scale, coreR: base * 0.55, sparks,
+        flame: outer.path, flameCore: inner.path, animDur, sparks,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });
