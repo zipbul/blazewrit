@@ -108,7 +108,7 @@ export class Canvas {
     return m;
   });
 
-  private baseR(id: string): number { return 74 + Math.min(this.counts().get(id) ?? 0, 5) * 13; }
+  private baseR(id: string): number { return 82 + Math.min(this.counts().get(id) ?? 0, 5) * 13; }
 
   /** Force layout (repulsion + dependency springs + gravity), region radius ~ ember cloud extent. */
   private readonly layout = computed<Map<string, Node>>(() => {
@@ -157,28 +157,29 @@ export class Canvas {
       const base = this.baseR(p.id);
       const r = rng(p.id);
       const rot = r() * Math.PI * 2;
-      const elong = 0.82 + r() * 0.16; // vertical bias (flame) — squash width a touch
+      const xstretch = 1.18 + r() * 0.24; // spread WIDE
+      const ystretch = 0.58 + r() * 0.16; // flatter (less tall)
 
-      // ember nebula: overlapping soft lobes
-      const K = 4 + Math.floor(r() * 3); // 4–6 lobes
+      // ember nebula: overlapping soft lobes, spread horizontally
+      const K = 5 + Math.floor(r() * 3); // 5–7 lobes (fuller cloud)
       const lobes: Lobe[] = [];
       for (let k = 0; k < K; k++) {
         const ang = rot + (k / K) * Math.PI * 2 + (r() - 0.5) * 0.7;
-        const dist = base * (0.26 + r() * 0.32);
-        const lr = base * (0.42 + r() * 0.30);
-        lobes.push({ x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist * elong, r: lr });
+        const dist = base * (0.36 + r() * 0.34);
+        const lr = base * (0.50 + r() * 0.32);
+        lobes.push({ x: cx + Math.cos(ang) * dist * xstretch, y: cy + Math.sin(ang) * dist * ystretch, r: lr });
       }
-      // upward flame tip blended into the cloud
-      const tipH = base * (0.95 + r() * 0.6);
-      const half = base * (0.28 + r() * 0.16);
-      const baseY = cy - base * 0.12;
+      // gentle, low flame lick (not a spike)
+      const tipH = base * (0.40 + r() * 0.30);
+      const half = base * (0.36 + r() * 0.18);
+      const baseY = cy - base * 0.24;
       const apexY = baseY - tipH;
-      const sway = (r() - 0.5) * half * 0.9;
+      const sway = (r() - 0.5) * half * 0.7;
       const flameTip = `M ${(cx + sway).toFixed(1)} ${apexY.toFixed(1)} C ${(cx + half).toFixed(1)} ${(baseY - tipH * 0.45).toFixed(1)} ${(cx + half).toFixed(1)} ${baseY.toFixed(1)} ${cx.toFixed(1)} ${baseY.toFixed(1)} C ${(cx - half).toFixed(1)} ${baseY.toFixed(1)} ${(cx - half).toFixed(1)} ${(baseY - tipH * 0.45).toFixed(1)} ${(cx + sway).toFixed(1)} ${apexY.toFixed(1)} Z`;
       // faint drifting sparks (nebula)
-      const sparks: Spark[] = Array.from({ length: 4 + Math.floor(r() * 4) }, () => {
-        const a = r() * Math.PI * 2, dd = base * (0.5 + r() * 0.7);
-        return { x: cx + Math.cos(a) * dd, y: cy + Math.sin(a) * dd * elong - r() * base * 0.4, r: 0.8 + r() * 1.4 };
+      const sparks: Spark[] = Array.from({ length: 5 + Math.floor(r() * 4) }, () => {
+        const a = r() * Math.PI * 2, dd = base * (0.55 + r() * 0.7);
+        return { x: cx + Math.cos(a) * dd * xstretch, y: cy + Math.sin(a) * dd * ystretch - r() * base * 0.3, r: 0.8 + r() * 1.4 };
       });
 
       const projItems = items.filter((w) => w.projectId === p.id)
@@ -199,8 +200,8 @@ export class Canvas {
         id: p.id, name: p.name,
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
-        activeCount, cx, cy, hitR: base * 1.2, top: apexY - 6,
-        lobes, coreR: base * 0.5, flameTip, sparks,
+        activeCount, cx, cy, hitR: base * 1.4, top: apexY - 6,
+        lobes, coreR: base * 0.55, flameTip, sparks,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });
