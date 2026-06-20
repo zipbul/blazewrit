@@ -20,6 +20,10 @@
 @keyframes dash { to { stroke-dashoffset: -18; } }
 .edge-lbl { font-family: var(--font-mono); font-size: 9.5px; fill: var(--muted-foreground); }
 
+/* cross-project flow links (one intent realized across projects) + A2A embers */
+.flowlink { stroke: var(--primary); stroke-width: 1.25; fill: none; opacity: 0.32; stroke-dasharray: 2 6; }
+.flowember { fill: var(--primary); filter: drop-shadow(0 0 4px var(--primary)); }
+
 /* project group = container */
 .group {
   position: absolute; z-index: 2; background: var(--card); border: 1px solid var(--border);

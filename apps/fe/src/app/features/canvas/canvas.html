@@ -9,11 +9,17 @@
 
   <section class="map" #mapEl>
     <div class="field" [style.width.px]="fieldWidth()" [style.height.px]="fieldHeight()">
-      <!-- dependency edges (confirmed solid / proposed dashed) -->
+      <!-- project→project dependency edges + cross-project flow links (with A2A embers) -->
       <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()" aria-hidden="true">
         @for (e of edges(); track e.id) {
           <path [attr.d]="e.d" class="edge" [class.proposed]="e.proposed"></path>
           <text [attr.x]="e.lx" [attr.y]="e.ly" class="edge-lbl">{{ e.label }}</text>
+        }
+        @for (l of flowLinks(); track l.id) {
+          <path [attr.id]="'fl-' + l.id" [attr.d]="l.d" class="flowlink"></path>
+          <circle r="3.2" class="flowember">
+            <animateMotion dur="1.8s" repeatCount="indefinite" [attr.path]="l.d" />
+          </circle>
         }
       </svg>
 

@@ -167,13 +167,14 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
    * inbound intent into a flow, then run it in the background. This is the single triage
    * call site — both human-origin (central router) and project-origin traffic land here.
    */
-  const dispatchTask = (projectId: string, request: string): string => {
+  const dispatchTask = (projectId: string, request: string, contextId?: string): string => {
     const flowType = new StubTriage().classify(request);
     const workItemId = newId();
+    const ctx = contextId ?? workItemId; // correlate cross-project realizations of one intent
     // Background execution. Guarded so a failed task never crashes the server process.
     void (async () => {
       try {
-        await sql`insert into work_items (id, project_id, type, state, title) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request})`;
+        await sql`insert into work_items (id, project_id, type, state, title, context_id) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request}, ${ctx})`;
         flowHub.publish({ type: 'routed', workItemId, project: projectId });
         const result = await runFlow(flowType, {
           store: publishing(store, flowHub, stepHub),
@@ -296,9 +297,9 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           set.status = 404;
           return errorResponse(req.id ?? null, A2A_ERRORS.TASK_NOT_FOUND ?? -32001, 'unknown project');
         }
-        const message = (req.params as { message?: { parts?: Array<{ kind: string; text?: string }> } } | undefined)?.message;
+        const message = (req.params as { message?: { contextId?: string; parts?: Array<{ kind: string; text?: string }> } } | undefined)?.message;
         const intent = message?.parts?.find((p) => p.kind === 'text')?.text ?? '';
-        const taskId = dispatchTask(params.projectId, intent);
+        const taskId = dispatchTask(params.projectId, intent, message?.contextId);
         return { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
       },
       { parse: 'text' },
@@ -364,7 +365,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     })
     .get('/api/work-items', async () => {
       const rows = (await sql`
-        select w.id, w.project_id, w.type, w.state, w.title, w.created_at, f.id as active_flow_id
+        select w.id, w.project_id, w.type, w.state, w.title, w.context_id, w.created_at, f.id as active_flow_id
         from work_items w
         left join flows f on f.work_item_id = w.id
         order by w.created_at desc
@@ -382,6 +383,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           priority: 0,
           source: 'user',
           activeFlowId: (w.active_flow_id as string) ?? undefined,
+          contextId: (w.context_id as string) ?? undefined,
           createdAt: created,
           updatedAt: created,
           ...(w.state === 'done' ? { completedAt: created } : {}),

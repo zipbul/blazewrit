@@ -19,6 +19,8 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     title text,
     created_at timestamptz not null default now()
   )`;
+  // context_id correlates the cross-project realizations of ONE user intent (A2A contextId).
+  await sql`alter table work_items add column if not exists context_id text`;
   await sql`create table if not exists flows (
     id text primary key,
     work_item_id text,
