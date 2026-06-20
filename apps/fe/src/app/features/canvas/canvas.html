@@ -15,43 +15,42 @@
          [style.width.px]="fieldWidth()" [style.height.px]="fieldHeight()"
          [style.transform]="'translate(' + panX() + 'px,' + panY() + 'px) scale(' + zoom() + ')'">
 
-      <!-- trails (dependencies) + flow links (A2A sparks) -->
-      <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()" aria-hidden="true">
+      <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()">
+        <!-- curved dependency trails -->
         @for (t of trails(); track t.id) {
           <path [attr.d]="t.d" class="trail" [class.proposed]="t.proposed"></path>
           <text [attr.x]="t.lx" [attr.y]="t.ly" class="trail-lbl">depends</text>
         }
+        <!-- A2A flow sparks -->
         @for (l of flowLinks(); track l.id) {
           <path [attr.d]="l.d" class="flowlink"></path>
           <circle r="3.4" class="spark"><animateMotion dur="2s" repeatCount="indefinite" [attr.path]="l.d" /></circle>
         }
+        <!-- organic project regions (drawn boundaries) -->
+        @for (g of regions(); track g.id) {
+          <path [attr.d]="g.blob" class="blob"
+                [class.sel]="g.selected" [class.idle]="!g.active && !g.ghost"
+                [class.lit]="g.active" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
+                (click)="selectProject(g.id)"></path>
+        }
       </svg>
 
+      <!-- floating labels + task embers (HTML, above blobs) -->
       @for (g of regions(); track g.id) {
-        <div class="region" [class.sel]="g.selected" [class.idle]="!g.active && !g.ghost"
-             [class.lit]="g.active" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
-             [style.left.px]="g.cx" [style.top.px]="g.cy"
-             [style.--glow.px]="g.glow">
-          <div class="aura"></div>
-          <button class="rhead" type="button" (click)="selectProject(g.id)">
-            <span class="rname">{{ g.ghost ? '＋' : (g.active ? '🔥' : '🪵') }} {{ g.name }}</span>
-            <span class="rmeta">{{ g.ghost ? '등록 대기' : (g.active ? g.activeCount + ' 작업 중' : 'idle') }}</span>
-            @if (g.flagged) { <span class="qtag">질문</span> }
-          </button>
-          @if (!g.ghost) {
-            <div class="rbody">
-              @for (e of g.embers; track e.id) {
-                <button class="emb" type="button" (click)="selectTask(e.id, $event)"
-                        [class.run]="e.state === 'in_flow'" [class.done]="e.state === 'done'">
-                  <span class="edot"></span>
-                  <span class="etitle">{{ e.title }}</span>
-                  @if (e.step) { <span class="estep">{{ e.step }}</span> }
-                </button>
-              } @empty { <div class="eempty">작업 없음</div> }
-              @if (g.extra) { <div class="emore">+{{ g.extra }}</div> }
-            </div>
-          }
+        <div class="rlabel" [style.left.px]="g.cx" [style.top.px]="g.cy - g.r - 4">
+          <span class="rname">{{ g.ghost ? '＋' : (g.active ? '🔥' : '🪵') }} {{ g.name }}</span>
+          <span class="rmeta">{{ g.ghost ? '등록 대기' : (g.active ? g.activeCount + ' 작업 중' : 'idle') }}{{ g.extra ? ' · +' + g.extra : '' }}</span>
+          @if (g.flagged) { <span class="qtag">질문</span> }
         </div>
+        @for (e of g.embers; track e.id) {
+          <button class="emb" type="button" (click)="selectTask(e.id, $event)"
+                  [class.run]="e.state === 'in_flow'" [class.done]="e.state === 'done'"
+                  [style.left.px]="e.x" [style.top.px]="e.y">
+            <span class="edot"></span>
+            <span class="etitle">{{ e.title }}</span>
+            @if (e.step) { <span class="estep">{{ e.step }}</span> }
+          </button>
+        }
       } @empty {
         <div class="empty">아직 프로젝트가 없습니다. 위 입력창에 작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다.</div>
       }
