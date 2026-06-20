@@ -27,7 +27,8 @@ interface Region {
   auraRx: number; auraRy: number; coreR: number; // ember base glow
   seed: number; px: number; py: number; pw: number; ph: number; // 달아오른 불기운: turbulence plume box
   churn: number; delay: number; // per-project anim timing (desync so the field looks alive)
-  fountain: FSpark[]; // 분수 불티: rising spark fountain
+  fountain: FSpark[]; // 분수 불티: rising spark fountain (active)
+  lone: FSpark[]; // 잉걸불: a lone ember rising occasionally (idle / banked)
   embers: Ember[]; extra: number;
 }
 
@@ -193,6 +194,18 @@ export class Canvas {
       const delay = -(seed % 7) * 0.6;        // negative offset → not all swaying in lockstep
       const hitR = Math.max(auraRx, ph * 0.5);
       const minTop = py + (10 / 128) * ph;
+      // 잉걸불 (idle): 1–2 lone embers drifting up slowly from the banked coals, staggered so
+      // they appear only occasionally — "resting, but still alive."
+      const emberBaseY = cy + auraRy * 0.2;
+      const lone: FSpark[] = Array.from({ length: 2 }, (_, k) => {
+        const sx = cx + (r() - 0.5) * auraRx * 0.4;
+        const h = base * (0.55 + r() * 0.5);
+        const dx = (r() - 0.5) * auraRx * 0.4;
+        const dur = 4.6 + r() * 1.8;            // slow rise
+        const begin = -(r() * dur) - k * 2.6;   // staggered → not a steady stream
+        const rr = 1.1 + r() * 0.8;
+        return { sx, dx, y0: emberBaseY, y1: emberBaseY - h, r: rr, dur, begin };
+      });
 
       const projItems = items.filter((w) => w.projectId === p.id)
         .sort((a, b) => (a.state === 'in_flow' ? 0 : 1) - (b.state === 'in_flow' ? 0 : 1));
@@ -213,7 +226,7 @@ export class Canvas {
         active: activeCount > 0, ghost: p.regStatus === 'proposed',
         flagged: flagged.has(p.id), selected: sel === p.id,
         activeCount, cx, cy, hitR: hitR + 6, top: minTop - 6,
-        auraRx, auraRy, coreR, seed, px, py, pw, ph, churn, delay, fountain,
+        auraRx, auraRy, coreR, seed, px, py, pw, ph, churn, delay, fountain, lone,
         embers, extra: Math.max(0, projItems.length - shown.length),
       };
     });

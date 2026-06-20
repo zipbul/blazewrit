@@ -41,9 +41,11 @@
             <stop offset="35%" stop-color="rgba(224,107,46,0.4)" />
             <stop offset="100%" stop-color="rgba(224,107,46,0)" />
           </radialGradient>
-          <radialGradient id="auraIdle" cx="50%" cy="58%" r="60%">
-            <stop offset="0%" stop-color="rgba(150,132,104,0.16)" />
-            <stop offset="100%" stop-color="rgba(150,132,104,0)" />
+          <!-- 잉걸불(banked embers): deep red coals, no yellow → reads as "resting / cooling" -->
+          <radialGradient id="auraIdle" cx="50%" cy="60%" r="60%">
+            <stop offset="0%" stop-color="rgba(212,74,40,0.5)" />
+            <stop offset="45%" stop-color="rgba(150,42,24,0.28)" />
+            <stop offset="100%" stop-color="rgba(110,30,18,0)" />
           </radialGradient>
           <radialGradient id="auraFlag" cx="50%" cy="58%" r="60%">
             <stop offset="0%" stop-color="rgba(240,120,90,0.55)" />
@@ -102,6 +104,19 @@
                   <animate attributeName="cx" [attr.values]="s.sx + ';' + (s.sx + s.dx)"
                            [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
                   <animate attributeName="opacity" values="0;1;0.9;0"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                </circle>
+              }
+            </g>
+            <!-- 잉걸불: lone ember(s) rising occasionally — only when idle (banked) -->
+            <g class="loneember">
+              @for (s of g.lone; track $index) {
+                <circle class="lone" [attr.cx]="s.sx" [attr.cy]="s.y0" [attr.r]="s.r">
+                  <animate attributeName="cy" [attr.from]="s.y0" [attr.to]="s.y1"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                  <animate attributeName="cx" [attr.values]="s.sx + ';' + (s.sx + s.dx)"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0;0;1;0.7;0" keyTimes="0;0.12;0.4;0.7;1"
                            [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
                 </circle>
               }

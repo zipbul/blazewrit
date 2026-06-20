@@ -20,9 +20,16 @@
 /* project region = 잉걸 base glow + 달아오른 불기운(turbulence plume) + 분수 불티(spark fountain). */
 .aura { fill: url(#auraIdle); }
 .cloud.lit .aura { fill: url(#auraLit); animation: breathe 3.6s ease-in-out infinite; }
+.cloud.idle .aura { animation: breatheSlow 6s ease-in-out infinite; }
 .cloud.flagged .aura { fill: url(#auraFlag); }
 .cloud.ghost .aura { fill: url(#auraLit); animation: breathe 1.9s ease-in-out infinite; }
 @keyframes breathe { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
+@keyframes breatheSlow { 0%,100% { opacity: 0.5; } 50% { opacity: 0.9; } }
+
+/* 잉걸불: lone ember rising from banked coals — idle only */
+.loneember { display: none; }
+.cloud.idle .loneember { display: block; }
+.lone { fill: #d8642e; opacity: 0; filter: drop-shadow(0 0 4px rgba(224, 107, 46, 0.85)); }
 
 /* 달아오른 불기운 plume — only when the hearth is alight */
 .plumebox { overflow: visible; display: none; }
