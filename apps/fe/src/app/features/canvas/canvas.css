@@ -17,26 +17,38 @@
 
 .links { position: absolute; inset: 0; overflow: visible; }
 
-/* project region = a soft POOL OF FIRELIGHT (feathered, no hard outline) */
-.glow { fill: url(#hearthIdle); stroke: none; pointer-events: none; }
-.glow.lit { fill: url(#hearthLit); animation: breathe 3.6s ease-in-out infinite; }
-.glow.flagged { fill: url(#hearthFlag); }
-.glow.ghost { fill: url(#hearthLit); animation: breathe 1.8s ease-in-out infinite; }
-@keyframes breathe { 0%,100% { opacity: 0.8; } 50% { opacity: 1; } }
+/* project region = an EMBER CLOUD / NEBULA (lobes + core + flame tip), shape fixed per id */
+.lobe { fill: url(#cloudIdle); }
+.cloud.lit .lobe { fill: url(#cloudLit); }
+.cloud.flagged .lobe { fill: url(#cloudFlag); }
+.cloud.ghost .lobe { fill: url(#cloudLit); }
+.cloud.lit { animation: breathe 3.8s ease-in-out infinite; }
+.cloud.ghost { animation: breathe 1.9s ease-in-out infinite; }
+@keyframes breathe { 0%,100% { opacity: 0.82; } 50% { opacity: 1; } }
 
-/* near-invisible definition rim; clickable; lights up on hover/selection */
-.rim { fill: transparent; stroke: rgba(224, 180, 120, 0.12); stroke-width: 1; cursor: pointer; transition: stroke 0.25s ease; }
-.rim:hover { stroke: rgba(224, 107, 46, 0.5); }
-.rim.ghost { stroke: var(--primary); stroke-dasharray: 5 6; opacity: 0.7; animation: dash 1.2s linear infinite; }
-.rim.flagged { stroke: rgba(210, 85, 63, 0.55); }
-.rim.sel { stroke: var(--primary); stroke-width: 1.75; filter: drop-shadow(0 0 10px rgba(224, 107, 46, 0.5)); }
-@keyframes dash { to { stroke-dashoffset: -22; } }
+.tip { fill: url(#cloudIdle); opacity: 0.55; }
+.cloud.lit .tip, .cloud.ghost .tip { fill: url(#cloudLit); }
+.cloud.flagged .tip { fill: url(#cloudFlag); }
+.core { fill: url(#coreLit); opacity: 0; }
+.cloud.lit .core, .cloud.ghost .core { opacity: 1; animation: flickerCore 2.4s ease-in-out infinite; }
+.cloud.flagged .core { opacity: 0.7; }
+@keyframes flickerCore { 0%,100% { opacity: 0.85; } 45% { opacity: 1; } 70% { opacity: 0.78; } }
+
+.sparkdot { fill: #f6a052; opacity: 0; }
+.cloud.lit .sparkdot { opacity: 0.7; animation: twinkle 2.6s ease-in-out infinite; }
+@keyframes twinkle { 0%,100% { opacity: 0.25; } 50% { opacity: 0.8; } }
+
+/* invisible click target + selection ring */
+.hit { fill: transparent; stroke: transparent; stroke-width: 1.5; cursor: pointer; transition: stroke 0.2s ease; }
+.hit:hover { stroke: rgba(224, 107, 46, 0.4); }
+.hit.sel { stroke: var(--primary); stroke-dasharray: 3 5; filter: drop-shadow(0 0 10px rgba(224, 107, 46, 0.5)); animation: dash 1.4s linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -16; } }
 
 /* curved dependency trails (A2A rides them as sparks) */
 .trail { stroke: var(--accent); stroke-width: 1.5; fill: none; opacity: 0.5; }
 .trail.proposed { stroke: var(--primary); stroke-dasharray: 4 5; opacity: 0.8; animation: dash 1s linear infinite; }
 .trail-lbl { font-family: var(--font-mono); font-size: 9px; fill: var(--faint); text-anchor: middle; }
-.spark { fill: var(--primary); filter: drop-shadow(0 0 6px var(--primary)); }
+.flowspark { fill: var(--primary); filter: drop-shadow(0 0 6px var(--primary)); }
 
 /* floating project label */
 .rlabel {

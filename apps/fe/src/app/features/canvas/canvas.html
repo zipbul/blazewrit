@@ -17,51 +17,62 @@
 
       <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()">
         <defs>
-          <radialGradient id="hearthLit" cx="50%" cy="44%" r="60%">
-            <stop offset="0%" stop-color="rgba(246,160,82,0.46)" />
-            <stop offset="32%" stop-color="rgba(224,107,46,0.22)" />
-            <stop offset="66%" stop-color="rgba(150,56,24,0.08)" />
+          <radialGradient id="cloudLit" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(246,160,82,0.5)" />
+            <stop offset="45%" stop-color="rgba(224,107,46,0.2)" />
             <stop offset="100%" stop-color="rgba(150,56,24,0)" />
           </radialGradient>
-          <radialGradient id="hearthIdle" cx="50%" cy="44%" r="60%">
-            <stop offset="0%" stop-color="rgba(150,132,104,0.13)" />
-            <stop offset="70%" stop-color="rgba(150,132,104,0.04)" />
+          <radialGradient id="cloudIdle" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.18)" />
             <stop offset="100%" stop-color="rgba(150,132,104,0)" />
           </radialGradient>
-          <radialGradient id="hearthFlag" cx="50%" cy="44%" r="60%">
-            <stop offset="0%" stop-color="rgba(240,120,90,0.4)" />
-            <stop offset="40%" stop-color="rgba(210,85,63,0.18)" />
+          <radialGradient id="cloudFlag" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.46)" />
             <stop offset="100%" stop-color="rgba(210,85,63,0)" />
           </radialGradient>
-          <filter id="soften" x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur stdDeviation="7" />
-          </filter>
+          <radialGradient id="coreLit" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(255,210,150,0.85)" />
+            <stop offset="40%" stop-color="rgba(246,160,82,0.4)" />
+            <stop offset="100%" stop-color="rgba(224,107,46,0)" />
+          </radialGradient>
+          <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="6" /></filter>
+          <filter id="softer" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="9" /></filter>
         </defs>
 
-        <!-- project regions = soft pools of firelight (no hard outline) -->
         @for (g of regions(); track g.id) {
-          <path [attr.d]="g.blob" class="glow"
-                [class.lit]="g.active" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
-                filter="url(#soften)"></path>
-        }
-        <!-- faint definition ring (very subtle), brighter when selected -->
-        @for (g of regions(); track g.id) {
-          <path [attr.d]="g.blob" class="rim"
-                [class.sel]="g.selected" [class.flagged]="g.flagged" [class.ghost]="g.ghost"
-                (click)="selectProject(g.id)"></path>
+          <g class="cloud" [class.lit]="g.active" [class.idle]="!g.active && !g.ghost"
+             [class.flagged]="g.flagged" [class.ghost]="g.ghost">
+            <!-- ember nebula lobes -->
+            <g filter="url(#softer)">
+              @for (lo of g.lobes; track $index) {
+                <circle class="lobe" [attr.cx]="lo.x" [attr.cy]="lo.y" [attr.r]="lo.r" />
+              }
+            </g>
+            <!-- blended upward flame tip -->
+            <path class="tip" [attr.d]="g.flameTip" filter="url(#soften)" />
+            <!-- bright core -->
+            <circle class="core" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.coreR" filter="url(#soften)" />
+            <!-- drifting sparks -->
+            @for (s of g.sparks; track $index) {
+              <circle class="sparkdot" [attr.cx]="s.x" [attr.cy]="s.y" [attr.r]="s.r" />
+            }
+            <!-- selection ring + click target -->
+            <circle class="hit" [class.sel]="g.selected" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.hitR"
+                    (click)="selectProject(g.id)" />
+          </g>
         }
 
-        <!-- dependency trails (boundary-anchored); A2A communication rides them as sparks -->
+        <!-- dependency trails; A2A rides them as sparks -->
         @for (t of trails(); track t.id) {
-          <path [attr.id]="'tr-' + t.id" [attr.d]="t.d" class="trail" [class.proposed]="t.proposed"></path>
+          <path [attr.d]="t.d" class="trail" [class.proposed]="t.proposed"></path>
           <text [attr.x]="t.lx" [attr.y]="t.ly" class="trail-lbl">depends</text>
           @if (t.hasFlow) {
-            <circle r="3.4" class="spark"><animateMotion dur="2.2s" repeatCount="indefinite" [attr.path]="t.d" /></circle>
+            <circle r="3.4" class="flowspark"><animateMotion dur="2.2s" repeatCount="indefinite" [attr.path]="t.d" /></circle>
           }
         }
       </svg>
 
-      <!-- floating labels + task embers (HTML, above blobs) -->
+      <!-- floating labels + task embers -->
       @for (g of regions(); track g.id) {
         <div class="rlabel" [style.left.px]="g.cx" [style.top.px]="g.top">
           <span class="rname">{{ g.ghost ? '＋' : (g.active ? '🔥' : '🪵') }} {{ g.name }}</span>
