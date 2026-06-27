@@ -31,6 +31,21 @@ export interface RelationshipVm {
   readonly status: 'proposed' | 'confirmed';
 }
 
+/** Structured intent the central triage agent derives from a raw request (read-only analysis). */
+export interface IntentVm {
+  readonly summary: string;
+  readonly flowType: string;
+  readonly targetProject: string | null;
+  readonly isNewProject: boolean;
+  readonly suggestedProjectName: string | null;
+  readonly relatedProjects: string[];
+  readonly needsClarification: boolean;
+  readonly clarifyingQuestion: string | null;
+  readonly clarifyOptions: string[];
+  readonly confidence: number;
+  readonly rationale: string;
+}
+
 /** A2A connection + agent health for a repo (runtime view, distinguishes silent vs dead). */
 export interface ConnectionVm {
   readonly projectId: string;
@@ -83,6 +98,27 @@ export class BlazewritApi {
   /** Center intake: submit a raw intent; the backend (meta agent) triages + routes + runs. */
   submitIntent(request: string, hitl = false): Observable<{ accepted: boolean; workItemId?: string }> {
     return this.http.post<{ accepted: boolean; workItemId?: string }>(`${this.base}/api/run`, { request, hitl });
+  }
+
+  /** Talk to the central agent: a free reply, plus a structured intent when the message is actionable. */
+  triage(request: string): Observable<{ reply: string; intent: IntentVm | null }> {
+    return this.http.post<{ reply: string; intent: IntentVm | null }>(`${this.base}/api/triage`, { request });
+  }
+
+  /** Dispatch an approved triage analysis: to a resolved existing project, or as a newly-named project. */
+  dispatch(
+    request: string,
+    opts: { targetProject?: string; newProjectName?: string },
+  ): Observable<{ accepted: boolean; workItemId?: string; pendingRegistration?: boolean; projectId?: string }> {
+    return this.http.post<{ accepted: boolean; workItemId?: string; pendingRegistration?: boolean; projectId?: string }>(
+      `${this.base}/api/dispatch`,
+      { request, ...opts },
+    );
+  }
+
+  /** Open a clarification question in the drawer inbox for an ambiguous request (answering re-triages). */
+  clarify(request: string, question: string, options: string[] = []): Observable<{ accepted: boolean; decisionId: string }> {
+    return this.http.post<{ accepted: boolean; decisionId: string }>(`${this.base}/api/clarify`, { request, question, options });
   }
 
   /** SSE URL for a step run's live agent-event stream. */

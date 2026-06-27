@@ -111,3 +111,5 @@
 /* empty */
 .empty { padding: 60px 20px; text-align: center; color: var(--muted-foreground); }
 .ok-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--success); margin: 0 auto 14px; box-shadow: 0 0 14px var(--success); }
+
+.or-text { margin: 0.5rem 0 0.3rem; font-size: 0.72rem; color: var(--muted-foreground); text-align: center; }

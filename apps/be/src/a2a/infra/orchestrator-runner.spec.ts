@@ -3,7 +3,7 @@ import type { MessageDto } from '@bw/dto';
 import { OrchestratorRunner } from './orchestrator-runner';
 import { InMemoryOrchestratorStore } from '../../orchestrator/store';
 import { AutoPassStepExecutor } from '../../orchestrator/stub-executor';
-import { StubTriage } from '../../triage/triage';
+import { StubFlowClassifier } from '../../triage/triage';
 import { InMemoryTaskStore } from './task-store';
 
 function message(text: string): MessageDto {
@@ -15,7 +15,7 @@ const newId = () => `id-${ids++}`;
 
 function runner() {
   return new OrchestratorRunner({
-    triage: new StubTriage(),
+    triage: new StubFlowClassifier(),
     store: new InMemoryOrchestratorStore(),
     executor: new AutoPassStepExecutor(),
     newId,

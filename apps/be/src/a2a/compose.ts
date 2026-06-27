@@ -12,7 +12,7 @@ import { InMemoryRegistry } from './infra/registry';
 import { InMemoryOrchestratorStore } from '../orchestrator/store';
 import { AutoPassStepExecutor } from '../orchestrator/stub-executor';
 import type { StepExecutor } from '../orchestrator/types';
-import { StubTriage } from '../triage/triage';
+import { StubFlowClassifier } from '../triage/triage';
 import { makeBearerAuthenticator } from './auth/authenticate';
 import { makeRelationshipAuthorizer } from './auth/authorize';
 import type { Principal } from './auth/principal';
@@ -39,7 +39,7 @@ export function composeA2A(opts: ComposeOptions = {}) {
   // message/send drives the real workflow engine (Triage -> orchestrator) with a
   // temporary auto-pass executor (Claude Agent SDK executor replaces it later).
   const orchestratorRunner = new OrchestratorRunner({
-    triage: new StubTriage(),
+    triage: new StubFlowClassifier(),
     store: new InMemoryOrchestratorStore(),
     executor: opts.executor ?? new AutoPassStepExecutor(),
     newId,

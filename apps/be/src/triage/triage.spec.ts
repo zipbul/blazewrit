@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
-import { StubTriage } from './triage';
+import { StubFlowClassifier } from './triage';
 
-const triage = new StubTriage();
+const triage = new StubFlowClassifier();
 
 test('classifies a fix request as bugfix', () => {
   expect(triage.classify('이 버그 고쳐줘')).toBe('bugfix');

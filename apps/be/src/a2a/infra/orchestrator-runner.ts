@@ -1,13 +1,13 @@
 import type { MessageDto, TaskDto, TaskState } from '@bw/dto';
 import type { TaskRunner } from '../methods/message-send';
-import type { Triage } from '../../triage/triage';
+import type { FlowClassifier } from '../../triage/triage';
 import { runFlow } from '../../orchestrator/orchestrator';
 import { getWorkflow } from '../../harness/workflows';
 import type { OrchestratorStore, StepExecutor } from '../../orchestrator/types';
 import type { TaskStore } from './task-store';
 
 export interface OrchestratorRunnerDeps {
-  triage: Triage;
+  triage: FlowClassifier;
   store: OrchestratorStore;
   executor: StepExecutor;
   newId: () => string;

@@ -34,6 +34,16 @@
               <button type="button" class="btn no" (click)="answer(d.id, 'rejected')">거부</button>
             }
             @case ('free_text') {
+              @if (d.options.length) {
+                <div class="options">
+                  @for (o of d.options; track o.value) {
+                    <button type="button" class="opt" (click)="answer(d.id, o.value)">
+                      <span class="opt-label">{{ o.label }}</span>
+                    </button>
+                  }
+                </div>
+                <p class="or-text">또는 직접 입력</p>
+              }
               @if (answers.controls[d.id]; as ctrl) {
                 <textarea class="ta" rows="3" [formControl]="ctrl" [attr.aria-label]="d.question"></textarea>
                 <button type="button" class="btn ok" [disabled]="ctrl.invalid" (click)="submitText(d.id)">제출</button>

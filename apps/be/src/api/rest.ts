@@ -3,7 +3,8 @@ import type { SQL } from 'bun';
 import { runFlow } from '../orchestrator/orchestrator';
 import { PgOrchestratorStore } from '../orchestrator/infra/pg-store';
 import { PacedStepExecutor } from '../orchestrator/paced-executor';
-import { StubTriage } from '../triage/triage';
+import { StubFlowClassifier } from '../triage/triage';
+import type { TriageAgent } from '../triage/triage-agent';
 import { routeProject } from '../meta/router';
 import { seedProjectCard } from '../a2a/agent-card';
 import { parseJsonRpc } from '../a2a/jsonrpc';
@@ -115,6 +116,8 @@ export interface RestDeps {
   newId?: () => string;
   /** Origin used for the central→project A2A call (real HTTP message/send to our own endpoint). */
   selfBaseUrl?: string;
+  /** Central triage agent: structures a raw request into an Intent by reading the DB read-only. */
+  triage?: TriageAgent;
 }
 
 /** REST + SSE surface the Angular UI consumes (DECISIONS §13), backed by Postgres. */
@@ -159,7 +162,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   };
 
   // Map the classified flow type to the work_item type enum (bug | feature | task).
-  const workItemType = (flowType: ReturnType<StubTriage['classify']>): string =>
+  const workItemType = (flowType: ReturnType<StubFlowClassifier['classify']>): string =>
     flowType === 'bugfix' ? 'bug' : flowType === 'feature' ? 'feature' : 'task';
 
   /**
@@ -168,7 +171,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
    * call site — both human-origin (central router) and project-origin traffic land here.
    */
   const dispatchTask = (projectId: string, request: string, contextId?: string): string => {
-    const flowType = new StubTriage().classify(request);
+    const flowType = new StubFlowClassifier().classify(request);
     const workItemId = newId();
     const ctx = contextId ?? workItemId; // correlate cross-project realizations of one intent
     // Background execution. Guarded so a failed task never crashes the server process.
@@ -234,6 +237,26 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     });
     const json = (await res.json()) as { result?: { id?: string } };
     return { taskId: json.result?.id };
+  };
+
+  /** Register a project as 'proposed' and open its approval decision (agent-proposes / user-approves). */
+  const proposeNewProject = async (projectId: string, request: string) => {
+    await sql`insert into projects (id, name, status) values (${projectId}, ${projectId}, ${'proposed'}) on conflict (id) do nothing`;
+    const decId = newId();
+    const meta = JSON.stringify({ kind: 'project_registration', projectId, request });
+    await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'project_registration'}, ${`새 프로젝트 «${projectId}»를 등록할까요?`}, ${'[]'}, ${meta})`;
+    flowHub.publish({ type: 'decision-open', id: decId, project: projectId });
+    return { accepted: true, pendingRegistration: true, projectId };
+  };
+
+  /** Open a free-text clarification question in the drawer inbox (the graceful tail for ambiguous intent). */
+  const openClarification = async (request: string, question: string, options: string[] = []): Promise<string> => {
+    const decId = newId();
+    const meta = JSON.stringify({ kind: 'clarification', request });
+    // free_text → drawer always shows a text box; stored options add clickable choices alongside it.
+    await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'free_text'}, ${question}, ${JSON.stringify(options)}, ${meta})`;
+    flowHub.publish({ type: 'decision-open', id: decId });
+    return decId;
   };
 
   /** Meta agent proposes wiring a newly-registered project to an existing one (agent-driven, user-approved). */
@@ -345,6 +368,28 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         const relId = meta.relationshipId as string;
         if (approved) await sql`update relationships set status = 'confirmed' where id = ${relId}`;
         else await sql`delete from relationships where id = ${relId}`;
+      } else if (meta.kind === 'clarification') {
+        // The user clarified an ambiguous request: re-triage the combined text, then route it.
+        const original = String(meta.request ?? '');
+        if (original && deps.triage) {
+          const combined = `${original}\n\n[사용자 추가 설명] ${answer}`;
+          void (async () => {
+            try {
+              const { intent } = await deps.triage!.chat(combined);
+              if (!intent || intent.needsClarification) {
+                await openClarification(combined, intent?.clarifyingQuestion ?? '추가 설명이 필요합니다', intent?.clarifyOptions ?? []);
+              } else if (intent.targetProject) {
+                const active = (await sql`select id from projects where id = ${intent.targetProject} and status = 'active'`) as Array<unknown>;
+                if (active.length) await dispatchViaA2A(intent.targetProject, combined);
+                else await proposeNewProject(intent.suggestedProjectName ?? intent.targetProject, combined);
+              } else {
+                await proposeNewProject(intent.suggestedProjectName ?? `project-${newId().slice(0, 4)}`, combined);
+              }
+            } catch (err) {
+              flowHub.publish({ type: 'flow-error', message: String(err) });
+            }
+          })();
+        }
       } else {
         pendingDecisions.get(params.id)?.(answer); // resume the suspended flow
         pendingDecisions.delete(params.id);
@@ -435,6 +480,27 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       });
       return new Response(stream, { headers: { 'content-type': 'text/event-stream', ...CORS } });
     })
+    // Central TRIAGE: structure a raw request into an Intent by reading the DB read-only. This is
+    // a conversational surface: free reply, plus a structured intent when the message is actionable.
+    // Read-only — it does NOT dispatch or mutate. The UI shows the reply and (if any) the intent card.
+    .post('/api/triage', async ({ body, set }) => {
+      const request = typeof body === 'object' && body && 'request' in body ? String((body as { request: unknown }).request) : '';
+      if (!request.trim()) {
+        set.status = 400;
+        return { error: 'request is required' };
+      }
+      if (!deps.triage) {
+        set.status = 503;
+        return { error: 'central agent not configured' };
+      }
+      try {
+        const { reply, intent } = await deps.triage.chat(request);
+        return { reply, intent };
+      } catch (err) {
+        set.status = 500;
+        return { error: String(err) };
+      }
+    })
     // Central META ROUTER: pick the target project, then dispatch the RAW intent to it over
     // real A2A (the project triages + runs). Central does not classify the flow type.
     .post('/api/run', async ({ body }) => {
@@ -451,12 +517,46 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       }
 
       // New project: register as 'proposed' and ask the user (agent-proposes / user-approves).
-      const projectId = route.project;
-      await sql`insert into projects (id, name, status) values (${projectId}, ${projectId}, ${'proposed'}) on conflict (id) do nothing`;
-      const decId = newId();
-      const meta = JSON.stringify({ kind: 'project_registration', projectId, request });
-      await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'project_registration'}, ${`새 프로젝트 «${projectId}»를 등록할까요?`}, ${'[]'}, ${meta})`;
-      flowHub.publish({ type: 'decision-open', id: decId, project: projectId });
-      return { accepted: true, pendingRegistration: true, projectId };
+      return proposeNewProject(route.project, request);
+    })
+    // Intent-resolved dispatch: the user approved a triage analysis, so route to the project the
+    // central agent already resolved (re-validated here) instead of re-running the meta router.
+    .post('/api/dispatch', async ({ body, set }) => {
+      const b = (typeof body === 'object' && body ? body : {}) as Record<string, unknown>;
+      const request = typeof b.request === 'string' ? b.request : '';
+      const targetProject = typeof b.targetProject === 'string' ? b.targetProject : '';
+      const newProjectName = typeof b.newProjectName === 'string' ? b.newProjectName.trim() : '';
+      if (!request.trim()) {
+        set.status = 400;
+        return { error: 'request is required' };
+      }
+      if (targetProject) {
+        const active = (await sql`select id from projects where id = ${targetProject} and status = 'active'`) as Array<unknown>;
+        if (active.length === 0) {
+          set.status = 409;
+          return { error: `target project «${targetProject}» not found or not active` };
+        }
+        const { taskId } = await dispatchViaA2A(targetProject, request);
+        return { accepted: true, workItemId: taskId };
+      }
+      if (newProjectName) {
+        // New project the agent named: register as 'proposed' and open the approval decision.
+        return proposeNewProject(newProjectName, request);
+      }
+      set.status = 400;
+      return { error: 'targetProject or newProjectName is required' };
+    })
+    // Open a clarification question (drawer inbox) for an ambiguous request; answering re-triages.
+    .post('/api/clarify', async ({ body, set }) => {
+      const b = (typeof body === 'object' && body ? body : {}) as Record<string, unknown>;
+      const request = typeof b.request === 'string' ? b.request : '';
+      const question = typeof b.question === 'string' ? b.question : '';
+      const options = Array.isArray(b.options) ? b.options.filter((o): o is string => typeof o === 'string') : [];
+      if (!request.trim() || !question.trim()) {
+        set.status = 400;
+        return { error: 'request and question are required' };
+      }
+      const decisionId = await openClarification(request, question, options);
+      return { accepted: true, decisionId };
     });
 }

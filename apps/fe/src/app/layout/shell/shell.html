@@ -15,17 +15,70 @@
     </span>
   </header>
 
-  <form class="composer glass" (submit)="$event.preventDefault(); submitIntent(q.value); q.value = ''">
+  <form class="composer glass" (submit)="$event.preventDefault(); send(q.value); q.value = ''">
     <input
       #q
       class="prompt"
       type="text"
       name="intent"
       autocomplete="off"
-      placeholder="작업 의도를 입력하세요 — blazewrit이 분석해 알맞은 프로젝트로 배정합니다…"
+      placeholder="무엇이든 입력하세요 — blazewrit 중앙 에이전트와 대화하고, 작업이면 알맞은 프로젝트로 배정합니다…"
       aria-label="Center prompt" />
-    <button type="submit" class="run">실행</button>
+    <button type="submit" class="run" [disabled]="thinking()">{{ thinking() ? '생각 중…' : '보내기' }}</button>
   </form>
+
+  @if (chatError(); as err) {
+    <div class="error-banner" role="alert">⚠ {{ err }}</div>
+  }
+
+  @if (thinking()) {
+    <div class="agent-reply glass thinking">🜂 중앙 에이전트가 생각 중…</div>
+  }
+
+  @if (reply(); as r) {
+    <div class="agent-reply glass"><span class="ar-mark">🜂</span> {{ r }}</div>
+  }
+
+  @if (intent(); as i) {
+    <article class="intent-card glass" aria-label="제안된 작업">
+      <header class="ic-head">
+        <span class="ic-title">🜂 제안된 작업</span>
+        <button type="button" class="ic-x" aria-label="닫기" (click)="clearIntent()">✕</button>
+      </header>
+      <p class="ic-summary">{{ i.summary }}</p>
+      <div class="ic-chips">
+        <span class="chip flow">{{ i.flowType }}</span>
+        @if (i.isNewProject) {
+          <span class="chip new">새 프로젝트</span>
+        } @else if (i.targetProject) {
+          <span class="chip target">→ {{ i.targetProject }}</span>
+        }
+        @for (r of i.relatedProjects; track r) {
+          <span class="chip rel">↔ {{ r }}</span>
+        }
+        <span class="chip conf">신뢰도 {{ (i.confidence * 100).toFixed(0) }}%</span>
+      </div>
+      @if (i.needsClarification && i.clarifyingQuestion) {
+        <div class="ic-clarify" role="note">❓ {{ i.clarifyingQuestion }}</div>
+      }
+      <p class="ic-rationale">{{ i.rationale }}</p>
+      <div class="ic-actions">
+        @if (i.needsClarification) {
+          <button type="button" class="run" (click)="askClarification()" [disabled]="dispatching()">
+            {{ dispatching() ? '등록 중…' : '❓ 질문 보내기' }}
+          </button>
+        } @else {
+          <button type="button" class="run" (click)="proceed()" [disabled]="dispatching()">
+            @if (i.isNewProject || !i.targetProject) {
+              {{ dispatching() ? '등록 중…' : '➕ 새 프로젝트 «' + (i.suggestedProjectName || '?') + '» 등록' }}
+            } @else {
+              {{ dispatching() ? '실행 중…' : '🔥 «' + i.targetProject + '»에서 진행' }}
+            }
+          </button>
+        }
+      </div>
+    </article>
+  }
 
   @if (loadError(); as err) {
     <div class="error-banner" role="alert">⚠ {{ err }}</div>
