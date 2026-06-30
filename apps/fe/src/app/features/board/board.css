@@ -40,8 +40,7 @@
 
 .lane-body {
   flex: 1;
-  background: rgba(255, 255, 255, 0.015);
-  border: 1px dashed rgba(255, 255, 255, 0.06);
+  background: rgba(255, 235, 210, 0.02);
   border-radius: var(--glass-radius);
   padding: 10px;
   display: flex;
@@ -50,12 +49,10 @@
   overflow: auto;
 }
 .lane.active .lane-body {
-  border-color: rgba(94, 200, 236, 0.3);
-  border-style: solid;
-  background: rgba(94, 200, 236, 0.04);
+  background: rgba(94, 200, 236, 0.05);
 }
 
-.tc { padding: 14px; }
+.tc { padding: 14px; background: var(--surface-1); }
 .tc .id { font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
 .tc .t { font-weight: 600; font-size: 14px; margin: 4px 0 8px; letter-spacing: -0.01em; }
 .tc .row { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 10px; }
@@ -66,8 +63,7 @@
   color: var(--muted-foreground);
 }
 .tc.live-c {
-  border-color: rgba(94, 200, 236, 0.4);
-  box-shadow: 0 0 0 1px rgba(94, 200, 236, 0.25), var(--glass-shadow);
+  box-shadow: 0 0 0 2px rgba(94, 200, 236, 0.35);
 }
 .pulse { display: inline-flex; align-items: center; gap: 5px; color: var(--primary); }
 .pulse.ok { color: var(--success); }

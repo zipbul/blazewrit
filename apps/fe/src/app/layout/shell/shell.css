@@ -207,12 +207,12 @@
 .agent-reply.thinking { color: var(--muted-foreground); font-size: 0.85rem; }
 .agent-reply .ar-mark { color: var(--primary); margin-right: 0.4rem; }
 
-/* Central-triage intent preview */
+/* Central-triage intent preview (inside the dock — tint + spacing, no border) */
 .intent-card {
-  margin: 0 1rem 0.6rem;
+  margin: 4px 2px 2px;
   padding: 0.8rem 1rem;
   border-radius: 12px;
-  border: 1px solid var(--ring);
+  background: var(--elev-1);
 }
 .ic-head { display: flex; align-items: center; justify-content: space-between; }
 .ic-title { font-family: var(--font-mono); font-size: 0.78rem; color: var(--primary); letter-spacing: 0.03em; }
@@ -279,11 +279,11 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: rgba(24, 18, 11, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(16px) saturate(1.05);
-  -webkit-backdrop-filter: blur(16px) saturate(1.05);
-  box-shadow: 0 14px 48px rgba(0, 0, 0, 0.45);
+  background: var(--glass);
+  border: 1px solid var(--glass-border); /* the ONE border in the whole dock */
+  backdrop-filter: var(--glass-backdrop);
+  -webkit-backdrop-filter: var(--glass-backdrop);
+  box-shadow: var(--glass-shadow);
 }
 .dock.collapsed { height: auto !important; min-height: 0; }
 /* top grip — drag to resize (grows upward) */
@@ -300,9 +300,7 @@
   flex: 0 0 auto;
   display: flex; gap: 4px; align-items: center;
   padding: 4px 8px 6px; overflow-x: auto;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 }
-.dock.collapsed .dock-tabs { border-bottom: 0; }
 /* custom thin scrollbars */
 .dock-tabs, .dchat { scrollbar-width: thin; scrollbar-color: rgba(224,107,46,0.4) transparent; }
 .dock-tabs::-webkit-scrollbar { height: 6px; }
@@ -317,11 +315,12 @@
   font: 600 12px var(--font-mono);
   color: var(--muted-foreground);
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px; padding: 4px 9px;
+  border: 0;
+  border-radius: 8px; padding: 5px 10px;
   max-width: 200px; overflow: hidden; text-overflow: ellipsis;
 }
-.dtab.on { color: var(--foreground); background: rgba(224, 107, 46, 0.18); border-color: var(--ring); }
+.dtab:hover { background: var(--elev-2); color: var(--foreground); }
+.dtab.on { color: var(--foreground); background: var(--elev-3); }
 .dtab-ic { margin-right: 4px; }
 .dock-sp { flex: 1; }
 .dock-toggle {
@@ -345,12 +344,13 @@
 .dmsg.me .dbub { background: rgba(224, 107, 46, 0.16); }
 .dbub.muted { color: var(--muted-foreground); }
 .dbub.err { color: var(--destructive); }
-.dcompose { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; padding: 9px 12px; border-top: 1px solid rgba(255, 255, 255, 0.07); }
+.dcompose { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; padding: 10px 12px; background: var(--elev-1); }
 .dcompose .prompt {
-  flex: 1; background: rgba(0, 0, 0, 0.2); color: inherit; font: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 999px; padding: 0.6rem 1rem; outline: none;
+  flex: 1; background: var(--elev-2); color: inherit; font: inherit;
+  border: 0; border-radius: 999px; padding: 0.6rem 1rem; outline: none;
+  transition: background 0.15s, box-shadow 0.15s;
 }
-.dcompose .prompt:focus { border-color: rgba(224, 107, 46, 0.6); }
+.dcompose .prompt:focus { background: var(--elev-3); box-shadow: 0 0 0 2px rgba(224, 107, 46, 0.45); }
 .dcompose .send {
   flex: 0 0 auto; width: 38px; height: 38px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
@@ -360,3 +360,9 @@
 .dcompose .send:hover:not(:disabled) { filter: brightness(1.08); }
 .dcompose .send:active:not(:disabled) { transform: scale(0.94); }
 .dcompose .send:disabled { opacity: 0.45; cursor: progress; }
+.dock-q {
+  flex: 0 0 auto; cursor: pointer; white-space: nowrap;
+  font: 700 11px var(--font-mono); color: #fff0e2;
+  background: var(--destructive); border: 0; border-radius: 999px; padding: 3px 9px;
+}
+.dock-q:hover { filter: brightness(1.1); }

@@ -29,6 +29,9 @@
         </button>
       }
       <span class="dock-sp"></span>
+      @if (pending() > 0) {
+        <button type="button" class="dock-q" (click)="openQuestions()" title="질문함 열기">❓ {{ pending() }}</button>
+      }
       <button type="button" class="dock-toggle" (click)="toggleDock()">{{ dockOpen() ? '▾ 접기' : '▴ 펴기' }}</button>
     </div>
 

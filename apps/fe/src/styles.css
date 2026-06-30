@@ -57,11 +57,23 @@
   --sidebar-ring: #e06b2e;
 
   /* glass + mesh (warm hearth) */
-  --glass: rgba(31, 24, 16, 0.55);
-  --glass-border: rgba(224, 180, 120, 0.13);
-  --glass-blur: 20px;
+  --glass: rgba(34, 26, 16, 0.72);
+  --glass-border: rgba(245, 227, 207, 0.09);
+  --glass-blur: 16px;
   --glass-radius: 0.75rem;
-  --glass-shadow: 0 14px 44px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 220, 180, 0.05);
+  --glass-shadow: 0 16px 44px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 220, 180, 0.08);
+  --glass-backdrop: blur(16px) saturate(1.6);
+  /* warm-tinted elevation ladder — separate surfaces by lightness step, not lines */
+  --surface-1: #1c160d; /* flat cards on opaque page (board) */
+  --surface-2: #221a10; /* header bar, intent card */
+  --surface-3: #2a2013; /* dock body fallback rung */
+  --surface-4: #322617; /* dialogs/drawers, lifted elements */
+  --elev-1: rgba(255, 235, 210, 0.04); /* sub-zone nudge (compose area) */
+  --elev-2: rgba(255, 235, 210, 0.07); /* selected tab, input pill fill */
+  --elev-3: rgba(255, 235, 210, 0.10); /* hover/active sub-surfaces */
+  --hairline: rgba(245, 227, 207, 0.06); /* the only internal line, used at most once */
+  --lit-edge: inset 0 1px 0 rgba(255, 220, 180, 0.08); /* top highlight = the edge cue */
+  --shadow-flat: 0 6px 16px rgba(0, 0, 0, 0.25); /* soft lift for raised-but-not-glass */
   /* warm ash gray, readable on espresso --background */
   --faint: #94856e;
   /* firelight glow in the dark */
@@ -116,12 +128,11 @@
 
 @layer components {
   /* 공유 글래스 카드 — 3뷰(Dashboard/Board/Canvas) 동일 스펙 */
+  /* shared raised surface — separates by warm tint + lit top edge, NOT a border.
+     (Only the chat dock — a true glass panel over the busy canvas — draws a border.) */
   .glass {
-    background: var(--glass);
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
-    backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
-    border: 1px solid var(--glass-border);
+    background: var(--surface-2);
     border-radius: var(--glass-radius);
-    box-shadow: var(--glass-shadow);
+    box-shadow: var(--lit-edge);
   }
 }
