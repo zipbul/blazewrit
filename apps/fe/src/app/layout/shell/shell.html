@@ -7,11 +7,6 @@
       <a routerLink="/canvas" routerLinkActive="on" ariaCurrentWhenActive="page">Canvas</a>
       <a routerLink="/board" routerLinkActive="on" ariaCurrentWhenActive="page">Board</a>
     </nav>
-    <span class="live">
-      @if (pending() > 0) {
-        <button type="button" class="qbadge" (click)="openQuestions()">질문 {{ pending() }}</button>
-      }
-    </span>
   </header>
 
   @if (loadError(); as err) {
