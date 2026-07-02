@@ -1,21 +1,22 @@
 import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import type { DecisionRequestDto } from '@bw/dto';
+import { of } from 'rxjs';
 import { Shell } from './shell';
 import { WorkspaceStore } from '../../data-access/workspace-store';
-import type { ConnectionVm } from '../../data-access/api';
+import { LiveSync } from '../../data-access/live-sync';
+import { BlazewritApi } from '../../data-access/api';
 
-const connections: ConnectionVm[] = [
-  { projectId: 'api', endpoint: 'a2a://api:7142', status: 'connected', lastHeartbeat: '', latencyMs: 42, activeStreams: 1, agentState: 'working' },
-  { projectId: 'infra', endpoint: 'a2a://infra:7144', status: 'disconnected', lastHeartbeat: '', latencyMs: null, activeStreams: 0, agentState: 'unreachable' },
-];
-
+/** Shell is layout-only now: header nav + stage + question drawer + chat dock. */
 const storeStub = {
-  connections: signal(connections),
-  openDecisions: signal([{ id: 'd1' } as DecisionRequestDto]),
   loadError: signal<string | null>(null),
+  workItems: signal([]),
+  openDecisions: signal([]),
+  reload: () => {},
 } as unknown as WorkspaceStore;
+
+const apiStub = { triage: () => of({ reply: '', intent: null, feedback: null, view: null }) } as unknown as BlazewritApi;
+const liveStub = { start: () => {} } as unknown as LiveSync;
 
 describe('Shell', () => {
   beforeEach(async () => {
@@ -25,6 +26,8 @@ describe('Shell', () => {
         provideZonelessChangeDetection(),
         provideRouter([]),
         { provide: WorkspaceStore, useValue: storeStub },
+        { provide: LiveSync, useValue: liveStub },
+        { provide: BlazewritApi, useValue: apiStub },
       ],
     }).compileComponents();
   });
@@ -33,25 +36,28 @@ describe('Shell', () => {
     expect(TestBed.createComponent(Shell).componentInstance).toBeTruthy();
   });
 
-  it('renders the five view links', () => {
+  it('renders the three nav links (Canvas / Board / 피드백)', () => {
     const fixture = TestBed.createComponent(Shell);
     fixture.detectChanges();
-    const el = fixture.nativeElement as HTMLElement;
-    const links = Array.from(el.querySelectorAll('.views a')).map((a) => a.textContent?.trim().split(/\s+/)[0]);
-    expect(links).toEqual(['Dashboard', 'Board', 'Canvas', 'Decisions', 'Connections']);
+    const links = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.views a')).map(
+      (a) => a.textContent?.trim(),
+    );
+    expect(links).toEqual(['Canvas', 'Board', '피드백']);
   });
 
-  it('shows the pending decision badge from the store', () => {
+  it('mounts the chat dock and the question drawer', () => {
     const fixture = TestBed.createComponent(Shell);
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.views .badge')?.textContent?.trim()).toBe('1');
+    expect(el.querySelector('app-chat-dock')).toBeTruthy();
+    expect(el.querySelector('app-question-drawer')).toBeTruthy();
   });
 
-  it('renders a connection dot per project in the status bar', () => {
+  it('shows the error banner when the workspace load fails', () => {
+    (storeStub.loadError as ReturnType<typeof signal<string | null>>).set('projects 로드 실패');
     const fixture = TestBed.createComponent(Shell);
     fixture.detectChanges();
-    const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelectorAll('.status .s .b').length).toBe(2);
+    expect((fixture.nativeElement as HTMLElement).querySelector('.error-banner')?.textContent).toContain('projects 로드 실패');
+    (storeStub.loadError as ReturnType<typeof signal<string | null>>).set(null);
   });
 });

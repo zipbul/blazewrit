@@ -6,8 +6,11 @@ import { Canvas } from './canvas';
 import { WorkspaceStore } from '../../data-access/workspace-store';
 import { FocusLive, type LiveLine } from '../../data-access/focus-live';
 
+class RO { observe(): void {} unobserve(): void {} disconnect(): void {} }
+(globalThis as Record<string, unknown>)['ResizeObserver'] ??= RO;
+
 const ISO = '2026-05-29T00:00:00Z';
-const projects: ProjectVm[] = [{ id: 'api', name: 'api', status: 'up', activeCount: 3 }];
+const projects: ProjectVm[] = [{ id: 'api', name: 'api', status: 'up', regStatus: 'active', activeCount: 3 }];
 const flows: FlowDto[] = [
   { id: 'f142', workItemId: '142', flowType: 'bugfix', attemptNo: 2, status: 'active', currentStep: 'test', createdAt: ISO },
   { id: 'f143', workItemId: '143', flowType: 'feature', attemptNo: 1, status: 'active', currentStep: 'implement', createdAt: ISO },
@@ -20,6 +23,8 @@ const workItems: WorkItemDto[] = [
 const storeStub = {
   projects: signal(projects),
   workItems: signal(workItems),
+  openDecisions: signal([]),
+  relationships: signal([]),
   flowFor: (w: WorkItemDto) => flows.find((f) => f.id === w.activeFlowId),
 } as unknown as WorkspaceStore;
 
@@ -45,21 +50,19 @@ describe('Canvas', () => {
     expect(TestBed.createComponent(Canvas).componentInstance).toBeTruthy();
   });
 
-  it('renders a task node per work item plus the project node and wires', () => {
+  it('renders the project hearth with its label and one ember per work item', () => {
     const fixture = TestBed.createComponent(Canvas);
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelectorAll('.node.task').length).toBe(2);
-    expect(el.querySelector('.node.proj .nm')?.textContent).toContain('api');
-    // one project→task wire per task plus the live wire
-    expect(el.querySelectorAll('svg.wires path').length).toBe(3);
+    expect(el.querySelector('.rlabel .rname')?.textContent).toContain('api');
+    expect(el.querySelectorAll('.emb').length).toBe(2);
   });
 
-  it('exposes accessible names on the zoom controls', () => {
+  it('exposes the view controls (맞춤 / + 프로젝트)', () => {
     const fixture = TestBed.createComponent(Canvas);
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
-    const labels = Array.from(el.querySelectorAll('.zoom button')).map((b) => b.getAttribute('aria-label'));
-    expect(labels).toEqual(['Zoom in', 'Zoom out', 'Fit to screen']);
+    const labels = Array.from(el.querySelectorAll('.bar button')).map((b) => b.textContent?.trim());
+    expect(labels).toEqual(['⊙ 맞춤', '+ 프로젝트']);
   });
 });

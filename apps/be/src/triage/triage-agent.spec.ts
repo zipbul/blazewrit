@@ -20,6 +20,22 @@ describe('TriageAgent.chat', () => {
     expect(turn.intent).toBeNull();
   });
 
+  it('returns null feedback/view on a plain reply turn (full TurnResult contract)', async () => {
+    const agent = new TriageAgent({ sql: fakeSql, queryFn: fakeQuery('그냥 답변') });
+    const turn = await agent.chat('잡담');
+    expect(turn).toEqual({ reply: '그냥 답변', intent: null, feedback: null, view: null });
+  });
+
+  it('throws when the run yields no result message at all', async () => {
+    const agent = new TriageAgent({
+      sql: fakeSql,
+      queryFn: async function* () {
+        yield { type: 'assistant', message: { content: [] } } as never;
+      },
+    });
+    await expect(agent.chat('x')).rejects.toThrow(/no result/);
+  });
+
   it('throws when the run errors', async () => {
     const agent = new TriageAgent({
       sql: fakeSql,

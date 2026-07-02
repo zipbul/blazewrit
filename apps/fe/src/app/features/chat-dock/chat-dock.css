@@ -1,0 +1,160 @@
+/* Bottom chat dock — translucent layer floating over the canvas.
+   ONE outer border (the glass rim); internals separate by elevation tints, never lines. */
+.dock {
+  position: absolute;
+  left: 50%;
+  bottom: 0.5rem;
+  transform: translateX(-50%);
+  z-index: 20;
+  width: min(760px, calc(100% - 2rem));
+  height: 320px;
+  min-height: 160px;
+  max-height: 80vh;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--glass);
+  border: 1px solid var(--glass-border); /* the ONE border in the whole dock */
+  backdrop-filter: var(--glass-backdrop);
+  -webkit-backdrop-filter: var(--glass-backdrop);
+  box-shadow: var(--glass-shadow);
+}
+.dock.collapsed { height: auto !important; min-height: 0; }
+
+/* top grip — drag to resize (grows upward) */
+.dock-grip {
+  flex: 0 0 auto; height: 12px; cursor: ns-resize;
+  display: flex; align-items: center; justify-content: center;
+}
+.dock-grip::before {
+  content: ''; width: 40px; height: 3px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+}
+.dock-grip:hover::before { background: var(--primary); }
+
+.dock-tabs {
+  flex: 0 0 auto;
+  display: flex; gap: 4px; align-items: center;
+  padding: 4px 8px 6px; overflow-x: auto;
+}
+.dtab {
+  flex: 0 0 auto; white-space: nowrap; cursor: pointer;
+  font: 600 12px var(--font-mono);
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 0;
+  border-radius: 8px; padding: 5px 10px;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+}
+.dtab:hover { background: var(--elev-2); color: var(--foreground); }
+.dtab.on { color: var(--foreground); background: var(--elev-3); }
+.dtab-ic { margin-right: 4px; }
+.dock-sp { flex: 1; }
+.dock-q {
+  flex: 0 0 auto; cursor: pointer; white-space: nowrap;
+  font: 700 11px var(--font-mono); color: #fff0e2;
+  background: var(--destructive); border: 0; border-radius: 999px; padding: 3px 9px;
+}
+.dock-q:hover { filter: brightness(1.1); }
+.dock-toggle {
+  flex: 0 0 auto; cursor: pointer; font: 600 11px var(--font-mono);
+  color: var(--muted-foreground); background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; padding: 4px 8px;
+}
+
+/* custom thin scrollbars */
+.dock-tabs, .dchat { scrollbar-width: thin; scrollbar-color: rgba(224,107,46,0.4) transparent; }
+.dock-tabs::-webkit-scrollbar { height: 6px; }
+.dchat::-webkit-scrollbar { width: 8px; }
+.dock-tabs::-webkit-scrollbar-track, .dchat::-webkit-scrollbar-track { background: transparent; }
+.dock-tabs::-webkit-scrollbar-thumb, .dchat::-webkit-scrollbar-thumb {
+  background: rgba(224, 107, 46, 0.35); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box;
+}
+.dock-tabs::-webkit-scrollbar-thumb:hover, .dchat::-webkit-scrollbar-thumb:hover { background: rgba(224, 107, 46, 0.6); background-clip: padding-box; }
+
+.dock-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.dchat {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.dmsg { display: flex; }
+.dmsg.me { justify-content: flex-end; }
+.dbub {
+  display: inline-block; max-width: 80%;
+  padding: 7px 11px; border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 13px; line-height: 1.5; white-space: pre-wrap;
+}
+.dmsg.me .dbub { background: rgba(224, 107, 46, 0.16); }
+.dbub.muted { color: var(--muted-foreground); }
+.dbub.err { color: var(--destructive); }
+
+/* agent-rendered table view (show_table) */
+.dtable { background: var(--elev-1); border-radius: 12px; padding: 10px 12px; max-width: 96%; overflow-x: auto; }
+.dt-title { font: 700 12px var(--font-mono); color: var(--accent); margin-bottom: 7px; }
+.dtable table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.dtable th {
+  text-align: left; font: 700 10.5px var(--font-mono); letter-spacing: 0.04em;
+  color: var(--muted-foreground); padding: 4px 10px 6px 0; border-bottom: 1px solid var(--hairline);
+}
+.dtable td { padding: 5px 10px 5px 0; color: var(--foreground); vertical-align: top; }
+.dtable tbody tr:hover { background: var(--elev-2); }
+
+/* intent preview card (inside the dock — tint + spacing, no border) */
+.intent-card {
+  margin: 4px 2px 2px;
+  padding: 0.8rem 1rem;
+  border-radius: 12px;
+  background: var(--elev-1);
+}
+.ic-head { display: flex; align-items: center; justify-content: space-between; }
+.ic-title { font-family: var(--font-mono); font-size: 0.78rem; color: var(--primary); letter-spacing: 0.03em; }
+.ic-x {
+  background: transparent; border: 0; color: var(--muted-foreground);
+  cursor: pointer; font-size: 0.85rem; line-height: 1;
+}
+.ic-x:hover { color: var(--foreground); }
+.ic-summary { margin: 0.4rem 0 0.55rem; color: var(--foreground); }
+.ic-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
+.chip {
+  font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600;
+  padding: 0.18rem 0.5rem; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18); color: var(--foreground);
+}
+.chip.flow { color: #ffb347; border-color: rgba(255, 179, 71, 0.5); }
+.chip.target { color: #8fd7ff; border-color: rgba(120, 200, 255, 0.5); }
+.chip.new { color: #b6f5c0; border-color: rgba(120, 230, 150, 0.5); }
+.chip.rel { color: var(--muted-foreground); }
+.chip.conf { color: var(--muted-foreground); }
+.ic-clarify {
+  margin: 0.2rem 0 0.55rem; padding: 0.5rem 0.7rem;
+  border-radius: 8px; background: rgba(255, 196, 0, 0.08);
+  border: 1px solid var(--warning); color: var(--warning); font-size: 0.88rem;
+}
+.ic-rationale { margin: 0; color: var(--muted-foreground); font-size: 0.82rem; line-height: 1.5; }
+.ic-actions { display: flex; justify-content: flex-end; margin-top: 0.7rem; }
+.ic-actions .run {
+  background: linear-gradient(135deg, #ff7a1a, #ffb347); color: #00121e;
+  font-weight: 700; border: 0; border-radius: 8px; padding: 0.5rem 0.9rem; cursor: pointer;
+}
+.ic-actions .run:hover:not(:disabled) { filter: brightness(1.08); }
+.ic-actions .run:disabled { opacity: 0.6; cursor: progress; }
+
+/* composer */
+.dcompose { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; padding: 10px 12px; background: var(--elev-1); }
+.dcompose .prompt {
+  flex: 1; background: var(--elev-2); color: inherit; font: inherit;
+  border: 0; border-radius: 999px; padding: 0.6rem 1rem; outline: none;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.dcompose .prompt:focus { background: var(--elev-3); box-shadow: 0 0 0 2px rgba(224, 107, 46, 0.45); }
+.dcompose .send {
+  flex: 0 0 auto; width: 38px; height: 38px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #ff7a1a, #ffb347); color: #1a0f06;
+  border: 0; cursor: pointer; transition: filter 0.15s, transform 0.1s;
+}
+.dcompose .send:hover:not(:disabled) { filter: brightness(1.08); }
+.dcompose .send:active:not(:disabled) { transform: scale(0.94); }
+.dcompose .send:disabled { opacity: 0.45; cursor: progress; }
