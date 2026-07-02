@@ -49,14 +49,6 @@ export class WorkspaceStore {
     this.api.relationships().subscribe({ next: (v) => this.relationships.set(v), error: this.onError('relationships') });
   }
 
-  /** Center intake: submit a raw intent (optionally HITL-gated), then refresh. */
-  submitIntent(request: string, hitl = false): void {
-    this.api.submitIntent(request, hitl).subscribe({
-      next: () => this.reload(),
-      error: this.onError('intent'),
-    });
-  }
-
   /** Called by LiveSync on each backend SSE event: re-pull snapshots + tick derived views. */
   notifyLive(): void {
     this.liveTick.update((t) => t + 1);

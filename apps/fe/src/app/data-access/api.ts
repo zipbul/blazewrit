@@ -121,11 +121,6 @@ export class BlazewritApi {
     return this.http.get<RelationshipVm[]>(`${this.base}/api/relationships`);
   }
 
-  /** Center intake: submit a raw intent; the backend (meta agent) triages + routes + runs. */
-  submitIntent(request: string, hitl = false): Observable<{ accepted: boolean; workItemId?: string }> {
-    return this.http.post<{ accepted: boolean; workItemId?: string }>(`${this.base}/api/run`, { request, hitl });
-  }
-
   /** One 똘이 turn in a thread: free reply + optional intent / feedback / table view. */
   triage(request: string, scope: string, clientMsgId?: string): Observable<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null; view: TableVm | null }> {
     return this.http.post<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null; view: TableVm | null }>(
