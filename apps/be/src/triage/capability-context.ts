@@ -19,6 +19,10 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   { name: '대화 응답', does: '잡담·질문·설명·조언은 그냥 말(자유 텍스트)로 답한다.' },
   {
+    name: 'show_table',
+    does: '조회 결과를 화면에 표로 렌더 — 사용자가 목록/현황을 "보여달라"면 db_read 후 이걸로 표를 띄운다(텍스트 표 금지).',
+  },
+  {
     name: 'record_feedback',
     does: '위 수단으로 사용자를 제대로 응대 못 할 때 결핍을 기록(ui=표현할 화면 없음 / feature=기능 없음 / unmet=요구 미충족). 지어내는 대신 이걸 쓴다.',
   },

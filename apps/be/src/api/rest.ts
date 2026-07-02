@@ -494,13 +494,13 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         return { error: 'central agent not configured' };
       }
       try {
-        const { reply, intent, feedback } = await deps.triage.chat(request);
+        const { reply, intent, feedback, view } = await deps.triage.chat(request);
         if (feedback) {
           // Agent hit a platform limitation while serving this turn → append to the feedback board.
           await sql`insert into agent_feedback (id, category, content, request) values (${newId()}, ${feedback.category}, ${feedback.content}, ${request})`;
           flowHub.publish({ type: 'agent-feedback', category: feedback.category });
         }
-        return { reply, intent, feedback };
+        return { reply, intent, feedback, view };
       } catch (err) {
         set.status = 500;
         return { error: String(err) };

@@ -46,6 +46,13 @@ export interface IntentVm {
   readonly rationale: string;
 }
 
+/** A declarative table the agent asked the FE to render in the dock. */
+export interface TableVm {
+  readonly title: string;
+  readonly columns: string[];
+  readonly rows: string[][];
+}
+
 /** A platform limitation the agent logged while serving a user (self-improvement board entry). */
 export interface FeedbackVm {
   readonly id: string;
@@ -110,9 +117,9 @@ export class BlazewritApi {
     return this.http.post<{ accepted: boolean; workItemId?: string }>(`${this.base}/api/run`, { request, hitl });
   }
 
-  /** Talk to the central agent: free reply + optional intent + optional platform-limitation feedback. */
-  triage(request: string): Observable<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null }> {
-    return this.http.post<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null }>(
+  /** Talk to the central agent: free reply + optional intent / feedback / declarative table view. */
+  triage(request: string): Observable<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null; view: TableVm | null }> {
+    return this.http.post<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null; view: TableVm | null }>(
       `${this.base}/api/triage`,
       { request },
     );

@@ -14,12 +14,14 @@ import { filter, skip } from 'rxjs';
 import { WorkspaceStore } from '../../data-access/workspace-store';
 import { LiveSync } from '../../data-access/live-sync';
 import { UiState } from '../../data-access/ui-state';
-import { BlazewritApi, type IntentVm } from '../../data-access/api';
+import { BlazewritApi, type IntentVm, type TableVm } from '../../data-access/api';
 import { QuestionDrawer } from '../../features/questions/question-drawer';
 
 interface ChatMsg {
   readonly role: 'me' | 'agent';
   readonly text: string;
+  /** Declarative table the agent rendered with this message (show_table). */
+  readonly table?: TableVm;
 }
 interface Thread {
   readonly id: string;
@@ -126,8 +128,8 @@ export class Shell {
     this.thinking.set(true);
     this.chatError.set(null);
     this.api.triage(request).subscribe({
-      next: ({ reply, intent }) => {
-        this.pushMsg(id, { role: 'agent', text: reply });
+      next: ({ reply, intent, view }) => {
+        this.pushMsg(id, { role: 'agent', text: reply, ...(view ? { table: view } : {}) });
         this.setIntent(id, intent);
         this.thinking.set(false);
       },

@@ -41,6 +41,19 @@
         <div class="dchat">
           @for (m of activeMsgs(); track $index) {
             <div class="dmsg" [class.me]="m.role === 'me'"><span class="dbub">{{ m.text }}</span></div>
+            @if (m.table; as tb) {
+              <div class="dtable">
+                <div class="dt-title">{{ tb.title }}</div>
+                <table>
+                  <thead><tr>@for (c of tb.columns; track $index) {<th>{{ c }}</th>}</tr></thead>
+                  <tbody>
+                    @for (r of tb.rows; track $index) {
+                      <tr>@for (cell of r; track $index) {<td>{{ cell }}</td>}</tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
           }
           @if (thinking()) {
             <div class="dmsg"><span class="dbub muted">🜂 생각 중…</span></div>
