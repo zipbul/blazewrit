@@ -1,0 +1,30 @@
+<div class="fb">
+  <header class="fb-head">
+    <h1>에이전트 피드백</h1>
+    <p class="sub">에이전트가 사용자를 응대하다 부딪힌 결핍 — 화면·기능·미충족 요구. 블레이즈릿 자가발전의 백로그.</p>
+  </header>
+
+  @if (error(); as err) {
+    <div class="fb-error" role="alert">⚠ {{ err }}</div>
+  }
+
+  @if (items().length === 0 && !error()) {
+    <div class="fb-empty">아직 기록된 피드백이 없습니다 — 에이전트가 결핍을 만나면 여기에 쌓입니다.</div>
+  }
+
+  <ul class="fb-list">
+    @for (f of items(); track f.id) {
+      <li class="fb-item">
+        <div class="fb-meta">
+          <span class="cat" [class]="'cat ' + f.category">{{ label(f.category) }}</span>
+          <span class="dt">{{ f.createdAt | date: 'MM.dd HH:mm' }}</span>
+          <span class="st">{{ f.status }}</span>
+        </div>
+        <p class="content">{{ f.content }}</p>
+        @if (f.request) {
+          <p class="req">사용자 요청: “{{ f.request }}”</p>
+        }
+      </li>
+    }
+  </ul>
+</div>

@@ -494,12 +494,29 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         return { error: 'central agent not configured' };
       }
       try {
-        const { reply, intent } = await deps.triage.chat(request);
-        return { reply, intent };
+        const { reply, intent, feedback } = await deps.triage.chat(request);
+        if (feedback) {
+          // Agent hit a platform limitation while serving this turn → append to the feedback board.
+          await sql`insert into agent_feedback (id, category, content, request) values (${newId()}, ${feedback.category}, ${feedback.content}, ${request})`;
+          flowHub.publish({ type: 'agent-feedback', category: feedback.category });
+        }
+        return { reply, intent, feedback };
       } catch (err) {
         set.status = 500;
         return { error: String(err) };
       }
+    })
+    // Agent self-improvement board: limitations the agent logged (ui/feature/unmet), newest first.
+    .get('/api/feedback', async () => {
+      const rows = (await sql`select * from agent_feedback order by created_at desc limit 200`) as Array<Record<string, unknown>>;
+      return rows.map((r) => ({
+        id: r.id as string,
+        category: r.category as string,
+        content: r.content as string,
+        request: (r.request as string) ?? '',
+        status: r.status as string,
+        createdAt: new Date(r.created_at as string).toISOString(),
+      }));
     })
     // Central META ROUTER: pick the target project, then dispatch the RAW intent to it over
     // real A2A (the project triages + runs). Central does not classify the flow type.

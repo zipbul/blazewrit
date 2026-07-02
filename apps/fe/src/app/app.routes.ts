@@ -15,6 +15,10 @@ export const routes: Routes = [
         path: 'canvas',
         loadComponent: () => import('./features/canvas/canvas').then((m) => m.Canvas),
       },
+      {
+        path: 'feedback',
+        loadComponent: () => import('./features/feedback/feedback').then((m) => m.Feedback),
+      },
       { path: '**', redirectTo: 'canvas' },
     ],
   },

@@ -47,6 +47,14 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     text text not null,
     created_at timestamptz not null default now()
   )`;
+  await sql`create table if not exists agent_feedback (
+    id text primary key,
+    category text not null,
+    content text not null,
+    request text,
+    status text not null default 'open',
+    created_at timestamptz not null default now()
+  )`;
   await sql`create table if not exists decisions (
     id text primary key,
     flow_id text,

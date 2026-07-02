@@ -46,6 +46,16 @@ export interface IntentVm {
   readonly rationale: string;
 }
 
+/** A platform limitation the agent logged while serving a user (self-improvement board entry). */
+export interface FeedbackVm {
+  readonly id: string;
+  readonly category: 'ui' | 'feature' | 'unmet';
+  readonly content: string;
+  readonly request: string;
+  readonly status: string;
+  readonly createdAt: string;
+}
+
 /** A2A connection + agent health for a repo (runtime view, distinguishes silent vs dead). */
 export interface ConnectionVm {
   readonly projectId: string;
@@ -100,9 +110,17 @@ export class BlazewritApi {
     return this.http.post<{ accepted: boolean; workItemId?: string }>(`${this.base}/api/run`, { request, hitl });
   }
 
-  /** Talk to the central agent: a free reply, plus a structured intent when the message is actionable. */
-  triage(request: string): Observable<{ reply: string; intent: IntentVm | null }> {
-    return this.http.post<{ reply: string; intent: IntentVm | null }>(`${this.base}/api/triage`, { request });
+  /** Talk to the central agent: free reply + optional intent + optional platform-limitation feedback. */
+  triage(request: string): Observable<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null }> {
+    return this.http.post<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null }>(
+      `${this.base}/api/triage`,
+      { request },
+    );
+  }
+
+  /** Agent self-improvement board: limitations the agent logged while serving users. */
+  feedback(): Observable<FeedbackVm[]> {
+    return this.http.get<FeedbackVm[]>(`${this.base}/api/feedback`);
   }
 
   /** Dispatch an approved triage analysis: to a resolved existing project, or as a newly-named project. */
