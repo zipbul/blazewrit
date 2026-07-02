@@ -28,7 +28,7 @@ interface Thread {
   readonly project?: string;
 }
 
-const CENTRAL: Thread = { id: 'central', label: '중앙', kind: 'central' };
+const CENTRAL: Thread = { id: 'central', label: '똘이', kind: 'central' };
 
 @Component({
   selector: 'app-shell',
