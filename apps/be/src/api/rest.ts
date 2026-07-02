@@ -6,6 +6,7 @@ import { PacedStepExecutor } from '../orchestrator/paced-executor';
 import { StubFlowClassifier } from '../triage/triage';
 import type { TriageAgent } from '../triage/triage-agent';
 import { recordTurn, isValidScope, recentWindow, threadIndexCard, markFailed } from '../triage/chat/turns';
+import { maybeSummarize, latestSummary, makeLlmSummarizer, type Summarizer } from '../triage/chat/summarize';
 import { ScopeQueue } from '../triage/chat/scope-queue';
 import { routeProject } from '../meta/router';
 import { seedProjectCard } from '../a2a/agent-card';
@@ -120,6 +121,8 @@ export interface RestDeps {
   selfBaseUrl?: string;
   /** Central triage agent: structures a raw request into an Intent by reading the DB read-only. */
   triage?: TriageAgent;
+  /** Chat compaction (defaults to one-shot LLM summarizer; tests inject a fake). */
+  summarizer?: Summarizer;
 }
 
 /** REST + SSE surface the Angular UI consumes (DECISIONS §13), backed by Postgres. */
@@ -133,11 +136,25 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const pendingDecisions = new Map<string, (answer: string) => void>();
   // Per-scope turn serialization (single Bun process — a second instance would need a DB lock).
   const chatQueue = new ScopeQueue();
-  /** Assemble one turn's history for the agent: recent window of the scope + the thread index card. */
-  const chatHistory = async (scope: string) => ({
-    window: await recentWindow(sql, scope, { maxTurns: 12 }),
-    card: await threadIndexCard(sql),
-  });
+  /** Assemble one turn's history: latest summary (compacted past) + recent window + index card. */
+  const chatHistory = async (scope: string) => {
+    const s = await latestSummary(sql, scope);
+    const window = await recentWindow(sql, scope, { maxTurns: 12 });
+    return {
+      window: s ? [{ seq: s.seq, role: 'summary', text: s.text }, ...window] : window,
+      card: await threadIndexCard(sql),
+    };
+  };
+  // Background compaction: keeps the primary (central) thread's context bounded as it grows.
+  const summarizer = deps.summarizer ?? makeLlmSummarizer();
+  const summarizing = new Set<string>();
+  const kickSummarize = (scope: string): void => {
+    if (summarizing.has(scope)) return;
+    summarizing.add(scope);
+    void maybeSummarize(sql, scope, summarizer)
+      .catch((err) => flowHub.publish({ type: 'flow-error', message: `summarize: ${String(err)}` }))
+      .finally(() => summarizing.delete(scope));
+  };
 
   const parseJson = (raw: unknown, fallback: unknown) =>
     Array.isArray(raw) || (typeof raw === 'object' && raw !== null)
@@ -531,6 +548,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
             text: reply,
             payload: intent || view ? { intent, view } : undefined,
           });
+          kickSummarize(scope);
           if (feedback) {
             // Agent hit a platform limitation while serving this turn → append to the feedback board.
             await sql`insert into agent_feedback (id, category, content, request) values (${newId()}, ${feedback.category}, ${feedback.content}, ${request})`;
