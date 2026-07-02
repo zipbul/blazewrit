@@ -67,13 +67,29 @@ export const READ_VIEWS: readonly ReadView[] = [
   },
   {
     view: 'bw_v_decisions',
-    purpose: 'Open/closed human-in-the-loop decisions the system has asked for.',
+    purpose: 'Open/closed human-in-the-loop decisions — question AND answer, so past exchanges are reconstructable.',
     columns: [
       { name: 'id', type: 'text' },
       { name: 'flow_id', type: 'text', note: 'nullable — some decisions are flow-less' },
       { name: 'status', type: 'text', note: "'open' | 'answered'" },
       { name: 'request_type', type: 'text' },
       { name: 'question', type: 'text' },
+      { name: 'answer', type: 'text', note: 'null until answered' },
+      { name: 'answered_at', type: 'timestamptz', note: 'null until answered' },
+      { name: 'created_at', type: 'timestamptz' },
+    ],
+  },
+  {
+    view: 'bw_v_chat',
+    purpose:
+      "Conversation history with the user, every thread. scope = 'central' | a bw_v_work_items.id. " +
+      'Search it (ILIKE on text/scope_title, time bounds) to recall past discussion beyond the visible window.',
+    columns: [
+      { name: 'id', type: 'bigint', note: 'ordering key — order by id' },
+      { name: 'scope', type: 'text', note: "'central' | work item id" },
+      { name: 'scope_title', type: 'text', note: "thread title ('중앙' or the work item title)" },
+      { name: 'role', type: 'text', note: "'user' | 'agent' | 'summary'" },
+      { name: 'text', type: 'text' },
       { name: 'created_at', type: 'timestamptz' },
     ],
   },

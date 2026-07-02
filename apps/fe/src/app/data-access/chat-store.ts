@@ -1,11 +1,11 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
-import { BlazewritApi, type IntentVm, type TableVm } from './api';
+import { BlazewritApi, type ChatTurnVm, type IntentVm, type TableVm } from './api';
 import { WorkspaceStore } from './workspace-store';
 import { UiState } from './ui-state';
 
-/** One message in a dock chat thread. */
+/** One message in a dock chat thread (server-hydrated; optimistic user echo while sending). */
 export interface ChatMsg {
-  readonly role: 'me' | 'agent';
+  readonly role: 'user' | 'agent' | 'summary';
   readonly text: string;
   /** Declarative table the agent rendered with this message (show_table). */
   readonly table?: TableVm;
@@ -23,9 +23,10 @@ const CENTRAL: Thread = { id: 'central', label: '똘이', kind: 'central' };
 const MAX_TASK_TABS = 8;
 
 /**
- * Conversation state for the bottom chat dock (SRP: domain/chat state only — dock layout
- * state like open/height lives in the ChatDock component). Threads = 똘이 + one per
- * in-flow work item; each thread keeps its own history, proposed intent, and last request.
+ * Conversation state for the bottom chat dock. The SERVER is the source of truth
+ * (chat_messages via GET /api/chat/:scope); this store hydrates per thread, echoes the
+ * user's message optimistically while a turn runs, and re-hydrates after actions so
+ * server-side confirmation turns appear. Dock layout state lives in ChatDock (SRP).
  */
 @Injectable({ providedIn: 'root' })
 export class ChatStore {
@@ -38,8 +39,9 @@ export class ChatStore {
   readonly chatError = signal<string | null>(null);
   readonly dispatching = signal(false);
 
-  /** Per-thread message history, proposed intent, and the request the intent was derived from. */
-  private readonly msgs = signal<Record<string, ChatMsg[]>>({ central: [] });
+  /** Per-thread hydrated history + the latest proposed intent + the request it came from. */
+  private readonly msgs = signal<Record<string, ChatMsg[]>>({});
+  private readonly hydrated = new Set<string>();
   private readonly intents = signal<Record<string, IntentVm | null>>({});
   private readonly requests = signal<Record<string, string>>({});
 
@@ -57,27 +59,40 @@ export class ChatStore {
   readonly activeMsgs = computed<ChatMsg[]>(() => this.msgs()[this.activeId()] ?? []);
   readonly activeIntent = computed<IntentVm | null>(() => this.intents()[this.activeId()] ?? null);
 
+  constructor() {
+    this.hydrate('central');
+  }
+
   setActive(id: string): void {
     this.activeId.set(id);
     this.chatError.set(null);
+    if (!this.hydrated.has(id)) this.hydrate(id);
   }
 
-  /** Send to the active thread. Task threads scope the message to that work item for 똘이. */
+  /** Load the persisted history of a thread (server truth). */
+  hydrate(scope: string): void {
+    this.hydrated.add(scope);
+    this.api.chatHistory(scope).subscribe({
+      next: (turns) => this.msgs.update((s) => ({ ...s, [scope]: turns.map(toMsg) })),
+      error: () => this.hydrated.delete(scope), // retry on next activation
+    });
+  }
+
+  /** Send to the active thread: optimistic echo, then replace with the agent turn. */
   send(text: string): void {
     const body = text.trim();
     if (!body || this.thinking()) return;
-    const id = this.activeId();
-    const t = this.active();
-    const request = t.kind === 'task' ? `[작업: ${t.label}] ${body}` : body;
-    this.pushMsg(id, { role: 'me', text: body });
-    this.setIntent(id, null);
-    this.requests.update((r) => ({ ...r, [id]: request }));
+    const scope = this.activeId();
+    const clientMsgId = crypto.randomUUID();
+    this.pushMsg(scope, { role: 'user', text: body });
+    this.setIntent(scope, null);
+    this.requests.update((r) => ({ ...r, [scope]: body }));
     this.thinking.set(true);
     this.chatError.set(null);
-    this.api.triage(request).subscribe({
+    this.api.triage(body, scope, clientMsgId).subscribe({
       next: ({ reply, intent, view }) => {
-        this.pushMsg(id, { role: 'agent', text: reply, ...(view ? { table: view } : {}) });
-        this.setIntent(id, intent);
+        this.pushMsg(scope, { role: 'agent', text: reply, ...(view ? { table: view } : {}) });
+        this.setIntent(scope, intent);
         this.thinking.set(false);
       },
       error: (err) => {
@@ -87,11 +102,11 @@ export class ChatStore {
     });
   }
 
-  /** Approve the proposed intent: dispatch to the resolved project, or propose a new one. */
+  /** Approve the proposed intent: dispatch, then re-hydrate so the server confirmation turn shows. */
   proceed(): void {
-    const id = this.activeId();
-    const i = this.intents()[id];
-    const request = this.requests()[id];
+    const scope = this.activeId();
+    const i = this.intents()[scope];
+    const request = this.requests()[scope];
     if (!i || !request || this.dispatching()) return;
     this.dispatching.set(true);
     this.chatError.set(null);
@@ -99,9 +114,9 @@ export class ChatStore {
       i.isNewProject || !i.targetProject
         ? { newProjectName: i.suggestedProjectName ?? request.slice(0, 24) }
         : { targetProject: i.targetProject };
-    this.api.dispatch(request, opts).subscribe({
+    this.api.dispatch(request, opts, scope).subscribe({
       next: () => {
-        this.afterAct(id, '✓ 실행했습니다.');
+        this.afterAct(scope);
         this.workspace.reload();
       },
       error: (err) => {
@@ -111,17 +126,17 @@ export class ChatStore {
     });
   }
 
-  /** Ambiguous intent: send 똘이's question to the drawer inbox (answering it re-triages + routes). */
+  /** Ambiguous intent: register 똘이's question in the drawer inbox (answering re-triages). */
   askClarification(): void {
-    const id = this.activeId();
-    const i = this.intents()[id];
-    const request = this.requests()[id];
+    const scope = this.activeId();
+    const i = this.intents()[scope];
+    const request = this.requests()[scope];
     if (!i?.clarifyingQuestion || !request || this.dispatching()) return;
     this.dispatching.set(true);
     this.chatError.set(null);
-    this.api.clarify(request, i.clarifyingQuestion, i.clarifyOptions ?? []).subscribe({
+    this.api.clarify(request, i.clarifyingQuestion, i.clarifyOptions ?? [], scope).subscribe({
       next: () => {
-        this.afterAct(id, '❓ 질문함에 등록했습니다.');
+        this.afterAct(scope);
         this.workspace.reload();
         this.ui.openQuestions();
       },
@@ -136,20 +151,26 @@ export class ChatStore {
     this.setIntent(this.activeId(), null);
   }
 
-  private afterAct(id: string, note: string): void {
+  /** After an action, the confirmation turn was written SERVER-side — pull the truth. */
+  private afterAct(scope: string): void {
     this.dispatching.set(false);
-    this.setIntent(id, null);
-    this.pushMsg(id, { role: 'agent', text: note });
+    this.setIntent(scope, null);
+    this.hydrate(scope);
   }
 
-  private pushMsg(id: string, m: ChatMsg): void {
-    this.msgs.update((s) => ({ ...s, [id]: [...(s[id] ?? []), m] }));
+  private pushMsg(scope: string, m: ChatMsg): void {
+    this.msgs.update((s) => ({ ...s, [scope]: [...(s[scope] ?? []), m] }));
   }
-  private setIntent(id: string, i: IntentVm | null): void {
-    this.intents.update((s) => ({ ...s, [id]: i }));
+  private setIntent(scope: string, i: IntentVm | null): void {
+    this.intents.update((s) => ({ ...s, [scope]: i }));
   }
   private errText(err: unknown, fallback: string): string {
     const e = err as { error?: { error?: unknown } };
     return typeof e?.error?.error === 'string' ? e.error.error : fallback;
   }
+}
+
+function toMsg(t: ChatTurnVm): ChatMsg {
+  const view = t.payload?.view ?? undefined;
+  return { role: t.role, text: t.text, ...(view ? { table: view } : {}) };
 }

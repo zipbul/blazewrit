@@ -14,6 +14,9 @@ const wi = (id: string, title: string): WorkItemDto =>
 function setup() {
   const api = {
     triage: vi.fn(() => of({ reply: '표 응답', intent: null, feedback: null, view: { title: '현황', columns: ['이름'], rows: [['결제']] } })),
+    chatHistory: vi.fn(() => of([])),
+    dispatch: vi.fn(() => of({ accepted: true })),
+    clarify: vi.fn(() => of({ accepted: true, decisionId: 'd' })),
   };
   const workspace = { workItems: signal([wi('a', 'A작업')]), openDecisions: signal([]), reload: vi.fn() };
   const ui = { openQuestions: vi.fn(), composerFocusTick: signal(0) };
@@ -53,7 +56,7 @@ describe('ChatDock', () => {
     input.value = '현황 보여줘';
     (el.querySelector('.dcompose') as HTMLFormElement).dispatchEvent(new Event('submit'));
     fixture.detectChanges();
-    expect(api.triage).toHaveBeenCalledWith('현황 보여줘');
+    expect((api.triage.mock.calls[0] as unknown as [string])[0]).toBe('현황 보여줘');
     expect(el.textContent).toContain('표 응답');
     expect(el.querySelector('.dtable .dt-title')?.textContent).toContain('현황');
     expect(el.querySelector('.dtable td')?.textContent).toContain('결제');

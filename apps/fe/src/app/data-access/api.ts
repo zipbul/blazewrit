@@ -46,6 +46,15 @@ export interface IntentVm {
   readonly rationale: string;
 }
 
+/** One persisted conversation turn (hydration shape of GET /api/chat/:scope). */
+export interface ChatTurnVm {
+  readonly seq: number;
+  readonly role: 'user' | 'agent' | 'summary';
+  readonly text: string;
+  readonly payload: { intent?: IntentVm | null; view?: TableVm | null } | null;
+  readonly createdAt: string;
+}
+
 /** A declarative table the agent asked the FE to render in the dock. */
 export interface TableVm {
   readonly title: string;
@@ -117,12 +126,17 @@ export class BlazewritApi {
     return this.http.post<{ accepted: boolean; workItemId?: string }>(`${this.base}/api/run`, { request, hitl });
   }
 
-  /** Talk to the central agent: free reply + optional intent / feedback / declarative table view. */
-  triage(request: string): Observable<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null; view: TableVm | null }> {
+  /** One 똘이 turn in a thread: free reply + optional intent / feedback / table view. */
+  triage(request: string, scope: string, clientMsgId?: string): Observable<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null; view: TableVm | null }> {
     return this.http.post<{ reply: string; intent: IntentVm | null; feedback: FeedbackVm | null; view: TableVm | null }>(
       `${this.base}/api/triage`,
-      { request },
+      { request, scope, clientMsgId },
     );
+  }
+
+  /** Persisted conversation history of a thread (server truth — hydrates the dock). */
+  chatHistory(scope: string, limit = 50): Observable<ChatTurnVm[]> {
+    return this.http.get<ChatTurnVm[]>(`${this.base}/api/chat/${encodeURIComponent(scope)}?limit=${limit}`);
   }
 
   /** Agent self-improvement board: limitations the agent logged while serving users. */
@@ -134,16 +148,17 @@ export class BlazewritApi {
   dispatch(
     request: string,
     opts: { targetProject?: string; newProjectName?: string },
+    scope = 'central',
   ): Observable<{ accepted: boolean; workItemId?: string; pendingRegistration?: boolean; projectId?: string }> {
     return this.http.post<{ accepted: boolean; workItemId?: string; pendingRegistration?: boolean; projectId?: string }>(
       `${this.base}/api/dispatch`,
-      { request, ...opts },
+      { request, ...opts, scope },
     );
   }
 
   /** Open a clarification question in the drawer inbox for an ambiguous request (answering re-triages). */
-  clarify(request: string, question: string, options: string[] = []): Observable<{ accepted: boolean; decisionId: string }> {
-    return this.http.post<{ accepted: boolean; decisionId: string }>(`${this.base}/api/clarify`, { request, question, options });
+  clarify(request: string, question: string, options: string[] = [], scope = 'central'): Observable<{ accepted: boolean; decisionId: string }> {
+    return this.http.post<{ accepted: boolean; decisionId: string }>(`${this.base}/api/clarify`, { request, question, options, scope });
   }
 
   /** SSE URL for a step run's live agent-event stream. */

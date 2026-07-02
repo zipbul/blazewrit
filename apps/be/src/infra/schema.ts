@@ -47,6 +47,22 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     text text not null,
     created_at timestamptz not null default now()
   )`;
+  // 똘이 conversation memory: conversation = data (no SDK sessions). scope = 'central' | work_item id.
+  // seq is the ordering tiebreaker (created_at alone is not); client_msg_id anchors idempotent FE retry;
+  // status 'failed' + redacted_at rows are hidden from the agent-visible view (bw_v_chat).
+  await sql`create table if not exists chat_messages (
+    seq bigserial primary key,
+    scope text not null,
+    role text not null,
+    text text not null,
+    payload jsonb,
+    client_msg_id text,
+    status text not null default 'answered',
+    redacted_at timestamptz,
+    created_at timestamptz not null default now(),
+    unique (scope, client_msg_id)
+  )`;
+  await sql`create index if not exists chat_messages_scope_seq on chat_messages (scope, seq)`;
   await sql`create table if not exists agent_feedback (
     id text primary key,
     category text not null,

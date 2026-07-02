@@ -5,6 +5,8 @@ import { PgOrchestratorStore } from '../orchestrator/infra/pg-store';
 import { PacedStepExecutor } from '../orchestrator/paced-executor';
 import { StubFlowClassifier } from '../triage/triage';
 import type { TriageAgent } from '../triage/triage-agent';
+import { recordTurn, isValidScope, recentWindow, threadIndexCard, markFailed } from '../triage/chat/turns';
+import { ScopeQueue } from '../triage/chat/scope-queue';
 import { routeProject } from '../meta/router';
 import { seedProjectCard } from '../a2a/agent-card';
 import { parseJsonRpc } from '../a2a/jsonrpc';
@@ -129,6 +131,13 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const selfBaseUrl = deps.selfBaseUrl ?? 'http://localhost:4500';
   // HITL: decisionId -> resolver that resumes the suspended flow.
   const pendingDecisions = new Map<string, (answer: string) => void>();
+  // Per-scope turn serialization (single Bun process — a second instance would need a DB lock).
+  const chatQueue = new ScopeQueue();
+  /** Assemble one turn's history for the agent: recent window of the scope + the thread index card. */
+  const chatHistory = async (scope: string) => ({
+    window: await recentWindow(sql, scope, { maxTurns: 12 }),
+    card: await threadIndexCard(sql),
+  });
 
   const parseJson = (raw: unknown, fallback: unknown) =>
     Array.isArray(raw) || (typeof raw === 'object' && raw !== null)
@@ -189,6 +198,8 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           requestDecision: async (d) => {
             const id = newId();
             await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;
+            // The HITL question is a conversational turn in this task's thread.
+            await recordTurn(sql, { scope: workItemId, role: 'agent', text: `❓ ${d.question} (질문함에서 답해주세요)` });
             flowHub.publish({ type: 'decision-open', id, flowId: d.flowId });
             return new Promise<string>((resolve) => pendingDecisions.set(id, resolve));
           },
@@ -250,11 +261,13 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   };
 
   /** Open a free-text clarification question in the drawer inbox (the graceful tail for ambiguous intent). */
-  const openClarification = async (request: string, question: string, options: string[] = []): Promise<string> => {
+  const openClarification = async (request: string, question: string, options: string[] = [], scope = 'central'): Promise<string> => {
     const decId = newId();
-    const meta = JSON.stringify({ kind: 'clarification', request });
+    const meta = JSON.stringify({ kind: 'clarification', request, scope });
     // free_text → drawer always shows a text box; stored options add clickable choices alongside it.
     await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'free_text'}, ${question}, ${JSON.stringify(options)}, ${meta})`;
+    // The question is a conversational turn — memory must include it (no turn bypasses chat_messages).
+    await recordTurn(sql, { scope, role: 'agent', text: `❓ ${question} (질문함에 등록됨)` });
     flowHub.publish({ type: 'decision-open', id: decId });
     return decId;
   };
@@ -371,13 +384,17 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       } else if (meta.kind === 'clarification') {
         // The user clarified an ambiguous request: re-triage the combined text, then route it.
         const original = String(meta.request ?? '');
+        const scope = typeof meta.scope === 'string' && meta.scope ? (meta.scope as string) : 'central';
         if (original && deps.triage) {
           const combined = `${original}\n\n[사용자 추가 설명] ${answer}`;
-          void (async () => {
+          // Serialized on the scope queue so it cannot interleave with a simultaneous dock send.
+          void chatQueue.run(scope, async () => {
+            const userTurn = await recordTurn(sql, { scope, role: 'user', text: `(질문함 답변) ${answer}` });
             try {
-              const { intent } = await deps.triage!.chat(combined);
+              const { reply, intent } = await deps.triage!.chat({ request: combined, scope, history: await chatHistory(scope) });
+              await recordTurn(sql, { scope, role: 'agent', text: reply, payload: intent ? { intent } : undefined });
               if (!intent || intent.needsClarification) {
-                await openClarification(combined, intent?.clarifyingQuestion ?? '추가 설명이 필요합니다', intent?.clarifyOptions ?? []);
+                await openClarification(combined, intent?.clarifyingQuestion ?? '추가 설명이 필요합니다', intent?.clarifyOptions ?? [], scope);
               } else if (intent.targetProject) {
                 const active = (await sql`select id from projects where id = ${intent.targetProject} and status = 'active'`) as Array<unknown>;
                 if (active.length) await dispatchViaA2A(intent.targetProject, combined);
@@ -386,9 +403,10 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
                 await proposeNewProject(intent.suggestedProjectName ?? `project-${newId().slice(0, 4)}`, combined);
               }
             } catch (err) {
+              await markFailed(sql, userTurn.seq); // never strand a permanently-pending turn
               flowHub.publish({ type: 'flow-error', message: String(err) });
             }
-          })();
+          });
         }
       } else {
         pendingDecisions.get(params.id)?.(answer); // resume the suspended flow
@@ -480,31 +498,75 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       });
       return new Response(stream, { headers: { 'content-type': 'text/event-stream', ...CORS } });
     })
-    // Central TRIAGE: structure a raw request into an Intent by reading the DB read-only. This is
-    // a conversational surface: free reply, plus a structured intent when the message is actionable.
-    // Read-only — it does NOT dispatch or mutate. The UI shows the reply and (if any) the intent card.
+    // 똘이 conversation turn: persists both sides to chat_messages (memory = data), assembles
+    // the history (recent window + thread index card), and runs the agent. Serialized per scope.
     .post('/api/triage', async ({ body, set }) => {
-      const request = typeof body === 'object' && body && 'request' in body ? String((body as { request: unknown }).request) : '';
+      const b = (typeof body === 'object' && body ? body : {}) as Record<string, unknown>;
+      const request = typeof b.request === 'string' ? b.request : '';
+      const scope = typeof b.scope === 'string' && b.scope ? b.scope : 'central';
+      const clientMsgId = typeof b.clientMsgId === 'string' ? b.clientMsgId : undefined;
       if (!request.trim()) {
         set.status = 400;
         return { error: 'request is required' };
+      }
+      if (!(await isValidScope(sql, scope))) {
+        set.status = 400;
+        return { error: `unknown scope: ${scope}` };
       }
       if (!deps.triage) {
         set.status = 503;
         return { error: 'central agent not configured' };
       }
-      try {
-        const { reply, intent, feedback, view } = await deps.triage.chat(request);
-        if (feedback) {
-          // Agent hit a platform limitation while serving this turn → append to the feedback board.
-          await sql`insert into agent_feedback (id, category, content, request) values (${newId()}, ${feedback.category}, ${feedback.content}, ${request})`;
-          flowHub.publish({ type: 'agent-feedback', category: feedback.category });
+      return chatQueue.run(scope, async () => {
+        const userTurn = await recordTurn(sql, { scope, role: 'user', text: request, clientMsgId });
+        try {
+          const { reply, intent, feedback, view } = await deps.triage!.chat({
+            request,
+            scope,
+            history: await chatHistory(scope),
+          });
+          await recordTurn(sql, {
+            scope,
+            role: 'agent',
+            text: reply,
+            payload: intent || view ? { intent, view } : undefined,
+          });
+          if (feedback) {
+            // Agent hit a platform limitation while serving this turn → append to the feedback board.
+            await sql`insert into agent_feedback (id, category, content, request) values (${newId()}, ${feedback.category}, ${feedback.content}, ${request})`;
+            flowHub.publish({ type: 'agent-feedback', category: feedback.category });
+          }
+          return { reply, intent, feedback, view };
+        } catch (err) {
+          await markFailed(sql, userTurn.seq); // exclude the orphaned user turn from future windows
+          set.status = 500;
+          return { error: String(err) };
         }
-        return { reply, intent, feedback, view };
-      } catch (err) {
-        set.status = 500;
-        return { error: String(err) };
+      });
+    })
+    // Conversation hydration for the FE dock: oldest-first page, before-cursor pagination.
+    .get('/api/chat/:scope', async ({ params, query: q, set }) => {
+      const scope = decodeURIComponent(params.scope);
+      if (!(await isValidScope(sql, scope))) {
+        set.status = 400;
+        return { error: `unknown scope: ${scope}` };
       }
+      const limit = Math.min(200, Math.max(1, Number(q.limit ?? 50) || 50));
+      const before = q.before !== undefined ? Number(q.before) : undefined;
+      const rows = (before !== undefined && Number.isFinite(before)
+        ? await sql`select seq, role, text, payload, created_at from chat_messages
+            where scope = ${scope} and status <> 'failed' and redacted_at is null and seq < ${before}
+            order by seq desc limit ${limit}`
+        : await sql`select seq, role, text, payload, created_at from chat_messages
+            where scope = ${scope} and status <> 'failed' and redacted_at is null
+            order by seq desc limit ${limit}`) as Array<Record<string, unknown>>;
+      return rows.reverse().map((r) => ({
+        seq: Number(r.seq),
+        role: r.role as string,
+        text: r.text as string,
+        payload: typeof r.payload === 'string' ? JSON.parse(r.payload) : (r.payload ?? null),
+        createdAt: new Date(r.created_at as string).toISOString(),
+      }));
     })
     // Agent self-improvement board: limitations the agent logged (ui/feature/unmet), newest first.
     .get('/api/feedback', async () => {
@@ -543,6 +605,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       const request = typeof b.request === 'string' ? b.request : '';
       const targetProject = typeof b.targetProject === 'string' ? b.targetProject : '';
       const newProjectName = typeof b.newProjectName === 'string' ? b.newProjectName.trim() : '';
+      const scope = typeof b.scope === 'string' && b.scope ? b.scope : 'central';
       if (!request.trim()) {
         set.status = 400;
         return { error: 'request is required' };
@@ -554,11 +617,15 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           return { error: `target project «${targetProject}» not found or not active` };
         }
         const { taskId } = await dispatchViaA2A(targetProject, request);
+        // Confirmation is a conversational turn — server-side, so hydration shows what the user saw.
+        await recordTurn(sql, { scope, role: 'agent', text: `✓ «${targetProject}»에서 실행했습니다.` });
         return { accepted: true, workItemId: taskId };
       }
       if (newProjectName) {
         // New project the agent named: register as 'proposed' and open the approval decision.
-        return proposeNewProject(newProjectName, request);
+        const out = await proposeNewProject(newProjectName, request);
+        await recordTurn(sql, { scope, role: 'agent', text: `➕ 새 프로젝트 «${newProjectName}» 등록을 제안했습니다 (승인 대기).` });
+        return out;
       }
       set.status = 400;
       return { error: 'targetProject or newProjectName is required' };
@@ -569,11 +636,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       const request = typeof b.request === 'string' ? b.request : '';
       const question = typeof b.question === 'string' ? b.question : '';
       const options = Array.isArray(b.options) ? b.options.filter((o): o is string => typeof o === 'string') : [];
+      const scope = typeof b.scope === 'string' && b.scope ? b.scope : 'central';
       if (!request.trim() || !question.trim()) {
         set.status = 400;
         return { error: 'request and question are required' };
       }
-      const decisionId = await openClarification(request, question, options);
+      const decisionId = await openClarification(request, question, options, scope);
       return { accepted: true, decisionId };
     });
 }

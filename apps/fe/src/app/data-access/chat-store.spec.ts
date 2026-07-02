@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { Subject, of, throwError } from 'rxjs';
 import type { WorkItemDto } from '@bw/dto';
 import { ChatStore } from './chat-store';
-import { BlazewritApi, type IntentVm, type TableVm } from './api';
+import { BlazewritApi, type ChatTurnVm, type IntentVm, type TableVm } from './api';
 import { WorkspaceStore } from './workspace-store';
 import { UiState } from './ui-state';
 
@@ -17,17 +17,13 @@ const INTENT: IntentVm = {
   clarifyingQuestion: null, clarifyOptions: [], confidence: 0.9, rationale: 'r',
 };
 
-interface ApiStub {
-  triage: ReturnType<typeof vi.fn>;
-  dispatch: ReturnType<typeof vi.fn>;
-  clarify: ReturnType<typeof vi.fn>;
-}
-
-function setup(items: WorkItemDto[] = []) {
-  const api: ApiStub = {
-    triage: vi.fn(() => of({ reply: '응답', intent: null, feedback: null, view: null })),
+function setup(items: WorkItemDto[] = [], history: ChatTurnVm[] = []) {
+  type Turn = { reply: string; intent: IntentVm | null; feedback: null; view: TableVm | null };
+  const api = {
+    triage: vi.fn(() => of<Turn>({ reply: '응답', intent: null, feedback: null, view: null })),
     dispatch: vi.fn(() => of({ accepted: true })),
     clarify: vi.fn(() => of({ accepted: true, decisionId: 'd1' })),
+    chatHistory: vi.fn(() => of(history)),
   };
   const workspace = { workItems: signal(items), reload: vi.fn() };
   const ui = { openQuestions: vi.fn(), composerFocusTick: signal(0) };
@@ -60,38 +56,57 @@ describe('ChatStore threads', () => {
     const { store } = setup([wi('a', 'A', 'in_flow')]);
     store.setActive('a');
     expect(store.active().id).toBe('a');
-    // work item leaves in_flow → thread gone → active falls back
     TestBed.inject(WorkspaceStore).workItems.set([]);
     expect(store.active().id).toBe('central');
   });
 });
 
-describe('ChatStore send', () => {
-  it('pushes my message + the agent reply into the ACTIVE thread only', () => {
-    const { store, api } = setup([wi('a', 'A작업', 'in_flow')]);
-    store.send('안녕');
-    expect(api.triage).toHaveBeenCalledWith('안녕');
-    expect(store.activeMsgs().map((m) => m.role)).toEqual(['me', 'agent']);
-    store.setActive('a');
-    expect(store.activeMsgs()).toEqual([]); // 다른 스레드는 오염 없음
+describe('ChatStore hydration (server = source of truth)', () => {
+  it('hydrates central on startup and renders persisted turns incl. table payload', () => {
+    const view: TableVm = { title: '현황', columns: ['c'], rows: [['v']] };
+    const { store, api } = setup([], [
+      { seq: 1, role: 'user', text: '이전 질문', payload: null, createdAt: ISO },
+      { seq: 2, role: 'agent', text: '이전 답', payload: { view }, createdAt: ISO },
+    ]);
+    expect(api.chatHistory).toHaveBeenCalledWith('central');
+    expect(store.activeMsgs().map((m) => m.text)).toEqual(['이전 질문', '이전 답']);
+    expect(store.activeMsgs()[1]?.table).toEqual(view);
   });
 
-  it('scopes a task-thread message with the work-item title', () => {
+  it('hydrates a task thread on first activation only', () => {
+    const { store, api } = setup([wi('a', 'A작업', 'in_flow')]);
+    store.setActive('a');
+    store.setActive('central');
+    store.setActive('a');
+    const calls = api.chatHistory.mock.calls.map((c: unknown[]) => c[0]);
+    expect(calls.filter((s) => s === 'a').length).toBe(1);
+  });
+});
+
+describe('ChatStore send', () => {
+  it('sends {request, scope, clientMsgId} — no prefix hack', () => {
     const { store, api } = setup([wi('a', 'A작업', 'in_flow')]);
     store.setActive('a');
     store.send('진행해줘');
-    expect(api.triage).toHaveBeenCalledWith('[작업: A작업] 진행해줘');
+    expect(api.triage).toHaveBeenCalledTimes(1);
+    const [req, scope, cmid] = api.triage.mock.calls[0] as unknown as [string, string, string];
+    expect(req).toBe('진행해줘'); // 원문 그대로 — '[작업:…]' 오염 없음
+    expect(scope).toBe('a');
+    expect(typeof cmid).toBe('string');
   });
 
-  it('ignores blank input and does not call the API', () => {
+  it('keeps thread histories isolated', () => {
+    const { store } = setup([wi('a', 'A작업', 'in_flow')]);
+    store.send('중앙 메시지');
+    store.setActive('a');
+    expect(store.activeMsgs().map((m) => m.text)).not.toContain('중앙 메시지');
+  });
+
+  it('ignores blank input and blocks a second send while thinking', () => {
     const { store, api } = setup();
     store.send('   ');
     expect(api.triage).not.toHaveBeenCalled();
-  });
-
-  it('blocks a second send while thinking', () => {
-    const { store, api } = setup();
-    api.triage.mockReturnValue(new Subject()); // never resolves
+    api.triage.mockReturnValue(new Subject());
     store.send('첫번째');
     store.send('두번째');
     expect(api.triage).toHaveBeenCalledTimes(1);
@@ -115,26 +130,28 @@ describe('ChatStore send', () => {
   });
 });
 
-describe('ChatStore proceed / clarify', () => {
+describe('ChatStore proceed / clarify (server-side confirmation turns)', () => {
   function primed(intent: IntentVm) {
     const s = setup();
     s.api.triage.mockReturnValue(of({ reply: 'r', intent, feedback: null, view: null }));
     s.store.send('요청');
+    s.api.chatHistory.mockClear();
     return s;
   }
 
-  it('dispatches to the resolved existing project', () => {
+  it('dispatches with the scope and RE-HYDRATES (no locally fabricated ✓ bubble)', () => {
     const { store, api, workspace } = primed(INTENT);
     store.proceed();
-    expect(api.dispatch).toHaveBeenCalledWith('요청', { targetProject: '결제' });
-    expect(store.activeIntent()).toBeNull(); // 카드 정리
+    expect(api.dispatch).toHaveBeenCalledWith('요청', { targetProject: '결제' }, 'central');
+    expect(store.activeIntent()).toBeNull();
+    expect(api.chatHistory).toHaveBeenCalledWith('central'); // 서버 확인 턴을 끌어옴
     expect(workspace.reload).toHaveBeenCalled();
   });
 
   it('proposes a new project when the intent says so', () => {
     const { store, api } = primed({ ...INTENT, isNewProject: true, targetProject: null, suggestedProjectName: '재고' });
     store.proceed();
-    expect(api.dispatch).toHaveBeenCalledWith('요청', { newProjectName: '재고' });
+    expect(api.dispatch).toHaveBeenCalledWith('요청', { newProjectName: '재고' }, 'central');
   });
 
   it('does nothing without a pending intent', () => {
@@ -143,10 +160,10 @@ describe('ChatStore proceed / clarify', () => {
     expect(api.dispatch).not.toHaveBeenCalled();
   });
 
-  it('routes an ambiguous intent to the drawer via clarify and opens the inbox', () => {
+  it('routes an ambiguous intent to the drawer with the scope and opens the inbox', () => {
     const { store, api, ui } = primed({ ...INTENT, needsClarification: true, clarifyingQuestion: '어느 쪽?', clarifyOptions: ['a'] });
     store.askClarification();
-    expect(api.clarify).toHaveBeenCalledWith('요청', '어느 쪽?', ['a']);
+    expect(api.clarify).toHaveBeenCalledWith('요청', '어느 쪽?', ['a'], 'central');
     expect(ui.openQuestions).toHaveBeenCalled();
   });
 });

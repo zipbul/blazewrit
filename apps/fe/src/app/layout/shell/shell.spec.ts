@@ -15,7 +15,7 @@ const storeStub = {
   reload: () => {},
 } as unknown as WorkspaceStore;
 
-const apiStub = { triage: () => of({ reply: '', intent: null, feedback: null, view: null }) } as unknown as BlazewritApi;
+const apiStub = { triage: () => of({ reply: '', intent: null, feedback: null, view: null }), chatHistory: () => of([]) } as unknown as BlazewritApi;
 const liveStub = { start: () => {} } as unknown as LiveSync;
 
 describe('Shell', () => {

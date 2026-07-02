@@ -17,7 +17,7 @@
     <div class="dock-body">
       <div class="dchat">
         @for (m of chat.activeMsgs(); track $index) {
-          <div class="dmsg" [class.me]="m.role === 'me'"><span class="dbub">{{ m.text }}</span></div>
+          <div class="dmsg" [class.me]="m.role === 'user'"><span class="dbub">{{ m.text }}</span></div>
           @if (m.table; as tb) {
             <div class="dtable">
               <div class="dt-title">{{ tb.title }}</div>

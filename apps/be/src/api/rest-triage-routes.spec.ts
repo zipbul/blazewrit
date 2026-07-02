@@ -13,8 +13,8 @@ function fakeTriage(turn: TurnResult): TriageAgent & { asked: string[] } {
   const asked: string[] = [];
   return {
     asked,
-    chat: async (text: string) => {
-      asked.push(text);
+    chat: async (args: { request: string }) => {
+      asked.push(args.request);
       return turn;
     },
   } as unknown as TriageAgent & { asked: string[] };
@@ -29,6 +29,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await sql`delete from chat_messages where text like ${'%' + MARK + '%'}`;
   await sql`delete from agent_feedback where content like ${MARK + '%'}`;
   await sql`delete from decisions where question like ${MARK + '%'}`;
   await sql.end();
@@ -36,31 +37,31 @@ afterAll(async () => {
 
 describe('POST /api/triage', () => {
   it('400s on an empty request', async () => {
-    const app = createRestApi(sql, { triage: fakeTriage({ reply: '', intent: null, feedback: null, view: null }) });
+    const app = createRestApi(sql, { triage: fakeTriage({ reply: MARK, intent: null, feedback: null, view: null }) });
     const res = await post(app, '/api/triage', { request: '   ' });
     expect(res.status).toBe(400);
   });
 
   it('503s when no central agent is configured', async () => {
     const app = createRestApi(sql, {});
-    const res = await post(app, '/api/triage', { request: '안녕' });
+    const res = await post(app, '/api/triage', { request: `${MARK} 안녕` });
     expect(res.status).toBe(503);
   });
 
   it('passes reply/intent/view through verbatim', async () => {
     const view = { title: 't', columns: ['a'], rows: [['1']] };
-    const app = createRestApi(sql, { triage: fakeTriage({ reply: '답', intent: null, feedback: null, view }) });
-    const res = await post(app, '/api/triage', { request: '보여줘' });
+    const app = createRestApi(sql, { triage: fakeTriage({ reply: `${MARK} 답`, intent: null, feedback: null, view }) });
+    const res = await post(app, '/api/triage', { request: `${MARK} 보여줘` });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body.reply).toBe('답');
+    expect(body.reply).toBe(`${MARK} 답`);
     expect(body.view).toEqual(view);
     expect(body.intent).toBeNull();
   });
 
   it('persists agent feedback to the board when the turn carries one', async () => {
     const feedback = { category: 'ui' as const, content: `${MARK} 표 화면 없음` };
-    const app = createRestApi(sql, { triage: fakeTriage({ reply: '못함', intent: null, feedback, view: null }) });
+    const app = createRestApi(sql, { triage: fakeTriage({ reply: `${MARK} 못함`, intent: null, feedback, view: null }) });
     const res = await post(app, '/api/triage', { request: `${MARK} 요청` });
     expect(res.status).toBe(200);
 
@@ -75,7 +76,7 @@ describe('POST /api/triage', () => {
 describe('GET /api/feedback', () => {
   it('lists persisted feedback newest-first with the FE contract shape', async () => {
     const feedback = { category: 'feature' as const, content: `${MARK} 스케줄러 없음` };
-    const app = createRestApi(sql, { triage: fakeTriage({ reply: 'x', intent: null, feedback, view: null }) });
+    const app = createRestApi(sql, { triage: fakeTriage({ reply: `${MARK} x`, intent: null, feedback, view: null }) });
     await post(app, '/api/triage', { request: `${MARK} r2` });
 
     const res = await get(app, '/api/feedback');
@@ -124,5 +125,6 @@ describe('POST /api/clarify', () => {
     const meta = JSON.parse(rows[0]!.meta as string) as Record<string, unknown>;
     expect(meta.kind).toBe('clarification');
     expect(meta.request).toBe(`${MARK} 원요청`);
+    expect(meta.scope).toBe('central'); // default scope when the caller omits it
   });
 });

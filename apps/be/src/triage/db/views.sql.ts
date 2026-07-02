@@ -26,9 +26,17 @@ const VIEW_BODIES: Record<string, string> = {
   bw_v_flows: `
     select id, work_item_id, flow_type, status, current_step, created_at from flows`,
   bw_v_decisions: `
-    select id, flow_id, status, request_type, question, created_at from decisions`,
+    select id, flow_id, status, request_type, question, answer, answered_at, created_at from decisions`,
   bw_v_learnings: `
     select id, project_id, text, created_at from learnings`,
+  bw_v_chat: `
+    select m.seq as id,
+           m.scope,
+           coalesce(w.title, case when m.scope = 'central' then '중앙' else m.scope end) as scope_title,
+           m.role, m.text, m.created_at
+    from chat_messages m
+    left join work_items w on w.id = m.scope
+    where m.redacted_at is null and m.status <> 'failed'`,
 };
 
 /**
@@ -58,7 +66,9 @@ export async function ensureTriageReadModel(sql: SQL): Promise<void> {
   await sql.unsafe(`grant usage on schema public to ${READ_ROLE}`);
 
   for (const view of READ_VIEWS) {
-    await sql.unsafe(`create or replace view ${view.view} as ${VIEW_BODIES[view.view]}`);
+    // drop+create (not `or replace`): view evolution may add/reorder columns, which replace forbids.
+    await sql.unsafe(`drop view if exists ${view.view}`);
+    await sql.unsafe(`create view ${view.view} as ${VIEW_BODIES[view.view]}`);
     // Views are security-definer by default: they read base tables as the owner (superuser),
     // so the role only needs SELECT on the view, never on the base tables.
     await sql.unsafe(`grant select on ${view.view} to ${READ_ROLE}`);
