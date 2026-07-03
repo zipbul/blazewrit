@@ -149,4 +149,12 @@ describe('GET /api/chat/:scope (hydration)', () => {
     const list = (await res.json()) as Array<{ text: string }>;
     expect(list.every((m) => m.text !== `${MARK} 터짐`)).toBe(true);
   });
+
+  it('excludes internal summary rows from hydration (the dock never shows them)', async () => {
+    await sql`insert into chat_messages (scope, role, text) values (${SCOPE}, 'summary', ${MARK + ' 내부요약'})`;
+    const app = createRestApi(sql, {});
+    const res = await get(app, `/api/chat/${encodeURIComponent(SCOPE)}?limit=100`);
+    const list = (await res.json()) as Array<{ text: string }>;
+    expect(list.every((m) => m.text !== `${MARK} 내부요약`)).toBe(true);
+  });
 });

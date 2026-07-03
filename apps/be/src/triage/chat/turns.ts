@@ -77,9 +77,12 @@ export async function markFailed(sql: SQL, seq: number): Promise<void> {
  * '[전문은 bw_v_chat id=…]' pointer so one pasted log cannot flood every subsequent prompt.
  */
 export async function recentWindow(sql: SQL, scope: string, opts: { maxTurns: number }): Promise<WindowMsg[]> {
+  // usable-turn predicate: not failed, not redacted, and NOT a summary row — the assembler
+  // injects the latest summary separately; inside the window it would appear as the newest
+  // "message" and duplicate/reorder the compacted past.
   const rows = (await sql`
     select seq, role, text from chat_messages
-    where scope = ${scope} and status <> 'failed' and redacted_at is null
+    where scope = ${scope} and status <> 'failed' and redacted_at is null and role <> 'summary'
     order by seq desc limit ${opts.maxTurns}
   `) as Array<{ seq: number; role: string; text: string }>;
   return rows.reverse().map((r) => ({
@@ -105,7 +108,7 @@ export async function threadIndexCard(sql: SQL): Promise<ThreadDigest[]> {
            max(m.created_at) as last_at
     from chat_messages m
     left join work_items w on w.id = m.scope
-    where m.redacted_at is null and m.status <> 'failed'
+    where m.redacted_at is null and m.status <> 'failed' and m.role <> 'summary'
     group by m.scope, w.title
     order by max(m.created_at) desc
   `) as Array<{ scope: string; title: string; count: number; last_at: string }>;

@@ -1,4 +1,4 @@
-import { FLOW_TYPES, type FlowType } from '@bw/dto';
+import type { FlowType } from '@bw/dto';
 
 /**
  * Structured intent — the triage agent's output. Richer than a bare FlowType: it also resolves
@@ -29,38 +29,3 @@ export interface Intent {
   /** Short why — what in the request/DB drove the decision. */
   rationale: string;
 }
-
-/** json_schema for the Agent SDK `outputFormat` — forces the model to emit a valid Intent. */
-export const INTENT_SCHEMA = {
-  type: 'json_schema' as const,
-  schema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      summary: { type: 'string' },
-      flowType: { type: 'string', enum: [...FLOW_TYPES] },
-      targetProject: { type: ['string', 'null'] },
-      isNewProject: { type: 'boolean' },
-      suggestedProjectName: { type: ['string', 'null'] },
-      relatedProjects: { type: 'array', items: { type: 'string' } },
-      needsClarification: { type: 'boolean' },
-      clarifyingQuestion: { type: ['string', 'null'] },
-      clarifyOptions: { type: 'array', items: { type: 'string' } },
-      confidence: { type: 'number', minimum: 0, maximum: 1 },
-      rationale: { type: 'string' },
-    },
-    required: [
-      'summary',
-      'flowType',
-      'targetProject',
-      'isNewProject',
-      'suggestedProjectName',
-      'relatedProjects',
-      'needsClarification',
-      'clarifyingQuestion',
-      'clarifyOptions',
-      'confidence',
-      'rationale',
-    ],
-  },
-};

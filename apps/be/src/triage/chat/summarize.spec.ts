@@ -11,7 +11,7 @@ import { maybeSummarize, latestSummary, SUMMARIZE_THRESHOLD, SUMMARIZE_CHUNK } f
  */
 const sql = new SQL(process.env.BW_PG_URL ?? 'postgres://postgres:blazewrit@localhost:3446/blazewrit');
 const MARK = `sum-${Date.now()}`;
-const SCOPE = 'central'; // summarization v1 targets the central scope
+const SCOPE = `${MARK}-scope`; // dedicated scope — NEVER the user's real central thread
 
 const fakeSummarizer = async (turns: Array<{ role: string; text: string }>) =>
   `요약: ${turns.length}턴 (${turns[0]!.text} ~ ${turns.at(-1)!.text})`;
@@ -27,11 +27,12 @@ async function seed(n: number): Promise<number[]> {
 
 beforeAll(async () => {
   await ensureSchema(sql);
-  await sql`delete from chat_messages where scope = ${SCOPE} and (text like ${MARK + '%'} or text like '요약:%' )`;
+  await sql`insert into work_items (id, project_id, type, state, title) values (${SCOPE}, ${MARK}, 'task', 'in_flow', 'w')`;
 });
 
 afterAll(async () => {
-  await sql`delete from chat_messages where text like ${MARK + '%'} or (scope = ${SCOPE} and role = 'summary' and text like '요약:%')`;
+  await sql`delete from chat_messages where scope = ${SCOPE}`;
+  await sql`delete from work_items where id = ${SCOPE}`;
   await sql.end();
 });
 

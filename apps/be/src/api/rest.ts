@@ -5,8 +5,9 @@ import { PgOrchestratorStore } from '../orchestrator/infra/pg-store';
 import { PacedStepExecutor } from '../orchestrator/paced-executor';
 import { StubFlowClassifier } from '../triage/triage';
 import type { TriageAgent } from '../triage/triage-agent';
-import { recordTurn, isValidScope, recentWindow, threadIndexCard, markFailed } from '../triage/chat/turns';
-import { maybeSummarize, latestSummary, makeLlmSummarizer, type Summarizer } from '../triage/chat/summarize';
+import { recordTurn, isValidScope } from '../triage/chat/turns';
+import { runTriageTurn, assembleHistory } from '../triage/chat/turn-runner';
+import { maybeSummarize, makeLlmSummarizer, type Summarizer } from '../triage/chat/summarize';
 import { ScopeQueue } from '../triage/chat/scope-queue';
 import { routeProject } from '../meta/router';
 import { seedProjectCard } from '../a2a/agent-card';
@@ -16,11 +17,19 @@ import { JSON_RPC_ERRORS, A2A_ERRORS } from '@bw/dto';
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
 import type { AgentEvent, OrchestratorStore, StepExecutor } from '../orchestrator/types';
 
-const CORS: Record<string, string> = {
-  'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'content-type',
-  'access-control-allow-methods': 'GET,POST,OPTIONS',
-};
+/** Origins allowed to call the API — NEVER '*': any web page the user visits must not read the chat log. */
+export const ALLOWED_ORIGINS = ['http://localhost:4200', 'http://127.0.0.1:4200'];
+
+/** Reflect the origin only when allow-listed (else emit no CORS headers at all). */
+function corsHeaders(origin: string | null): Record<string, string> {
+  if (!origin || !ALLOWED_ORIGINS.includes(origin)) return {};
+  return {
+    'access-control-allow-origin': origin,
+    'access-control-allow-headers': 'content-type',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    vary: 'origin',
+  };
+}
 
 /** Flow-level SSE hub: the write path publishes, dashboard subscribes (status = mirror). */
 class FlowHub {
@@ -136,15 +145,6 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const pendingDecisions = new Map<string, (answer: string) => void>();
   // Per-scope turn serialization (single Bun process — a second instance would need a DB lock).
   const chatQueue = new ScopeQueue();
-  /** Assemble one turn's history: latest summary (compacted past) + recent window + index card. */
-  const chatHistory = async (scope: string) => {
-    const s = await latestSummary(sql, scope);
-    const window = await recentWindow(sql, scope, { maxTurns: 12 });
-    return {
-      window: s ? [{ seq: s.seq, role: 'summary', text: s.text }, ...window] : window,
-      card: await threadIndexCard(sql),
-    };
-  };
   // Background compaction: keeps the primary (central) thread's context bounded as it grows.
   const summarizer = deps.summarizer ?? makeLlmSummarizer();
   const summarizing = new Set<string>();
@@ -228,6 +228,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId}`;
         flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
       } catch (err) {
+        await sql`update work_items set state = 'blocked' where id = ${workItemId}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     })();
@@ -305,11 +306,11 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   };
 
   return new Elysia()
-    .onAfterHandle(({ set }) => {
-      for (const [k, v] of Object.entries(CORS)) set.headers[k] = v;
+    .onAfterHandle(({ request, set }) => {
+      for (const [k, v] of Object.entries(corsHeaders(request.headers.get('origin')))) set.headers[k] = v;
     })
-    .options('/api/*', ({ set }) => {
-      for (const [k, v] of Object.entries(CORS)) set.headers[k] = v;
+    .options('/api/*', ({ request, set }) => {
+      for (const [k, v] of Object.entries(corsHeaders(request.headers.get('origin')))) set.headers[k] = v;
       return '';
     })
     .get('/api/projects', async () => {
@@ -372,10 +373,21 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       const rows = (await sql`select * from decisions where status = 'open' order by created_at`) as Array<Record<string, unknown>>;
       return rows.map(toDecisionDto);
     })
-    .post('/api/decisions/:id/answer', async ({ params, body }) => {
+    .post('/api/decisions/:id/answer', async ({ params, body, set }) => {
       const answer = typeof body === 'object' && body && 'answer' in body ? String((body as { answer: unknown }).answer) : '';
-      const before = ((await sql`select * from decisions where id = ${params.id}`) as Array<Record<string, unknown>>)[0];
-      await sql`update decisions set answer = ${answer}, status = 'answered', answered_at = now() where id = ${params.id}`;
+      // Idempotent claim: only an OPEN decision can be answered, exactly once — a replay
+      // (double-click / resent request) must never re-fire dispatch/registration side effects.
+      const claimed = (await sql`
+        update decisions set answer = ${answer}, status = 'answered', answered_at = now()
+        where id = ${params.id} and status = 'open'
+        returning *
+      `) as Array<Record<string, unknown>>;
+      if (claimed.length === 0) {
+        const exists = (await sql`select 1 from decisions where id = ${params.id}`) as Array<unknown>;
+        set.status = exists.length ? 409 : 404;
+        return { error: exists.length ? 'decision already answered' : 'decision not found' };
+      }
+      const before = claimed[0];
 
       const dbType = before?.request_type as string | undefined;
       const meta = (parseJson(before?.meta, {}) as Record<string, unknown>) ?? {};
@@ -405,22 +417,29 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         if (original && deps.triage) {
           const combined = `${original}\n\n[사용자 추가 설명] ${answer}`;
           // Serialized on the scope queue so it cannot interleave with a simultaneous dock send.
+          // Same runner as /api/triage — feedback/view/summaries must not silently diverge here.
           void chatQueue.run(scope, async () => {
-            const userTurn = await recordTurn(sql, { scope, role: 'user', text: `(질문함 답변) ${answer}` });
             try {
-              const { reply, intent } = await deps.triage!.chat({ request: combined, scope, history: await chatHistory(scope) });
-              await recordTurn(sql, { scope, role: 'agent', text: reply, payload: intent ? { intent } : undefined });
+              const { intent } = await runTriageTurn(sql, deps.triage!, {
+                scope,
+                request: combined,
+                textPrefix: '(질문함 답변) ',
+              });
+              kickSummarize(scope);
               if (!intent || intent.needsClarification) {
                 await openClarification(combined, intent?.clarifyingQuestion ?? '추가 설명이 필요합니다', intent?.clarifyOptions ?? [], scope);
               } else if (intent.targetProject) {
                 const active = (await sql`select id from projects where id = ${intent.targetProject} and status = 'active'`) as Array<unknown>;
-                if (active.length) await dispatchViaA2A(intent.targetProject, combined);
-                else await proposeNewProject(intent.suggestedProjectName ?? intent.targetProject, combined);
+                if (active.length) {
+                  await dispatchViaA2A(intent.targetProject, combined);
+                  await recordTurn(sql, { scope, role: 'agent', text: `✓ «${intent.targetProject}»에서 실행했습니다.` });
+                } else {
+                  await proposeNewProject(intent.suggestedProjectName ?? intent.targetProject, combined);
+                }
               } else {
                 await proposeNewProject(intent.suggestedProjectName ?? `project-${newId().slice(0, 4)}`, combined);
               }
             } catch (err) {
-              await markFailed(sql, userTurn.seq); // never strand a permanently-pending turn
               flowHub.publish({ type: 'flow-error', message: String(err) });
             }
           });
@@ -481,7 +500,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       `) as StepRunRow[];
       return rows.map(toStepRunDto);
     })
-    .get('/api/stream', () => {
+    .get('/api/stream', ({ request }) => {
       let unsub = () => {};
       const stream = new ReadableStream({
         start(controller) {
@@ -492,9 +511,9 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           unsub();
         },
       });
-      return new Response(stream, { headers: { 'content-type': 'text/event-stream', ...CORS } });
+      return new Response(stream, { headers: { 'content-type': 'text/event-stream', ...corsHeaders(request.headers.get('origin')) } });
     })
-    .get('/api/step-runs/:id/stream', ({ params }) => {
+    .get('/api/step-runs/:id/stream', ({ params, request }) => {
       let unsub = () => {};
       const stream = new ReadableStream({
         start(controller) {
@@ -513,7 +532,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           unsub();
         },
       });
-      return new Response(stream, { headers: { 'content-type': 'text/event-stream', ...CORS } });
+      return new Response(stream, { headers: { 'content-type': 'text/event-stream', ...corsHeaders(request.headers.get('origin')) } });
     })
     // 똘이 conversation turn: persists both sides to chat_messages (memory = data), assembles
     // the history (recent window + thread index card), and runs the agent. Serialized per scope.
@@ -535,28 +554,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         return { error: 'central agent not configured' };
       }
       return chatQueue.run(scope, async () => {
-        const userTurn = await recordTurn(sql, { scope, role: 'user', text: request, clientMsgId });
         try {
-          const { reply, intent, feedback, view } = await deps.triage!.chat({
-            request,
-            scope,
-            history: await chatHistory(scope),
-          });
-          await recordTurn(sql, {
-            scope,
-            role: 'agent',
-            text: reply,
-            payload: intent || view ? { intent, view } : undefined,
-          });
+          const { reply, intent, feedback, view } = await runTriageTurn(sql, deps.triage!, { scope, request, clientMsgId });
           kickSummarize(scope);
-          if (feedback) {
-            // Agent hit a platform limitation while serving this turn → append to the feedback board.
-            await sql`insert into agent_feedback (id, category, content, request) values (${newId()}, ${feedback.category}, ${feedback.content}, ${request})`;
-            flowHub.publish({ type: 'agent-feedback', category: feedback.category });
-          }
+          if (feedback) flowHub.publish({ type: 'agent-feedback', category: feedback.category });
           return { reply, intent, feedback, view };
         } catch (err) {
-          await markFailed(sql, userTurn.seq); // exclude the orphaned user turn from future windows
           set.status = 500;
           return { error: String(err) };
         }
@@ -571,12 +574,13 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       }
       const limit = Math.min(200, Math.max(1, Number(q.limit ?? 50) || 50));
       const before = q.before !== undefined ? Number(q.before) : undefined;
+      // Same usable-turn predicate as recentWindow; summaries are internal, never shown to the user.
       const rows = (before !== undefined && Number.isFinite(before)
         ? await sql`select seq, role, text, payload, created_at from chat_messages
-            where scope = ${scope} and status <> 'failed' and redacted_at is null and seq < ${before}
+            where scope = ${scope} and status <> 'failed' and redacted_at is null and role <> 'summary' and seq < ${before}
             order by seq desc limit ${limit}`
         : await sql`select seq, role, text, payload, created_at from chat_messages
-            where scope = ${scope} and status <> 'failed' and redacted_at is null
+            where scope = ${scope} and status <> 'failed' and redacted_at is null and role <> 'summary'
             order by seq desc limit ${limit}`) as Array<Record<string, unknown>>;
       return rows.reverse().map((r) => ({
         seq: Number(r.seq),
@@ -628,6 +632,10 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         set.status = 400;
         return { error: 'request is required' };
       }
+      if (!(await isValidScope(sql, scope))) {
+        set.status = 400;
+        return { error: `unknown scope: ${scope}` };
+      }
       if (targetProject) {
         const active = (await sql`select id from projects where id = ${targetProject} and status = 'active'`) as Array<unknown>;
         if (active.length === 0) {
@@ -658,6 +666,10 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       if (!request.trim() || !question.trim()) {
         set.status = 400;
         return { error: 'request and question are required' };
+      }
+      if (!(await isValidScope(sql, scope))) {
+        set.status = 400;
+        return { error: `unknown scope: ${scope}` };
       }
       const decisionId = await openClarification(request, question, options, scope);
       return { accepted: true, decisionId };

@@ -1,4 +1,5 @@
 import type { SQL } from 'bun';
+import { recordTurn } from './turns';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { tmpdir } from 'node:os';
 import type { QueryFn } from '../../orchestrator/infra/agent-step-executor';
@@ -56,10 +57,7 @@ export async function maybeSummarize(sql: SQL, scope: string, summarize: Summari
   const chunk = pending.slice(0, SUMMARIZE_CHUNK).map((r) => ({ seq: Number(r.seq), role: r.role, text: r.text }));
   const digest = await summarize(chunk);
   const upTo = chunk.at(-1)!.seq;
-  await sql`
-    insert into chat_messages (scope, role, text, payload)
-    values (${scope}, 'summary', ${digest}, ${JSON.stringify({ upTo, from })})
-  `;
+  await recordTurn(sql, { scope, role: 'summary', text: digest, payload: { upTo, from } });
   return true;
 }
 

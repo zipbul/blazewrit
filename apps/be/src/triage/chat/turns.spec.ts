@@ -67,6 +67,17 @@ describe('recentWindow', () => {
     await sql`delete from work_items where id = ${s}`;
   });
 
+  it('excludes summary rows — the assembler injects the summary separately, never inside the window', async () => {
+    const s = `${MARK}-sumleak`;
+    await sql`insert into work_items (id, project_id, type, state, title) values (${s}, ${MARK}, 'task', 'in_flow', 'w')`;
+    await recordTurn(sql, { scope: s, role: 'user', text: `${MARK} 발화` });
+    await recordTurn(sql, { scope: s, role: 'summary', text: `${MARK} 요약행` });
+    const win = await recentWindow(sql, s, { maxTurns: 10 });
+    expect(win.map((w) => w.text)).toEqual([`${MARK} 발화`]);
+    await sql`delete from chat_messages where scope = ${s}`;
+    await sql`delete from work_items where id = ${s}`;
+  });
+
   it('truncates oversized messages with a bw_v_chat pointer', async () => {
     const s = `${MARK}-big`;
     await sql`insert into work_items (id, project_id, type, state, title) values (${s}, ${MARK}, 'task', 'in_flow', 'w')`;

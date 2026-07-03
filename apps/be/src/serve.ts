@@ -27,5 +27,6 @@ const executor = real
 // Central triage runs a real Claude Agent SDK call with a read-only DB tool — always available.
 const triage = new TriageAgent({ sql });
 
-createRestApi(sql, { executor, triage, selfBaseUrl: `http://localhost:${port}` }).listen(port);
-console.log(`blazewrit REST API on :${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'}, triage=agent-sdk)`);
+// Loopback only: the API is unauthenticated, so it must never be reachable from the network.
+createRestApi(sql, { executor, triage, selfBaseUrl: `http://localhost:${port}` }).listen({ hostname: '127.0.0.1', port });
+console.log(`blazewrit REST API on 127.0.0.1:${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'}, triage=agent-sdk)`);
