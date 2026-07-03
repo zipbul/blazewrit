@@ -604,6 +604,26 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         createdAt: new Date(r.created_at as string).toISOString(),
       }));
     })
+    // Secret kill-switch: tombstone one turn — vanishes from hydration, the prompt window and
+    // the agent view, and the text itself is scrubbed (filtering alone would leave the secret at rest).
+    .post('/api/chat/:scope/:seq/redact', async ({ params, set }) => {
+      const scope = decodeURIComponent(params.scope);
+      const seq = Number(params.seq);
+      if (!Number.isFinite(seq)) {
+        set.status = 400;
+        return { error: 'invalid seq' };
+      }
+      const rows = (await sql`
+        update chat_messages set redacted_at = now(), text = '[삭제됨]'
+        where seq = ${seq} and scope = ${scope} and redacted_at is null
+        returning seq
+      `) as Array<unknown>;
+      if (rows.length === 0) {
+        set.status = 404;
+        return { error: 'turn not found in this scope' };
+      }
+      return { redacted: true, seq };
+    })
     // Agent self-improvement board: limitations the agent logged (ui/feature/unmet), newest first.
     .get('/api/feedback', async () => {
       const rows = (await sql`select * from agent_feedback order by created_at desc limit 200`) as Array<Record<string, unknown>>;

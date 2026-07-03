@@ -21,7 +21,7 @@ const MARK = `evalmem-${Date.now()}`;
 const TASK_SCOPE = `${MARK}-task`;
 // Dedicated eval scope masquerading as a central-like thread — NEVER the user's real central.
 const EVAL_SCOPE = `${MARK}-central`;
-const RUNS = Number(process.env.EVAL_RUNS ?? 1);
+const RUNS = Number(process.env.EVAL_RUNS ?? 3); // n=1 is a coin flip; 3+ makes the gate statistical
 const THRESHOLD = 0.9;
 
 interface Case {
