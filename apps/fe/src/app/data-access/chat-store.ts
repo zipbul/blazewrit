@@ -113,7 +113,7 @@ export class ChatStore {
     const opts =
       i.isNewProject || !i.targetProject
         ? { newProjectName: i.suggestedProjectName ?? request.slice(0, 24) }
-        : { targetProject: i.targetProject };
+        : { targetProject: i.targetProject, flowType: i.flowType }; // 승인한 flow가 실행되는 flow
     this.api.dispatch(request, opts, scope).subscribe({
       next: () => {
         this.afterAct(scope);

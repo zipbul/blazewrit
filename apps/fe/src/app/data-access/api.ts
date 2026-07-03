@@ -142,7 +142,7 @@ export class BlazewritApi {
   /** Dispatch an approved triage analysis: to a resolved existing project, or as a newly-named project. */
   dispatch(
     request: string,
-    opts: { targetProject?: string; newProjectName?: string },
+    opts: { targetProject?: string; newProjectName?: string; flowType?: string },
     scope = 'central',
   ): Observable<{ accepted: boolean; workItemId?: string; pendingRegistration?: boolean; projectId?: string }> {
     return this.http.post<{ accepted: boolean; workItemId?: string; pendingRegistration?: boolean; projectId?: string }>(

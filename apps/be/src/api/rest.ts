@@ -13,7 +13,7 @@ import { routeProject } from '../meta/router';
 import { seedProjectCard } from '../a2a/agent-card';
 import { parseJsonRpc } from '../a2a/jsonrpc';
 import { errorResponse } from '../a2a/types';
-import { JSON_RPC_ERRORS, A2A_ERRORS } from '@bw/dto';
+import { JSON_RPC_ERRORS, A2A_ERRORS, FLOW_TYPES, type FlowType } from '@bw/dto';
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
 import type { AgentEvent, OrchestratorStore, StepExecutor } from '../orchestrator/types';
 
@@ -196,8 +196,11 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
    * inbound intent into a flow, then run it in the background. This is the single triage
    * call site — both human-origin (central router) and project-origin traffic land here.
    */
-  const dispatchTask = (projectId: string, request: string, contextId?: string): string => {
-    const flowType = new StubFlowClassifier().classify(request);
+  const dispatchTask = (projectId: string, request: string, contextId?: string, carriedFlowType?: FlowType): string => {
+    // Intent custody: the flowType the user APPROVED rides in A2A metadata and wins over the
+    // keyword fallback — otherwise the approved card is decorative. Fallback serves
+    // project-origin traffic that carries no intent.
+    const flowType = carriedFlowType ?? new StubFlowClassifier().classify(request);
     const workItemId = newId();
     const ctx = contextId ?? workItemId; // correlate cross-project realizations of one intent
     // Background execution. Guarded so a failed task never crashes the server process.
@@ -252,12 +255,20 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
    * target project's own /agents/:id/a2a endpoint (loopback). Same call shape a separate
    * process or a sibling project would use — splitting later is just a different host.
    */
-  const dispatchViaA2A = async (projectId: string, intent: string): Promise<{ taskId?: string }> => {
+  const dispatchViaA2A = async (projectId: string, intent: string, meta?: { flowType?: FlowType }): Promise<{ taskId?: string }> => {
     const envelope = {
       jsonrpc: '2.0',
       id: newId(),
       method: 'message/send',
-      params: { message: { kind: 'message', messageId: newId(), role: 'user', parts: [{ kind: 'text', text: intent }] } },
+      params: {
+        message: {
+          kind: 'message',
+          messageId: newId(),
+          role: 'user',
+          parts: [{ kind: 'text', text: intent }],
+          ...(meta?.flowType ? { metadata: { flowType: meta.flowType } } : {}),
+        },
+      },
     };
     const res = await fetch(`${selfBaseUrl}/agents/${encodeURIComponent(projectId)}/a2a`, {
       method: 'POST',
@@ -351,9 +362,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           set.status = 404;
           return errorResponse(req.id ?? null, A2A_ERRORS.TASK_NOT_FOUND ?? -32001, 'unknown project');
         }
-        const message = (req.params as { message?: { contextId?: string; parts?: Array<{ kind: string; text?: string }> } } | undefined)?.message;
+        const message = (req.params as { message?: { contextId?: string; parts?: Array<{ kind: string; text?: string }>; metadata?: Record<string, unknown> } } | undefined)?.message;
         const intent = message?.parts?.find((p) => p.kind === 'text')?.text ?? '';
-        const taskId = dispatchTask(params.projectId, intent, message?.contextId);
+        // Trust boundary: only an enum-valid carried flowType is honored; anything else falls back.
+        const rawFlow = message?.metadata?.flowType;
+        const carried = typeof rawFlow === 'string' && (FLOW_TYPES as readonly string[]).includes(rawFlow) ? (rawFlow as FlowType) : undefined;
+        const taskId = dispatchTask(params.projectId, intent, message?.contextId, carried);
         return { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
       },
       { parse: 'text' },
@@ -431,7 +445,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
               } else if (intent.targetProject) {
                 const active = (await sql`select id from projects where id = ${intent.targetProject} and status = 'active'`) as Array<unknown>;
                 if (active.length) {
-                  await dispatchViaA2A(intent.targetProject, combined);
+                  await dispatchViaA2A(intent.targetProject, combined, { flowType: intent.flowType });
                   await recordTurn(sql, { scope, role: 'agent', text: `✓ «${intent.targetProject}»에서 실행했습니다.` });
                 } else {
                   await proposeNewProject(intent.suggestedProjectName ?? intent.targetProject, combined);
@@ -628,6 +642,9 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       const targetProject = typeof b.targetProject === 'string' ? b.targetProject : '';
       const newProjectName = typeof b.newProjectName === 'string' ? b.newProjectName.trim() : '';
       const scope = typeof b.scope === 'string' && b.scope ? b.scope : 'central';
+      // The approved card's flowType rides along; enum-validated at this trust boundary.
+      const rawFlow = b.flowType;
+      const flowType = typeof rawFlow === 'string' && (FLOW_TYPES as readonly string[]).includes(rawFlow) ? (rawFlow as FlowType) : undefined;
       if (!request.trim()) {
         set.status = 400;
         return { error: 'request is required' };
@@ -642,7 +659,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           set.status = 409;
           return { error: `target project «${targetProject}» not found or not active` };
         }
-        const { taskId } = await dispatchViaA2A(targetProject, request);
+        const { taskId } = await dispatchViaA2A(targetProject, request, { flowType });
         // Confirmation is a conversational turn — server-side, so hydration shows what the user saw.
         await recordTurn(sql, { scope, role: 'agent', text: `✓ «${targetProject}»에서 실행했습니다.` });
         return { accepted: true, workItemId: taskId };

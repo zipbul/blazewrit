@@ -142,7 +142,7 @@ describe('ChatStore proceed / clarify (server-side confirmation turns)', () => {
   it('dispatches with the scope and RE-HYDRATES (no locally fabricated ✓ bubble)', () => {
     const { store, api, workspace } = primed(INTENT);
     store.proceed();
-    expect(api.dispatch).toHaveBeenCalledWith('요청', { targetProject: '결제' }, 'central');
+    expect(api.dispatch).toHaveBeenCalledWith('요청', { targetProject: '결제', flowType: 'feature' }, 'central');
     expect(store.activeIntent()).toBeNull();
     expect(api.chatHistory).toHaveBeenCalledWith('central'); // 서버 확인 턴을 끌어옴
     expect(workspace.reload).toHaveBeenCalled();
