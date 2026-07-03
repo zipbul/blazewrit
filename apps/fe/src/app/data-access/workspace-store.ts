@@ -1,6 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import type { WorkItemDto, FlowDto, DecisionRequestDto } from '@bw/dto';
-import { BlazewritApi, type ConnectionVm, type ProjectVm, type RelationshipVm } from './api';
+import { BlazewritApi, type ProjectVm, type RelationshipVm } from './api';
 
 /**
  * Workspace snapshot shared across the views (DECISIONS §15). A single root store loads
@@ -15,7 +15,6 @@ export class WorkspaceStore {
   readonly workItems = signal<readonly WorkItemDto[]>([]);
   readonly flows = signal<readonly FlowDto[]>([]);
   readonly decisions = signal<readonly DecisionRequestDto[]>([]);
-  readonly connections = signal<readonly ConnectionVm[]>([]);
   readonly relationships = signal<readonly RelationshipVm[]>([]);
 
   readonly activeCount = computed(
@@ -37,7 +36,6 @@ export class WorkspaceStore {
 
   constructor() {
     this.reload();
-    this.api.connections().subscribe({ next: (v) => this.connections.set(v), error: this.onError('connections') });
   }
 
   /** Re-fetch the projections that change as flows run (after a center prompt / live tick). */

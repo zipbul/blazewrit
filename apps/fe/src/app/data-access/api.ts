@@ -72,17 +72,6 @@ export interface FeedbackVm {
   readonly createdAt: string;
 }
 
-/** A2A connection + agent health for a repo (runtime view, distinguishes silent vs dead). */
-export interface ConnectionVm {
-  readonly projectId: string;
-  readonly endpoint: string;
-  readonly status: 'connected' | 'degraded' | 'disconnected';
-  readonly lastHeartbeat: string;
-  readonly latencyMs: number | null;
-  readonly activeStreams: number;
-  readonly agentState: 'idle' | 'working' | 'unreachable';
-}
-
 /** Thin typed wrapper over the backend REST surface. */
 @Injectable({ providedIn: 'root' })
 export class BlazewritApi {
@@ -111,10 +100,6 @@ export class BlazewritApi {
 
   answerDecision(id: string, answer: string): Observable<DecisionRequestDto> {
     return this.http.post<DecisionRequestDto>(`${this.base}/api/decisions/${id}/answer`, { answer });
-  }
-
-  connections(): Observable<ConnectionVm[]> {
-    return this.http.get<ConnectionVm[]>(`${this.base}/api/connections`);
   }
 
   relationships(): Observable<RelationshipVm[]> {

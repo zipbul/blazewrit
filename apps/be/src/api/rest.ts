@@ -9,13 +9,14 @@ import { recordTurn, isValidScope } from '../triage/chat/turns';
 import { runTriageTurn, assembleHistory } from '../triage/chat/turn-runner';
 import { maybeSummarize, makeLlmSummarizer, type Summarizer } from '../triage/chat/summarize';
 import { ScopeQueue } from '../triage/chat/scope-queue';
-import { routeProject } from '../meta/router';
 import { seedProjectCard } from '../a2a/agent-card';
 import { parseJsonRpc } from '../a2a/jsonrpc';
 import { errorResponse } from '../a2a/types';
 import { JSON_RPC_ERRORS, A2A_ERRORS, FLOW_TYPES, type FlowType } from '@bw/dto';
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
-import type { AgentEvent, OrchestratorStore, StepExecutor } from '../orchestrator/types';
+import { FlowHub, StepStreamHub, publishing } from './streams';
+import { createProposals } from '../meta/proposals';
+import type { StepExecutor } from '../orchestrator/types';
 
 /** Origins allowed to call the API — NEVER '*': any web page the user visits must not read the chat log. */
 export const ALLOWED_ORIGINS = ['http://localhost:4200', 'http://127.0.0.1:4200'];
@@ -28,97 +29,6 @@ function corsHeaders(origin: string | null): Record<string, string> {
     'access-control-allow-headers': 'content-type',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
     vary: 'origin',
-  };
-}
-
-/** Flow-level SSE hub: the write path publishes, dashboard subscribes (status = mirror). */
-class FlowHub {
-  private readonly subs = new Set<(line: string) => void>();
-  subscribe(fn: (line: string) => void): () => void {
-    this.subs.add(fn);
-    return () => this.subs.delete(fn);
-  }
-  publish(event: object): void {
-    const line = `data: ${JSON.stringify(event)}\n\n`;
-    for (const fn of this.subs) fn(line);
-  }
-}
-
-interface StepSub {
-  onEvent: (dto: Record<string, unknown>) => void;
-  onDone: () => void;
-}
-
-/** Per-step-run agent-output hub: buffers events for replay + live-streams to UI subscribers. */
-class StepStreamHub {
-  private readonly buffers = new Map<string, Array<Record<string, unknown>>>();
-  private readonly subs = new Map<string, Set<StepSub>>();
-  private readonly finished = new Set<string>();
-  private readonly seqs = new Map<string, number>();
-
-  record(stepRunId: string, ev: AgentEvent): void {
-    const seq = (this.seqs.get(stepRunId) ?? 0) + 1;
-    this.seqs.set(stepRunId, seq);
-    const dto = {
-      id: `${stepRunId}-${seq}`,
-      stepRunId,
-      sessionId: stepRunId,
-      seq,
-      type: ev.type,
-      payload: ev.payload,
-      createdAt: new Date().toISOString(),
-    };
-    const buf = this.buffers.get(stepRunId) ?? [];
-    buf.push(dto);
-    this.buffers.set(stepRunId, buf);
-    for (const sub of this.subs.get(stepRunId) ?? []) sub.onEvent(dto);
-  }
-
-  finish(stepRunId: string): void {
-    this.finished.add(stepRunId);
-    for (const sub of this.subs.get(stepRunId) ?? []) sub.onDone();
-  }
-
-  subscribe(stepRunId: string, onEvent: StepSub['onEvent'], onDone: StepSub['onDone']): () => void {
-    for (const e of this.buffers.get(stepRunId) ?? []) onEvent(e);
-    if (this.finished.has(stepRunId)) {
-      onDone();
-      return () => {};
-    }
-    const sub: StepSub = { onEvent, onDone };
-    const set = this.subs.get(stepRunId) ?? new Set<StepSub>();
-    set.add(sub);
-    this.subs.set(stepRunId, set);
-    return () => set.delete(sub);
-  }
-}
-
-/** Wrap a store so flow/step-run writes publish flow events (+ close per-step streams on finish). */
-function publishing(store: OrchestratorStore, flowHub: FlowHub, stepHub: StepStreamHub): OrchestratorStore {
-  return {
-    createFlow: async (f) => {
-      await store.createFlow(f);
-      flowHub.publish({ type: 'flow-created', flowId: f.id, flowType: f.flowType });
-    },
-    setCurrentStep: async (id, step) => {
-      await store.setCurrentStep(id, step);
-      flowHub.publish({ type: 'current-step', flowId: id, currentStep: step });
-    },
-    setStatus: async (id, status) => {
-      await store.setStatus(id, status);
-      flowHub.publish({ type: 'status', flowId: id, status });
-    },
-    startStepRun: async (r) => {
-      await store.startStepRun(r);
-      flowHub.publish({ type: 'step-run-started', flowId: r.flowId, stepRunId: r.id, step: r.step, role: r.role });
-    },
-    finishStepRun: async (id, status, verdict) => {
-      await store.finishStepRun(id, status, verdict);
-      flowHub.publish({ type: 'step-run-finished', stepRunId: id, status, verdict });
-      stepHub.finish(id);
-    },
-    getFlow: (id) => store.getFlow(id),
-    stepRuns: (id) => store.stepRuns(id),
   };
 }
 
@@ -143,6 +53,11 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const selfBaseUrl = deps.selfBaseUrl ?? 'http://localhost:4500';
   // HITL: decisionId -> resolver that resumes the suspended flow.
   const pendingDecisions = new Map<string, (answer: string) => void>();
+  const { proposeNewProject, proposeConnection, openClarification } = createProposals({
+    sql,
+    newId,
+    publish: (e) => flowHub.publish(e),
+  });
   // Per-scope turn serialization (single Bun process — a second instance would need a DB lock).
   const chatQueue = new ScopeQueue();
   // Background compaction: keeps the primary (central) thread's context bounded as it grows.
@@ -279,42 +194,8 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     return { taskId: json.result?.id };
   };
 
-  /** Register a project as 'proposed' and open its approval decision (agent-proposes / user-approves). */
-  const proposeNewProject = async (projectId: string, request: string) => {
-    await sql`insert into projects (id, name, status) values (${projectId}, ${projectId}, ${'proposed'}) on conflict (id) do nothing`;
-    const decId = newId();
-    const meta = JSON.stringify({ kind: 'project_registration', projectId, request });
-    await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'project_registration'}, ${`새 프로젝트 «${projectId}»를 등록할까요?`}, ${'[]'}, ${meta})`;
-    flowHub.publish({ type: 'decision-open', id: decId, project: projectId });
-    return { accepted: true, pendingRegistration: true, projectId };
-  };
 
-  /** Open a free-text clarification question in the drawer inbox (the graceful tail for ambiguous intent). */
-  const openClarification = async (request: string, question: string, options: string[] = [], scope = 'central'): Promise<string> => {
-    const decId = newId();
-    const meta = JSON.stringify({ kind: 'clarification', request, scope });
-    // free_text → drawer always shows a text box; stored options add clickable choices alongside it.
-    await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'free_text'}, ${question}, ${JSON.stringify(options)}, ${meta})`;
-    // The question is a conversational turn — memory must include it (no turn bypasses chat_messages).
-    await recordTurn(sql, { scope, role: 'agent', text: `❓ ${question} (질문함에 등록됨)` });
-    flowHub.publish({ type: 'decision-open', id: decId });
-    return decId;
-  };
 
-  /** Meta agent proposes wiring a newly-registered project to an existing one (agent-driven, user-approved). */
-  const proposeConnection = async (newProjectId: string): Promise<void> => {
-    const others = (await sql`
-      select id from projects where status = 'active' and id <> ${newProjectId} order by created_at desc limit 1
-    `) as Array<Record<string, unknown>>;
-    const target = others[0]?.id as string | undefined;
-    if (!target) return;
-    const relId = newId();
-    await sql`insert into relationships (id, from_project, to_project, type, status) values (${relId}, ${newProjectId}, ${target}, ${'depends'}, ${'proposed'})`;
-    const decId = newId();
-    const meta = JSON.stringify({ kind: 'connection', relationshipId: relId, from: newProjectId, to: target });
-    await sql`insert into decisions (id, status, request_type, question, options, meta) values (${decId}, ${'open'}, ${'connection'}, ${`«${newProjectId}» → «${target}» 두 프로젝트를 연결할까요?`}, ${'[]'}, ${meta})`;
-    flowHub.publish({ type: 'decision-open', id: decId });
-  };
 
   return new Elysia()
     .onAfterHandle(({ request, set }) => {
@@ -382,7 +263,6 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         status: r.status as string, // 'proposed' | 'confirmed'
       }));
     })
-    .get('/api/connections', () => [])
     .get('/api/decisions', async () => {
       const rows = (await sql`select * from decisions where status = 'open' order by created_at`) as Array<Record<string, unknown>>;
       return rows.map(toDecisionDto);
@@ -635,24 +515,6 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         status: r.status as string,
         createdAt: new Date(r.created_at as string).toISOString(),
       }));
-    })
-    // Central META ROUTER: pick the target project, then dispatch the RAW intent to it over
-    // real A2A (the project triages + runs). Central does not classify the flow type.
-    .post('/api/run', async ({ body }) => {
-      const request = typeof body === 'object' && body && 'request' in body ? String((body as { request: unknown }).request) : '';
-
-      const existing = ((await sql`select id from projects where status = 'active'`) as Array<Record<string, unknown>>).map(
-        (r) => r.id as string,
-      );
-      const route = routeProject(request, existing);
-
-      if (route.kind === 'existing') {
-        const { taskId } = await dispatchViaA2A(route.project, request);
-        return { accepted: true, workItemId: taskId };
-      }
-
-      // New project: register as 'proposed' and ask the user (agent-proposes / user-approves).
-      return proposeNewProject(route.project, request);
     })
     // Intent-resolved dispatch: the user approved a triage analysis, so route to the project the
     // central agent already resolved (re-validated here) instead of re-running the meta router.
