@@ -1,5 +1,4 @@
-import type { FlowType } from '@bw/dto';
-import { getWorkflow } from '../harness/workflows';
+import type { WorkflowDef } from '../harness/workflows';
 import type { AgentEvent, OrchestratorStore, StepExecutor, StepOutput } from './types';
 
 export interface RunFlowDeps {
@@ -28,19 +27,18 @@ export interface FlowResult {
 }
 
 /**
- * Drive a flow's confirmed step sequence: each step runs producer (+ reviewer gate),
+ * Drive an assembled step sequence (WorkflowDef): each step runs producer (+ reviewer gate),
  * retrying on reviewer FAIL up to maxAttempts; a step that never passes abandons the flow.
- * All transitions persist through the store. Agent execution lives behind the executor (SRP).
+ * The workflow is composed upstream (agent picks → buildWorkflow) — the orchestrator is a dumb
+ * executor of StepDef[]. All transitions persist through the store; agent execution behind the
+ * executor (SRP).
  */
-export async function runFlow(flowType: FlowType, deps: RunFlowDeps): Promise<FlowResult> {
-  const workflow = getWorkflow(flowType);
-  if (!workflow) throw new Error(`No workflow defined for flow type: ${flowType}`);
-
+export async function runFlow(workflow: WorkflowDef, deps: RunFlowDeps): Promise<FlowResult> {
   const maxAttempts = deps.maxAttempts ?? 3;
   const flowId = deps.newId();
   await deps.store.createFlow({
     id: flowId,
-    flowType,
+    flowType: workflow.flowType,
     status: 'active',
     currentStep: workflow.steps[0]!.name,
     workItemId: deps.workItemId,
@@ -54,7 +52,7 @@ export async function runFlow(flowType: FlowType, deps: RunFlowDeps): Promise<Fl
     let passed = false;
     let output: unknown;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const base = { flowId, flowType, step: step.name, attempt, request: deps.request, priorOutputs };
+      const base = { flowId, flowType: workflow.flowType, step: step.name, attempt, request: deps.request, priorOutputs };
 
       const producerId = deps.newId();
       await deps.store.startStepRun({ id: producerId, flowId, step: step.name, role: 'producer', attempt });
@@ -108,7 +106,7 @@ export async function runFlow(flowType: FlowType, deps: RunFlowDeps): Promise<Fl
 
     // Reflect: persist a learning.
     if (step.name === 'reflect') {
-      await deps.onLearning?.({ flowId, text: `Learned from "${deps.request}" (${flowType}).` });
+      await deps.onLearning?.({ flowId, text: `Learned from "${deps.request}" (${workflow.flowType}).` });
     }
   }
 

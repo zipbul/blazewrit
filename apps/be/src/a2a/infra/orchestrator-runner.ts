@@ -2,7 +2,8 @@ import type { MessageDto, TaskDto, TaskState } from '@bw/dto';
 import type { TaskRunner } from '../methods/message-send';
 import type { FlowClassifier } from '../../triage/triage';
 import { runFlow } from '../../orchestrator/orchestrator';
-import { getWorkflow } from '../../harness/workflows';
+import { WORKFLOWS } from '../../harness/workflows';
+import { buildWorkflow } from '../../harness/build-workflow';
 import type { OrchestratorStore, StepExecutor } from '../../orchestrator/types';
 import type { TaskStore } from './task-store';
 
@@ -33,7 +34,7 @@ export class OrchestratorRunner implements TaskRunner {
     const request = firstText(message);
     const flowType = this.deps.triage.classify(request);
 
-    if (!getWorkflow(flowType)) {
+    if (!WORKFLOWS[flowType]) {
       const id = this.deps.newId();
       const rejected: TaskDto = {
         kind: 'task',
@@ -45,7 +46,8 @@ export class OrchestratorRunner implements TaskRunner {
       return rejected;
     }
 
-    const result = await runFlow(flowType, {
+    const workflow = buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name));
+    const result = await runFlow(workflow, {
       store: this.deps.store,
       executor: this.deps.executor,
       newId: this.deps.newId,

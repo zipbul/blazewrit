@@ -4,6 +4,8 @@ import { runFlow } from '../orchestrator/orchestrator';
 import { PgOrchestratorStore } from '../orchestrator/infra/pg-store';
 import { PacedStepExecutor } from '../orchestrator/paced-executor';
 import { StubFlowClassifier } from '../triage/triage';
+import { WORKFLOWS } from '../harness/workflows';
+import { buildWorkflow } from '../harness/build-workflow';
 import type { TriageAgent } from '../triage/triage-agent';
 import { recordTurn, isValidScope } from '../triage/chat/turns';
 import { runTriageTurn, assembleHistory } from '../triage/chat/turn-runner';
@@ -123,7 +125,8 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       try {
         await sql`insert into work_items (id, project_id, type, state, title, context_id) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request}, ${ctx})`;
         flowHub.publish({ type: 'routed', workItemId, project: projectId });
-        const result = await runFlow(flowType, {
+        const workflow = buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name));
+        const result = await runFlow(workflow, {
           store: publishing(store, flowHub, stepHub),
           executor: deps.executor ?? new PacedStepExecutor(),
           newId,
