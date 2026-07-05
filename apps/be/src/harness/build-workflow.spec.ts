@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import { buildWorkflow, KNOWN_STEPS } from './build-workflow';
+import type { FlowType } from '@bw/dto';
 
 /**
  * The safety wall: the AGENT emits an ordered list of step names; buildWorkflow forces the fixed
  * grammar mechanically (no parser). 100% of the safety, 0% of the nondeterminism lives here.
  */
-const names = (flowType: string, picks: string[]) => buildWorkflow(flowType, picks).steps.map((s) => s.name);
-const gated = (flowType: string, picks: string[]) =>
+const names = (flowType: FlowType, picks: string[]) => buildWorkflow(flowType, picks).steps.map((s) => s.name);
+const gated = (flowType: FlowType, picks: string[]) =>
   Object.fromEntries(buildWorkflow(flowType, picks).steps.map((s) => [s.name, s.reviewer]));
 
 describe('buildWorkflow — fixed grammar over agent picks', () => {
