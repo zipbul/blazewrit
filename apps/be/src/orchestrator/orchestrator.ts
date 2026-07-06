@@ -19,6 +19,8 @@ export interface RunFlowDeps {
   onLearning?: (l: { flowId: string; text: string }) => void | Promise<void>;
   /** Max producer⇄reviewer attempts per step before abandoning (default 3). */
   maxAttempts?: number;
+  /** SDK session of the assemble decision (persisted on the flow for debugging). */
+  assembleSessionId?: string;
 }
 
 export interface FlowResult {
@@ -42,6 +44,7 @@ export async function runFlow(workflow: WorkflowDef, deps: RunFlowDeps): Promise
     status: 'active',
     currentStep: workflow.steps[0]!.name,
     workItemId: deps.workItemId,
+    assembleSessionId: deps.assembleSessionId,
   });
 
   const priorOutputs: StepOutput[] = [];

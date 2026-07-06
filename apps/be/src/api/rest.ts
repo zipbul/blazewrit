@@ -6,6 +6,8 @@ import { PacedStepExecutor } from '../orchestrator/paced-executor';
 import { StubFlowClassifier } from '../triage/triage';
 import { WORKFLOWS } from '../harness/workflows';
 import { buildWorkflow } from '../harness/build-workflow';
+import { assembleFlow } from '../harness/assemble-flow';
+import type { AssembleDeps } from '../harness/assemble-chain';
 import type { TriageAgent } from '../triage/triage-agent';
 import { recordTurn, isValidScope } from '../triage/chat/turns';
 import { runTriageTurn, assembleHistory } from '../triage/chat/turn-runner';
@@ -44,6 +46,8 @@ export interface RestDeps {
   triage?: TriageAgent;
   /** Chat compaction (defaults to one-shot LLM summarizer; tests inject a fake). */
   summarizer?: Summarizer;
+  /** Flow assembler agent (QueryFn); when absent, assembly degrades to the grammar skeleton. */
+  assembler?: AssembleDeps;
 }
 
 /** REST + SSE surface the Angular UI consumes (DECISIONS §13), backed by Postgres. */
@@ -125,13 +129,20 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       try {
         await sql`insert into work_items (id, project_id, type, state, title, context_id) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request}, ${ctx})`;
         flowHub.publish({ type: 'routed', workItemId, project: projectId });
-        const workflow = buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name));
-        const result = await runFlow(workflow, {
+        // AGENT-ASSEMBLED flow: when an assembler is injected the project agent judges the steps
+        // (assembleChain) within the fixed grammar (buildWorkflow); with none, we skip the agent
+        // entirely and use the curated workflow for this flow type (no network at boot).
+        const facts = { mutation: flowType !== 'research' && flowType !== 'audit', scope: request };
+        const assembled = deps.assembler
+          ? await assembleFlow({ seed: flowType, facts }, deps.assembler)
+          : { workflow: buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name)), sessionId: '' };
+        const result = await runFlow(assembled.workflow, {
           store: publishing(store, flowHub, stepHub),
           executor: deps.executor ?? new PacedStepExecutor(),
           newId,
           request,
           workItemId,
+          assembleSessionId: assembled.sessionId || undefined,
           onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
           requestDecision: async (d) => {
             const id = newId();
