@@ -20,6 +20,11 @@ export class InMemoryOrchestratorStore implements OrchestratorStore {
     if (flow) flow.status = status;
   }
 
+  async setAssembleSession(flowId: string, sessionId: string): Promise<void> {
+    const flow = this.flows.get(flowId);
+    if (flow) flow.assembleSessionId = sessionId;
+  }
+
   async startStepRun(run: { id: string; flowId: string; step: string; role: 'producer' | 'reviewer'; attempt: number }): Promise<void> {
     this.runs.push({ ...run, status: 'running' });
   }

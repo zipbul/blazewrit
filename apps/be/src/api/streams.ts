@@ -77,6 +77,7 @@ export function publishing(store: OrchestratorStore, flowHub: FlowHub, stepHub: 
       await store.setStatus(id, status);
       flowHub.publish({ type: 'status', flowId: id, status });
     },
+    setAssembleSession: (id, sessionId) => store.setAssembleSession(id, sessionId),
     startStepRun: async (r) => {
       await store.startStepRun(r);
       flowHub.publish({ type: 'step-run-started', flowId: r.flowId, stepRunId: r.id, step: r.step, role: r.role });

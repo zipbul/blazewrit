@@ -59,9 +59,14 @@ describe('v1 agent-assembled dispatch', () => {
     const title = `${MARK} 검색 필터 추가`;
     const res = await a2aSend(appWithAssembler(), title, { flowType: 'feature' });
     expect(res.status).toBe(200);
-    const flow = await flowFor(title);
-    expect(flow).toBeDefined();
-    expect(flow!.assemble_session_id).toBe('wire-sess-1');
+    // Two-phase records the session AFTER ground composes the rest, so poll until it lands.
+    let sess: string | null = null;
+    for (let i = 0; i < 60; i++) {
+      const flow = await flowFor(title);
+      if (flow?.assemble_session_id) { sess = flow.assemble_session_id; break; }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(sess).toBe('wire-sess-1');
   });
 });
 

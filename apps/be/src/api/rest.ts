@@ -131,20 +131,27 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       try {
         await sql`insert into work_items (id, project_id, type, state, title, context_id) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request}, ${ctx})`;
         flowHub.publish({ type: 'routed', workItemId, project: projectId });
-        // AGENT-ASSEMBLED flow: when an assembler is injected the project agent judges the steps
-        // (assembleChain) within the fixed grammar (buildWorkflow); with none, we skip the agent
-        // entirely and use the curated workflow for this flow type (no network at boot).
-        const facts = await gatherFacts(sql, projectId, flowType, request);
-        const assembled = deps.assembler
-          ? await assembleFlow({ seed: flowType, facts }, deps.assembler)
-          : { workflow: buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name)), sessionId: '' };
-        const result = await runFlow(assembled.workflow, {
+        // TWO-PHASE AGENT-ASSEMBLED flow: with an assembler injected, seed ground-only and compose
+        // the rest AFTER ground runs — the agent picks steps from ground's real output, not just the
+        // seed. With none, run the curated workflow for this flow type (no network at boot).
+        const dbFacts = await gatherFacts(sql, projectId, flowType, request);
+        const seedWorkflow = deps.assembler
+          ? { flowType, steps: [{ name: 'ground', reviewer: true }] }
+          : buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name));
+        const composeRest = deps.assembler
+          ? async ({ groundOutput }: { groundOutput: unknown }) => {
+              const groundReport = typeof groundOutput === 'string' ? groundOutput : JSON.stringify(groundOutput);
+              const a = await assembleFlow({ seed: flowType, facts: { ...dbFacts, groundReport } }, deps.assembler!);
+              return { steps: a.workflow.steps, sessionId: a.sessionId };
+            }
+          : undefined;
+        const result = await runFlow(seedWorkflow, {
           store: publishing(store, flowHub, stepHub),
           executor: deps.executor ?? new PacedStepExecutor(),
           newId,
           request,
           workItemId,
-          assembleSessionId: assembled.sessionId || undefined,
+          composeRest,
           onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
           requestDecision: async (d) => {
             const id = newId();

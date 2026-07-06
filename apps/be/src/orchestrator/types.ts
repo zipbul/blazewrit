@@ -70,6 +70,8 @@ export interface StepRunRecord {
 export interface OrchestratorStore {
   createFlow(flow: FlowRecord): Promise<void>;
   setCurrentStep(flowId: string, step: string): Promise<void>;
+  /** Record the assemble session late — two-phase composes the flow after ground runs. */
+  setAssembleSession(flowId: string, sessionId: string): Promise<void>;
   setStatus(flowId: string, status: FlowStatus): Promise<void>;
   /** Insert a step run in `running` state (the UI streams its live events). */
   startStepRun(run: { id: string; flowId: string; step: string; role: 'producer' | 'reviewer'; attempt: number; sessionId?: string }): Promise<void>;

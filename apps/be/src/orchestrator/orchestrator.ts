@@ -1,4 +1,5 @@
-import type { WorkflowDef } from '../harness/workflows';
+import type { FlowType } from '@bw/dto';
+import type { StepDef, WorkflowDef } from '../harness/workflows';
 import type { AgentEvent, OrchestratorStore, StepExecutor, StepOutput } from './types';
 
 export interface RunFlowDeps {
@@ -21,6 +22,13 @@ export interface RunFlowDeps {
   maxAttempts?: number;
   /** SDK session of the assemble decision (persisted on the flow for debugging). */
   assembleSessionId?: string;
+  /**
+   * Two-phase composition: after ground runs, compose the rest of the chain from its output
+   * (agent sees real facts, not just the seed). Returns the full grammar-valid step list; the
+   * ground already run is dropped and the remainder appended. Absent → the passed-in workflow
+   * runs verbatim (one-phase).
+   */
+  composeRest?: (ctx: { groundOutput: unknown; request: string; flowType: FlowType }) => Promise<{ steps: StepDef[]; sessionId: string }>;
 }
 
 export interface FlowResult {
@@ -48,8 +56,12 @@ export async function runFlow(workflow: WorkflowDef, deps: RunFlowDeps): Promise
   });
 
   const priorOutputs: StepOutput[] = [];
+  // Mutable so two-phase can append the composed tail after ground (index loop sees the growth).
+  const steps: StepDef[] = [...workflow.steps];
+  let composed = false;
 
-  for (const step of workflow.steps) {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
     await deps.store.setCurrentStep(flowId, step.name);
 
     let passed = false;
@@ -89,6 +101,15 @@ export async function runFlow(workflow: WorkflowDef, deps: RunFlowDeps): Promise
       return { flowId, status: 'abandoned' };
     }
     priorOutputs.push({ step: step.name, output });
+
+    // Two-phase: ground has produced real facts — compose the rest of the chain from them now,
+    // and record the (late) assemble session on the flow so it stays re-askable.
+    if (step.name === 'ground' && deps.composeRest && !composed) {
+      composed = true;
+      const rest = await deps.composeRest({ groundOutput: output, request: deps.request, flowType: workflow.flowType });
+      steps.push(...rest.steps.filter((s) => s.name !== 'ground'));
+      if (rest.sessionId) await deps.store.setAssembleSession(flowId, rest.sessionId);
+    }
 
     // HITL gate: blazewrit's model is "the human makes the decisions" — pause at Decide
     // and surface the choice to the inbox (agent-initiated, not a user-toggled option).
