@@ -9,6 +9,7 @@ import { buildWorkflow } from '../harness/build-workflow';
 import { assembleFlow } from '../harness/assemble-flow';
 import type { AssembleDeps } from '../harness/assemble-chain';
 import { reAskSession } from '../harness/reask-session';
+import { gatherFacts } from '../harness/gather-facts';
 import type { TriageAgent } from '../triage/triage-agent';
 import { recordTurn, isValidScope } from '../triage/chat/turns';
 import { runTriageTurn, assembleHistory } from '../triage/chat/turn-runner';
@@ -133,7 +134,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         // AGENT-ASSEMBLED flow: when an assembler is injected the project agent judges the steps
         // (assembleChain) within the fixed grammar (buildWorkflow); with none, we skip the agent
         // entirely and use the curated workflow for this flow type (no network at boot).
-        const facts = { mutation: flowType !== 'research' && flowType !== 'audit', scope: request };
+        const facts = await gatherFacts(sql, projectId, flowType, request);
         const assembled = deps.assembler
           ? await assembleFlow({ seed: flowType, facts }, deps.assembler)
           : { workflow: buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name)), sessionId: '' };
