@@ -8,6 +8,7 @@ import { WORKFLOWS } from '../harness/workflows';
 import { buildWorkflow } from '../harness/build-workflow';
 import { assembleFlow } from '../harness/assemble-flow';
 import type { AssembleDeps } from '../harness/assemble-chain';
+import { reAskSession } from '../harness/reask-session';
 import type { TriageAgent } from '../triage/triage-agent';
 import { recordTurn, isValidScope } from '../triage/chat/turns';
 import { runTriageTurn, assembleHistory } from '../triage/chat/turn-runner';
@@ -407,6 +408,22 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         from step_runs where flow_id = ${params.id} order by started_at, id
       `) as StepRunRow[];
       return rows.map(toStepRunDto);
+    })
+    // Re-ask a flow's recorded assemble session — put a follow-up to the agent that composed the
+    // flow, resuming its full context. The concrete debugging path the session ids exist for.
+    .post('/api/flows/:id/assemble/ask', async ({ params, body, set }) => {
+      const rows = (await sql`select assemble_session_id from flows where id = ${params.id}`) as Array<{ assemble_session_id: string | null }>;
+      if (!rows[0]) { set.status = 404; return { error: 'flow not found' }; }
+      const sessionId = rows[0].assemble_session_id;
+      if (!sessionId) { set.status = 409; return { error: 'flow has no recorded assemble session' }; }
+      const question = typeof body === 'object' && body ? String((body as { question?: unknown }).question ?? '') : '';
+      if (!question) { set.status = 400; return { error: 'question required' }; }
+      try {
+        return await reAskSession(sessionId, question, deps.assembler ?? {});
+      } catch (e) {
+        set.status = 502;
+        return { error: (e as Error).message };
+      }
     })
     .get('/api/stream', ({ request }) => {
       let unsub = () => {};
