@@ -50,6 +50,8 @@ export interface FlowRecord {
   currentStep: string;
   /** Link to the originating work item, set at creation so the UI can render the flow live. */
   workItemId?: string;
+  /** SDK session of the assemble call that composed this flow (re-askable for debugging). */
+  assembleSessionId?: string;
 }
 
 export type StepRunStatus = 'running' | 'done' | 'rejected';
@@ -70,7 +72,7 @@ export interface OrchestratorStore {
   setCurrentStep(flowId: string, step: string): Promise<void>;
   setStatus(flowId: string, status: FlowStatus): Promise<void>;
   /** Insert a step run in `running` state (the UI streams its live events). */
-  startStepRun(run: { id: string; flowId: string; step: string; role: 'producer' | 'reviewer'; attempt: number }): Promise<void>;
+  startStepRun(run: { id: string; flowId: string; step: string; role: 'producer' | 'reviewer'; attempt: number; sessionId?: string }): Promise<void>;
   /** Finalize a step run with its terminal status (+ reviewer verdict). */
   finishStepRun(id: string, status: StepRunStatus, verdict?: ReviewVerdict): Promise<void>;
   getFlow(flowId: string): Promise<FlowRecord | undefined>;

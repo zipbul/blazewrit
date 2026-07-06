@@ -8,8 +8,8 @@ export class PgOrchestratorStore implements OrchestratorStore {
 
   async createFlow(flow: FlowRecord): Promise<void> {
     await this.sql`
-      insert into flows (id, work_item_id, flow_type, status, current_step)
-      values (${flow.id}, ${flow.workItemId ?? null}, ${flow.flowType}, ${flow.status}, ${flow.currentStep})
+      insert into flows (id, work_item_id, flow_type, status, current_step, assemble_session_id)
+      values (${flow.id}, ${flow.workItemId ?? null}, ${flow.flowType}, ${flow.status}, ${flow.currentStep}, ${flow.assembleSessionId ?? null})
     `;
   }
 
@@ -21,10 +21,10 @@ export class PgOrchestratorStore implements OrchestratorStore {
     await this.sql`update flows set status = ${status} where id = ${flowId}`;
   }
 
-  async startStepRun(run: { id: string; flowId: string; step: string; role: 'producer' | 'reviewer'; attempt: number }): Promise<void> {
+  async startStepRun(run: { id: string; flowId: string; step: string; role: 'producer' | 'reviewer'; attempt: number; sessionId?: string }): Promise<void> {
     await this.sql`
-      insert into step_runs (id, flow_id, step_name, role, attempt_no, status)
-      values (${run.id}, ${run.flowId}, ${run.step}, ${run.role}, ${run.attempt}, ${'running'})
+      insert into step_runs (id, flow_id, step_name, role, attempt_no, status, session_id)
+      values (${run.id}, ${run.flowId}, ${run.step}, ${run.role}, ${run.attempt}, ${'running'}, ${run.sessionId ?? null})
     `;
   }
 

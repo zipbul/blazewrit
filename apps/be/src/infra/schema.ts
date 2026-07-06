@@ -27,8 +27,10 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     flow_type text not null,
     status text not null,
     current_step text not null,
+    assemble_session_id text,
     created_at timestamptz not null default now()
   )`;
+  await sql`alter table flows add column if not exists assemble_session_id text`;
   await sql`create table if not exists step_runs (
     id text primary key,
     flow_id text not null references flows(id),
@@ -37,9 +39,11 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     attempt_no integer not null,
     status text not null,
     verdict text,
+    session_id text,
     started_at timestamptz not null default now(),
     ended_at timestamptz
   )`;
+  await sql`alter table step_runs add column if not exists session_id text`;
   await sql`create table if not exists learnings (
     id text primary key,
     flow_id text,
