@@ -1,4 +1,4 @@
-import { Injectable, computed, inject } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { catchError, of, scan, switchMap } from 'rxjs';
 import type { AgentEventDto, StepRunDto } from '@bw/dto';
@@ -43,7 +43,18 @@ export class FocusLive {
   private readonly api = inject(BlazewritApi);
   private readonly stream = inject(AgentStream);
 
-  readonly focus = computed(() => this.store.workItems().at(0) ?? null);
+  /** User-selected work item (Canvas hearth click); falls back to the newest. */
+  private readonly picked = signal<string | null>(null);
+  readonly focus = computed(() => {
+    const id = this.picked();
+    const items = this.store.workItems();
+    return (id ? items.find((w) => w.id === id) : undefined) ?? items.at(0) ?? null;
+  });
+
+  /** Focus a work item (its project's flow) — used by the Canvas fleet map. */
+  select(workItemId: string): void {
+    this.picked.set(workItemId);
+  }
   /** Single source of truth for "which work item is focused" (consumed by dashboard + canvas). */
   readonly focusId = computed(() => this.focus()?.id ?? null);
   readonly focusFlow = computed(() => {
@@ -51,12 +62,17 @@ export class FocusLive {
     return f ? (this.store.flowFor(f) ?? null) : null;
   });
 
-  private readonly focusFlowId = computed(() => this.focusFlow()?.id ?? null);
+  // Re-fetch step runs whenever the focused flow changes OR a live event ticks, so the
+  // metro advances in real time as the backend persists each step run.
+  private readonly stepRunsTrigger = computed(() => ({
+    id: this.focusFlow()?.id ?? null,
+    tick: this.store.liveTick(),
+  }));
   readonly stepRuns = toSignal(
-    toObservable(this.focusFlowId).pipe(
+    toObservable(this.stepRunsTrigger).pipe(
       // catchError INSIDE switchMap: a failed fetch maps to [] without terminating the
-      // outer toObservable pipeline, so later focus changes keep updating (self-healing).
-      switchMap((id) =>
+      // outer toObservable pipeline, so later changes keep updating (self-healing).
+      switchMap(({ id }) =>
         id ? this.api.stepRuns(id).pipe(catchError(() => of([] as StepRunDto[]))) : of([] as StepRunDto[]),
       ),
     ),
@@ -65,7 +81,13 @@ export class FocusLive {
 
   readonly metro = computed(() => {
     const flow = this.focusFlow();
-    return flow ? deriveMetro(flow.flowType, flow.currentStep, this.stepRuns()) : null;
+    if (!flow) return null;
+    const m = deriveMetro(flow.flowType, flow.currentStep, this.stepRuns());
+    // A completed flow has no active step — every node is done (no lingering pulse).
+    if (flow.status === 'completed') {
+      return { ...m, steps: m.steps.map((s) => ({ ...s, state: 'done' as const })) };
+    }
+    return m;
   });
 
   private readonly activeStepRunId = computed(

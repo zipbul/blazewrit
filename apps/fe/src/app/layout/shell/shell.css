@@ -4,6 +4,7 @@
 }
 
 .shell {
+  position: relative; /* anchors the absolutely-positioned chat dock */
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -39,6 +40,11 @@
   font-size: 13px;
 }
 
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
 .stage:focus {
   outline: none;
 }
@@ -57,6 +63,10 @@
 }
 .logo b {
   color: var(--primary);
+}
+.logo .mark {
+  color: var(--primary);
+  text-shadow: 0 0 12px rgba(224, 107, 46, 0.6);
 }
 .views {
   margin-left: 8px;
@@ -81,71 +91,4 @@
 .views a.on {
   background: rgba(255, 255, 255, 0.1);
   color: var(--foreground);
-}
-.views a .badge {
-  display: inline-block;
-  margin-left: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--warning);
-  background: rgba(240, 189, 94, 0.15);
-  border-radius: 20px;
-  padding: 0 6px;
-}
-.live {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--success);
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 10px var(--success);
-}
-
-/* stage */
-.stage {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
-/* status bar */
-.status {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 9px 20px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--faint);
-}
-.status .s {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.status .b {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-.status .b.ok {
-  background: var(--success);
-}
-.status .b.down {
-  background: var(--destructive);
-}
-.status .warn {
-  color: var(--warning);
-}
-.status .cmdk {
-  margin-left: auto;
-  color: var(--muted-foreground);
 }

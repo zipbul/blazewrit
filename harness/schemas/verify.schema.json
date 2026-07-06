@@ -33,9 +33,52 @@
       ]
     },
     "P0PostStabilization": {
-      "description": "P0 (bugfix-p0) only, on result ∈ {pass, degraded_pass}. Verify SIGNALS a recommended follow-up when complexity_signal was high or a god_node was in scope; it does NOT queue/create the flow (orchestrator queues — Verify-signals-only boundary). Records the SUGGESTED follow-up.",
+      "description": "P0 (bugfix-p0) only, on result ∈ {pass, degraded_pass}. Verify SIGNALS a recommended follow-up when complexity_signal was high or a god_node was in scope; it does NOT queue/create the flow (orchestrator queues — Verify-signals-only boundary). Records the SUGGESTED follow-up. triggered_by is an ARRAY (both signals can fire independently — record every one that held). suggested_depth applies ONLY when suggested_followup=bugfix_normal (deep); for suggested_followup=retro it MUST be absent (depth is meaningless for a retro follow-up) — enforced by the allOf below.",
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "$comment": "suggested_depth is permitted only for the bugfix_normal follow-up; forbidden for retro.",
+          "if": {
+            "required": [
+              "suggested_followup"
+            ],
+            "properties": {
+              "suggested_followup": {
+                "const": "retro"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "suggested_depth": false
+            }
+          }
+        },
+        {
+          "$comment": "Defect 4 — prose L309 says suggested_depth applies ONLY for suggested_followup=bugfix_normal and L308/L310 fix its value to 'deep'. The shared Depth enum {shallow,deep} otherwise permits suggested_depth=shallow on a bugfix_normal follow-up, contradicting prose. So on bugfix_normal: suggested_depth is REQUIRED and const 'deep'.",
+          "if": {
+            "required": [
+              "suggested_followup"
+            ],
+            "properties": {
+              "suggested_followup": {
+                "const": "bugfix_normal"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "suggested_depth"
+            ],
+            "properties": {
+              "suggested_depth": {
+                "const": "deep"
+              }
+            }
+          }
+        }
+      ],
       "required": [
         "triggered_by",
         "suggested_followup",
@@ -43,12 +86,17 @@
       ],
       "properties": {
         "triggered_by": {
-          "description": "Which signal fired the recommendation. high_complexity = Triage.complexity_signal was high; god_node = Ground.task_subgraph.god_nodes_in_scope non-empty.",
-          "type": "string",
-          "enum": [
-            "high_complexity",
-            "god_node"
-          ]
+          "description": "Which signal(s) fired the recommendation — an ARRAY because the two conditions are independent and can BOTH hold (Triage.complexity_signal=high AND god_nodes_in_scope non-empty). high_complexity = Triage.complexity_signal was high; god_node = Ground.task_subgraph.god_nodes_in_scope non-empty. Both-fired ⇒ both items present (order-insensitive, unique).",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "high_complexity",
+              "god_node"
+            ]
+          }
         },
         "suggested_followup": {
           "description": "The recommended follow-up flow (a SIGNAL — orchestrator decides actual queuing/execution).",
@@ -63,9 +111,32 @@
           "$ref": "./_defs.schema.json#/$defs/Depth"
         },
         "evidence": {
-          "description": "god_node ref or complexity ref backing the recommendation.",
-          "type": "string",
-          "minLength": 1
+          "description": "Refs backing the recommendation — an ARRAY of {trigger, ref} entries, one per fired triggered_by item (both-fired ⇒ both a god_node ref and a complexity ref are cited, single-fired ⇒ one). trigger names which signal the ref backs; ref is the god_node ref (trigger=god_node) or complexity ref (trigger=high_complexity). Cardinality/keying to triggered_by (one evidence entry per fired trigger) is an M2 validator_contract; the array shape is closed here.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "trigger",
+              "ref"
+            ],
+            "properties": {
+              "trigger": {
+                "description": "Which fired signal this ref backs (mirrors a triggered_by item).",
+                "type": "string",
+                "enum": [
+                  "high_complexity",
+                  "god_node"
+                ]
+              },
+              "ref": {
+                "description": "god_node ref (trigger=god_node) or complexity ref (trigger=high_complexity) backing the recommendation.",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
         }
       }
     }
@@ -73,7 +144,6 @@
   "required": [
     "result",
     "based_on",
-    "flow_kind",
     "internal_passes",
     "self_misjudgment_check"
   ],
@@ -90,7 +160,7 @@
       ]
     },
     "based_on": {
-      "description": "§5 cross-step refs (Postgres step_runs row ids, NEVER file paths). Verify reads the WHOLE flow chain, so it records the rows it evaluated. spec_ref/test_ref present only on code flows; report_ref present only on non-code flows. triage_ref is the one always-present anchor (every flow starts at Triage).",
+      "description": "§5 cross-step refs (Postgres step_runs row ids, NEVER file paths). Verify reads the WHOLE flow chain, so it records the rows it evaluated. spec_ref/test_ref present only on code flows (FORBIDDEN on non-code via the top-level flow_kind allOf); report_ref present (and REQUIRED) only on non-code flows (FORBIDDEN on code) — Report is the non-code terminal producer anchor. triage_ref is the one always-present anchor (every flow starts at Triage).",
       "type": "object",
       "allOf": [
         {
@@ -108,7 +178,7 @@
       }
     },
     "flow_kind": {
-      "description": "Which internal multi-pass set Verify ran. 'code' = Mechanical/Goal-backward/Adversarial/pyreez (typecheck+tests+firebat+emberdeck). 'non_code' = Completeness/Goal-backward/Adversarial/pyreez. Drives which internal_passes branch is populated.",
+      "description": "Which internal multi-pass set Verify ran. 'code' = Mechanical/Goal-backward/Adversarial/pyreez (typecheck+tests+firebat+emberdeck). 'non_code' = Completeness/Goal-backward/Adversarial/pyreez. Drives which internal_passes branch is populated. REQUIRED on every branch EXCEPT the early-abort blocked branch (result=blocked + escalation.cause=input_precondition_fault + internal_passes.aborted=true), where the chain may be malformed/unreadable and Verify cannot honestly classify flow_kind — there it is conditionally-not-required (NOT defaulted to a fabricated value), and its pass1/based_on couplings are correspondingly lifted. That conditional requirement lives in the top-level allOf.",
       "type": "string",
       "enum": [
         "code",
@@ -120,15 +190,14 @@
       "type": "boolean"
     },
     "internal_passes": {
-      "description": "The internal multi-pass record (Verify's self-verification — there is NO external reviewer). Exactly the four passes for the flow_kind. Pass 1 differs by flow_kind; Passes 2/3/4 are shared in shape. pyreez (Pass 4) and the code-mechanical tools are tool-dependent → DegradableMeasurement.",
+      "description": "The internal multi-pass record (Verify's self-verification — there is NO external reviewer). Exactly the four passes for the flow_kind. Pass 1 differs by flow_kind; Passes 2/3/4 are shared in shape. pyreez (Pass 4) and the code-mechanical tools are tool-dependent → DegradableMeasurement. The populated pass2/3/4 record is required on EVERY branch EXCEPT the early-abort blocked branch (result=blocked + escalation.cause=input_precondition_fault), where Verify bails BEFORE the passes run and instead sets aborted=true — that conditional requirement lives in the top-level allOf, not here (so the not-run case is not forced to fabricate pass records).",
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "pass2_goal_backward",
-        "pass3_adversarial",
-        "pass4_pyreez_cross_verification"
-      ],
       "properties": {
+        "aborted": {
+          "description": "true ⇒ the passes did NOT run because Verify bailed on an input-precondition fault before executing them (result=blocked + escalation.cause=input_precondition_fault). In that case pass2/3/4 populated records are not required. Absent/false ⇒ the passes ran and the full 4-pass record is required (enforced in the top-level allOf).",
+          "type": "boolean"
+        },
         "pass1_mechanical": {
           "description": "CODE-FLOW Pass 1. typecheck + all tests pass + firebat blockers=0 + emberdeck drift=0. EVERY sub-tool is degradable (MCP/CLI can be absent/fail) → DegradableMeasurement, and the counts (tests passed/failed, firebat blockers, emberdeck drift) are CountClaim (R23). Present iff flow_kind='code'.",
           "type": "object",
@@ -139,7 +208,58 @@
             "firebat",
             "emberdeck"
           ],
+          "allOf": [
+            {
+              "$comment": "Defect 8 — mechanical_fallback_used=true is not free-fillable: it asserts a gate sub-tool was construction-ABSENT and the leg fell back to typecheck+tests. So flag=true REQUIRES at least one of firebat/emberdeck to be its Omitted branch (status:'omitted'); otherwise (both Measured) no fallback actually occurred and the flag is forbidden-true. M1-expressible (each sub-tool's Omitted arm has required:['status'] with status const 'omitted'), so closed in grammar rather than left an unverifiable audit flag. flag absent/false is unconstrained.",
+              "if": {
+                "required": [
+                  "mechanical_fallback_used"
+                ],
+                "properties": {
+                  "mechanical_fallback_used": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "firebat": {
+                        "required": [
+                          "status"
+                        ],
+                        "properties": {
+                          "status": {
+                            "const": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "emberdeck": {
+                        "required": [
+                          "status"
+                        ],
+                        "properties": {
+                          "status": {
+                            "const": "omitted"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ],
           "properties": {
+            "mechanical_fallback_used": {
+              "description": "true ⇒ a gate sub-tool (firebat/emberdeck) was construction-ABSENT so the mechanical leg fell back to typecheck+tests (firebat.md/emberdeck.md degrade). The absent sub-tool itself is recorded as its Omitted branch; this flag marks that the fallback path decided the mechanical verdict. Optional (absent ⇒ no fallback was used). COUPLED (allOf above): flag=true REQUIRES at least one of firebat/emberdeck to be its Omitted branch — it cannot be set true when both gate tools are Measured (no fallback actually occurred).",
+              "type": "boolean"
+            },
             "typecheck": {
               "description": "Typecheck result. Degradable (no typecheck command in project ⇒ Omitted{skipped}). Measured.value carries pass/fail + the error CountClaim.",
               "oneOf": [
@@ -451,7 +571,7 @@
           }
         },
         "pass4_pyreez_cross_verification": {
-          "description": "Pass 4 (both flow_kinds, R5). pyreez multi-model cross-verification for high-risk flows. TOOL-DEPENDENT (pyreez can be absent) → DegradableMeasurement: Omitted{unavailable} when pyreez not attached, Omitted{not_applicable} on a non-high-risk flow. Measured.value carries the CrossVerifyFlag result; cross_verify_result='disagree' (opposite verdict) is the self-misjudgment trigger (R2/R5) → result=blocked with escalation.failure_origin=verify (NOT a fail — pyreez disagreement makes Verify distrust its OWN verdict, so it blocks rather than attributing to a producer). pyreez ABSENCE (not disagreement) drives degraded_pass instead.",
+          "description": "Pass 4 (both flow_kinds, R5). pyreez multi-model cross-verification for high-risk flows. TOOL-DEPENDENT (pyreez can be absent) → DegradableMeasurement, but the Omitted arm is TIGHTENED to the 5 pyreez-legal reasons {tool_absent,tool_failed,timeout,unavailable,not_applicable} — 'skipped' is excluded (Ground 'command-not-defined', not applicable to pyreez), single-sourced with degraded_tools.omission. Omitted{unavailable} when pyreez not attached, Omitted{not_applicable} on a non-high-risk flow. Measured.value carries the CrossVerifyFlag result; cross_verify_result='disagree' (opposite verdict) is the self-misjudgment trigger (R2/R5) → result=blocked with escalation.failure_origin=verify (NOT a fail — pyreez disagreement makes Verify distrust its OWN verdict, so it blocks rather than attributing to a producer). pyreez ABSENCE (not disagreement) drives degraded_pass instead.",
           "oneOf": [
             {
               "type": "object",
@@ -489,7 +609,7 @@
                       "type": "boolean"
                     },
                     "cross_verify_result": {
-                      "description": "pyreez verdict vs primary passes. 'disagree' = opposite verdict = self-misjudgment signal (R2) → blocked{escalation.failure_origin:verify}. From shared CrossVerifyFlag.",
+                      "description": "pyreez verdict vs primary passes. 'disagree' = opposite verdict = self-misjudgment signal (R2) → blocked{escalation.failure_origin:verify}. 'agree'/'inconclusive' = cross-verify leg passes (normal aggregation). 'not_run' = pyreez was PRESENT but produced NO cross-verify result (leg did not complete) — distinct from tool ABSENCE (which is the Omitted arm, not Measured). Its aggregation verdict is the SAME degrade-meaning as absence (md §pyreez table `present`+`not_run` row + Multi-pass aggregation rule 6): on a high-risk flow → result=degraded_pass with a degraded_tools entry reason=tool_failed (present-but-no-result), pass4 staying Measured{not_run} to preserve the present fact; on a non-high-risk flow → result=pass (leg not forced). NOT a self-misjudgment (only 'disagree' is). The realized-result mapping (cross_verify_result=not_run ⇒ degrade vs pass by high_risk_flow) is an M2 validator_contract — grammar cannot express the cross-field verdict, but the verdict is no longer silent. From shared CrossVerifyFlag.",
                       "type": "string",
                       "enum": [
                         "agree",
@@ -503,14 +623,42 @@
               }
             },
             {
-              "$ref": "./_defs.schema.json#/$defs/Omitted"
+              "$comment": "pyreez omitted arm — Omitted-shaped but reason TIGHTENED to the 5 values legal for pyreez (excludes 'skipped', which is Ground 'command-not-defined' and NOT applicable to pyreez), single-sourcing the pyreez omission reason vocabulary with degraded_tools.omission. Canonical mapping: absent→tool_absent, error→tool_failed, tool_unavailable→unavailable, tool_timeout→timeout, plus not_applicable (non-high-risk).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "reason",
+                "source_tool"
+              ],
+              "properties": {
+                "status": {
+                  "const": "omitted"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "not_applicable"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "source_tool": {
+                  "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                }
+              }
             }
           ]
         }
       }
     },
     "self_misjudgment_check": {
-      "description": "R2 self-misjudgment detector. Verify suspects its OWN verdict when: (a) pyreez cross-verify gives the OPPOSITE verdict; (b) a Pass 3 adversarial finding overturns Pass 1 mechanical; (c) a post-hoc external signal (user reject / downstream failure); (d) an unattributable_goal_failure (diffuse defect with no step locus). If suspected ⇒ the result MUST be `blocked` with the escalation object carrying failure_origin='verify' (escalate=true / NEEDS_CONTEXT / no auto-reinvoke — prevents infinite self-route). Self-misjudgment is NOT a `fail` (a fail attributes to a producer step); Verify distrusting its own verdict cannot honestly attribute to a producer, so it blocks. This object records WHY (auditable), not the routing.",
+      "description": "R2 self-misjudgment detector. Verify suspects its OWN verdict when: (a) pyreez cross-verify gives the OPPOSITE verdict; (b) a Pass 3 adversarial finding overturns Pass 1 mechanical; (c) a post-hoc external signal (user reject / downstream failure); (d) an unattributable_goal_failure (diffuse defect with no step locus). `suspected` records this R2 truth on EVERY output (top-level required). The REALIZED result follows Trigger precedence: a higher-precedence trigger (retry_exhausted, or a non-self-misjudgment blocked cause — input_precondition_fault/gate_tool_unavailable/stale_2nd_attempt) can co-fire and win, so suspected=true does NOT force result=blocked in that case (it stays honestly true while the realized result follows precedence). The grammar coupling fires only on the REALIZED self-misjudgment block: result=blocked ∧ escalation.cause=verify_self_misjudgment ⇒ escalation.failure_origin='verify' (escalate=true / NEEDS_CONTEXT / no auto-reinvoke — prevents infinite self-route). Self-misjudgment is NOT a `fail` (a fail attributes to a producer step); Verify distrusting its own verdict cannot honestly attribute to a producer, so it blocks. The residual suspected⇒(result,cause) realization under precedence is an M2 validator_contract. This object records WHY (auditable), not the routing.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -518,11 +666,11 @@
       ],
       "properties": {
         "suspected": {
-          "description": "true ⇒ Verify distrusts its own verdict; the result MUST be `blocked` and the escalation object MUST carry failure_origin='verify' with escalate=true (NEEDS_CONTEXT, no auto-reinvoke — prevents infinite self-route).",
+          "description": "true ⇒ Verify distrusts its own verdict (R2 condition is true, recorded honestly). The realized result follows Trigger precedence: absent a higher-precedence trigger this becomes result=blocked with escalation.cause=verify_self_misjudgment + failure_origin='verify' (escalate=true, NEEDS_CONTEXT, no auto-reinvoke); if a higher-precedence trigger co-fired (retry_exhausted / other blocked cause), suspected stays true while the realized result follows precedence (M2 validator_contract).",
           "type": "boolean"
         },
         "triggers": {
-          "description": "Which R2 conditions fired (only present when suspected=true).",
+          "description": "Which R2 conditions fired. Present (non-empty) iff suspected=true; forbidden when suspected=false — coupled in the top-level allOf so a suspected=true output always carries the auditable WHY and a suspected=false output cannot carry stale triggers.",
           "type": "array",
           "items": {
             "type": "string",
@@ -610,7 +758,7 @@
             ],
             "properties": {
               "failure_origin": {
-                "description": "WHICH PRODUCER step the failure is attributed to. STEP-ATTRIBUTION enum only — a strict subset of _defs FailureOrigin that EXCLUDES the control values 'verify' (self-misjudgment routes to `blocked`) and 'cap_exceeded' (routes to `retry_exhausted`). cap/self-misjudgment causes are carried by the escalation/exhaustion `cause` field, NOT by polluting this step-attribution enum (field-type consistency). 'multiple' = several bad steps (route earliest first). 'report' valid only on non-code flows. Drives the produce⇄review re-entry table.",
+                "description": "WHICH PRODUCER step the failure is attributed to. STEP-ATTRIBUTION enum only — a strict subset of _defs FailureOrigin that EXCLUDES the control values 'verify' (self-misjudgment routes to `blocked`) and 'cap_exceeded' (routes to `retry_exhausted`). cap/self-misjudgment causes are carried by the escalation/exhaustion `cause` field, NOT by polluting this step-attribution enum (field-type consistency). 'multiple' = several bad steps (route earliest first). 'report' valid ONLY on non-code flows — forbidden on flow_kind=code via the top-level allOf (homologous to the report_ref-forbidden-on-code constraint). Drives the produce⇄review re-entry table.",
                 "type": "string",
                 "enum": [
                   "triage",
@@ -687,7 +835,8 @@
               "additionalProperties": false,
               "required": [
                 "tool",
-                "omission"
+                "omission",
+                "mandatory_but_unavailable"
               ],
               "properties": {
                 "tool": {
@@ -697,12 +846,39 @@
                   ]
                 },
                 "omission": {
-                  "description": "The Omitted record (shared _defs/Omitted enum). Canonical reason mapping: absent→tool_absent, error→tool_failed, tool_unavailable→unavailable, tool_timeout→timeout, plus not_applicable. reason ∈ {tool_absent, tool_failed, timeout, unavailable, not_applicable}. The mandatory_but_unavailable case is recorded separately via mandatory_but_unavailable=true (high-risk flow whose forced pyreez was absent — verdict still degraded_pass).",
-                  "$ref": "./_defs.schema.json#/$defs/Omitted"
+                  "description": "The Omitted record for the degraded pyreez leg. Shaped like shared _defs/Omitted but the reason is TIGHTENED to the 4 values legal for a degraded pyreez leg — `skipped` (Ground 'command not defined') is NOT applicable to pyreez and is excluded, and `not_applicable` is excluded too (a non-high-risk flow with pyreez absent routes to result=pass, NOT degraded_pass — the degraded_pass branch is only reached on a high-risk forced-pyreez absence/error/timeout, so the not_applicable case never appears here; it lives only in the pass4_pyreez_cross_verification Omitted arm). Canonical reason mapping: absent→tool_absent, error→tool_failed, tool_unavailable→unavailable, tool_timeout→timeout. reason ∈ {tool_absent, tool_failed, timeout, unavailable}. The mandatory_but_unavailable case is recorded separately via mandatory_but_unavailable=true (high-risk flow whose forced pyreez was absent — verdict still degraded_pass). SINGLE-SOURCE M2 validator_contract — the degraded_pass branch has TWO distinct sub-cases, each with its own consistency contract: (A) pyreez ABSENT/error/timeout sub-case — pass4 is the Omitted arm, and this omission and that SAME invocation's internal_passes.pass4_pyreez_cross_verification Omitted arm record the ONE SAME pyreez absence, so their `reason` MUST be EQUAL (pass4.Omitted.reason == degraded_tools[].omission.reason). (B) present-but-no-result (Measured{not_run}) sub-case — pass4 is the Measured arm (cross_verify_result=not_run), which has NO `.reason` field, so the (A) reason-equality is structurally inapplicable; instead the M2 validator requires degraded_tools[].omission.reason == 'tool_failed' AND pass4.value.cross_verify_result == 'not_run' (the present-but-no-result leg is normalized into the omission shape with reason=tool_failed — see md §pyreez table `present`+`not_run` row). Grammar cannot const-bind the equality of two independent objects' reasons (the pass4 Omitted arm additionally allows not_applicable, which never co-occurs with degraded_pass), nor branch the (A)/(B) sub-case on the pass4 arm tag, so each sub-case's mirror is closed by the M2 validator — a producer MUST NOT emit pass4 Omitted{tool_absent} alongside degraded_tools{timeout} (contradictory absence reasons), NOR pass4 Measured{not_run} alongside degraded_tools{omission.reason≠tool_failed}.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "reason",
+                    "source_tool"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "omitted"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "tool_absent",
+                        "tool_failed",
+                        "timeout",
+                        "unavailable"
+                      ]
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "source_tool": {
+                      "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                    }
+                  }
                 },
                 "mandatory_but_unavailable": {
-                  "description": "true ⇒ this was a high-risk flow where pyreez cross-verify was MANDATORY but the tool was absent. Distinguishes from a low-risk legitimately-omitted leg; the verdict is degraded_pass either way (mandatory means try-obligation, not success-precondition — P5).",
-                  "type": "boolean"
+                  "description": "MUST be true on every degraded_tools entry. The degraded_pass branch is reachable ONLY on a high-risk forced-pyreez absence/error/timeout (a low-risk legitimately-omitted leg routes to result=pass, not here), so every entry is by construction the mandatory-but-unavailable case — equivalent to high_risk_flow=true (a separate top-level allOf binds result=degraded_pass ⇒ high_risk_flow=true). Mandatory means try-obligation, not success-precondition (P5); the verdict is degraded_pass.",
+                  "type": "boolean",
+                  "const": true
                 }
               }
             }
@@ -763,7 +939,7 @@
       "then": {
         "properties": {
           "escalation": {
-            "description": "BLOCKED payload — Verify cannot produce its own verdict. Covers ALL non-clean-fail blocked causes: self-misjudgment, gate-tool mechanical error/timeout, stale-2nd-attempt, input-precondition fault. NEEDS_CONTEXT escalation; orchestrator does NOT auto-reinvoke a failure_origin=verify. Flow correlation is the top-level `based_on` RowRef bundle (§5) — this object does not free-fill flow_id/schema_version/verified_at.",
+            "description": "BLOCKED payload — Verify cannot produce its own verdict. Covers ALL non-clean-fail blocked causes: self-misjudgment, gate-tool mechanical error/timeout, stale-2nd-attempt, input-precondition fault. blocked is ALWAYS NEEDS_CONTEXT escalation with NO auto-reinvoke — this disposition is a STRUCTURAL CONSTANT of the blocked branch, so (unlike the sibling `failure` and `exhaustion` payloads, whose escalate flag VARIES — fail is normally escalate=false re-entering the producer loop, exhaustion is const true) there is NO recordable escalate/disposition field here: every blocked is needs-context by construction, the routing follows from cause/failure_origin alone. Flow correlation is the top-level `based_on` RowRef bundle (§5) — this object does not free-fill flow_id/schema_version/verified_at.",
             "type": "object",
             "additionalProperties": false,
             "required": [
@@ -777,7 +953,7 @@
                 "$ref": "#/$defs/EscalationCause"
               },
               "failure_origin": {
-                "description": "Optional STEP-ID locus of the block — ONLY {verify, ground}: verify = self-misjudgment (pyreez disagreement / adversarial-overturns / post_hoc_signal / unattributable_goal_failure); ground = stale_2nd_attempt. Omitted for gate_tool_unavailable / input_precondition_fault (no producer-step attribution). Never a cause value (field-type consistency).",
+                "description": "STEP-ID locus of the block — ONLY {verify, ground}: verify = self-misjudgment (pyreez disagreement / adversarial-overturns / post_hoc_signal / unattributable_goal_failure); ground = stale_2nd_attempt. Omitted for gate_tool_unavailable / input_precondition_fault (no producer-step attribution). REQUIRED + const-bound by cause via the top-level allOf: cause=verify_self_misjudgment ⇒ failure_origin='verify', cause=stale_2nd_attempt ⇒ failure_origin='ground'. Never a cause value (field-type consistency).",
                 "type": "string",
                 "enum": [
                   "verify",
@@ -872,7 +1048,7 @@
                 "minimum": 0
               },
               "last_failure_origin": {
-                "description": "Optional — the STEP-ATTRIBUTION origin of the final failed iteration (the producer that kept failing). Omitted for cap_exceeded (global cap, no single producer). Same step-attribution enum as fail.failure_origin (no verify/cap_exceeded pollution).",
+                "description": "Optional — the STEP-ATTRIBUTION origin of the final failed iteration (the producer that kept failing). Omitted for cap_exceeded (global cap, no single producer). Same step-attribution enum as fail.failure_origin (no verify/cap_exceeded pollution). When 'multiple' (the last iteration's failure spanned several steps), earliest_step disambiguates the left-most problematic step for routing/learning — mirroring the fail payload.",
                 "type": "string",
                 "enum": [
                   "triage",
@@ -885,6 +1061,10 @@
                   "report",
                   "multiple"
                 ]
+              },
+              "earliest_step": {
+                "description": "When last_failure_origin='multiple', the earliest (left-most, chain-order) problematic step the multi-step last failure disambiguates to (shared StepName enum). Required by the M2 validator when last_failure_origin='multiple' (homologous to fail.earliest_step) so a multi-step last-iteration record is never unrecoverable for routing/learning.",
+                "$ref": "./_defs.schema.json#/$defs/StepName"
               },
               "escalate": {
                 "description": "MUST be true — retry_exhausted always halts + escalates; silent proceed is forbidden.",
@@ -905,7 +1085,58 @@
       }
     },
     {
-      "$comment": "flow_kind ⇒ which Pass-1 variant is required (grammar-enforced). code ⇒ pass1_mechanical; non_code ⇒ pass1_completeness. The OTHER variant stays absent (additionalProperties:false on internal_passes already forbids unknown keys, and the unused variant being absent is correct).",
+      "$comment": "Populated 4-pass record is required UNLESS this is the early-abort blocked branch (result=blocked + escalation.cause=input_precondition_fault + internal_passes.aborted=true), where Verify bailed before the passes ran. The `not` matches every case except that exact abort shape; in all matched cases the populated pass2/3/4 record is required. On the abort branch the passes are not required (aborted=true marks the not-run record honestly).",
+      "if": {
+        "not": {
+          "properties": {
+            "result": {
+              "const": "blocked"
+            },
+            "escalation": {
+              "type": "object",
+              "properties": {
+                "cause": {
+                  "const": "input_precondition_fault"
+                }
+              },
+              "required": [
+                "cause"
+              ]
+            },
+            "internal_passes": {
+              "type": "object",
+              "properties": {
+                "aborted": {
+                  "const": true
+                }
+              },
+              "required": [
+                "aborted"
+              ]
+            }
+          },
+          "required": [
+            "result",
+            "escalation",
+            "internal_passes"
+          ]
+        }
+      },
+      "then": {
+        "properties": {
+          "internal_passes": {
+            "type": "object",
+            "required": [
+              "pass2_goal_backward",
+              "pass3_adversarial",
+              "pass4_pyreez_cross_verification"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "$comment": "based_on flow-conditional ref presence (grammar-enforced — prose declared it but it was unencoded). flow_kind=code ⇒ report_ref forbidden (Report is a non-code-only step); flow_kind=non_code ⇒ spec_ref and test_ref forbidden (Spec/Test are code-only steps) AND report_ref REQUIRED (Report is the non-code terminal producer anchor — the non-code chain terminates at Report, so its row is the guaranteed terminal correlation anchor; asymmetric with the code-side report_ref-forbidden constraint). Key-forbidding and key-requiring are both M1-expressible, so closed here rather than left advisory. EARLY-ABORT EXEMPTION: on the abort branch (result=blocked + escalation.cause=input_precondition_fault + internal_passes.aborted=true) the upstream chain is precisely what is malformed/missing, so the non_code report_ref-required / spec_ref+test_ref-forbidden coupling is lifted (the chain just declared malformed cannot be forced to carry a terminal-anchor row — only triage_ref is guaranteed); the inner non_code `if` carries a nested not-aborted guard. The code-side report_ref-forbidden `then` is harmless on abort (forbidding a key is always satisfiable) so it is left unguarded.",
       "if": {
         "required": [
           "flow_kind"
@@ -915,6 +1146,289 @@
             "const": "code"
           }
         }
+      },
+      "then": {
+        "properties": {
+          "based_on": {
+            "type": "object",
+            "properties": {
+              "report_ref": false
+            }
+          }
+        }
+      },
+      "else": {
+        "if": {
+          "allOf": [
+            {
+              "required": [
+                "flow_kind"
+              ],
+              "properties": {
+                "flow_kind": {
+                  "const": "non_code"
+                }
+              }
+            },
+            {
+              "not": {
+                "properties": {
+                  "result": {
+                    "const": "blocked"
+                  },
+                  "escalation": {
+                    "type": "object",
+                    "properties": {
+                      "cause": {
+                        "const": "input_precondition_fault"
+                      }
+                    },
+                    "required": [
+                      "cause"
+                    ]
+                  },
+                  "internal_passes": {
+                    "type": "object",
+                    "properties": {
+                      "aborted": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "aborted"
+                    ]
+                  }
+                },
+                "required": [
+                  "result",
+                  "escalation",
+                  "internal_passes"
+                ]
+              }
+            }
+          ]
+        },
+        "then": {
+          "properties": {
+            "based_on": {
+              "type": "object",
+              "required": [
+                "report_ref"
+              ],
+              "properties": {
+                "spec_ref": false,
+                "test_ref": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "failure_origin='report' is forbidden on a code flow (Report is a non-code-only step), homologous to the based_on.report_ref-forbidden-on-code constraint above and equally M1-expressible. flow_kind=code ⇒ failure.failure_origin MUST NOT be 'report'. (result=fail is the only case carrying `failure`; on non-fail results `failure` is absent so this `if` is vacuous there.)",
+      "if": {
+        "required": [
+          "flow_kind"
+        ],
+        "properties": {
+          "flow_kind": {
+            "const": "code"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "failure": {
+            "type": "object",
+            "properties": {
+              "failure_origin": {
+                "not": {
+                  "const": "report"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "self_misjudgment_check coupling (R2), GATED on trigger precedence. self_misjudgment_check.suspected is a top-level REQUIRED field that records the R2 condition TRUTHFULLY on every output; but the REALIZED result follows Trigger precedence (md §Trigger precedence): a higher-precedence trigger (retry_exhausted rule 1, or a non-self-misjudgment blocked cause — input_precondition_fault/gate_tool_unavailable/stale_2nd_attempt) can co-fire and win, in which case the realized result is NOT the self-misjudgment block. So the coupling binds ONLY when the realized block IS the self-misjudgment one: result=blocked AND escalation.cause=verify_self_misjudgment ⇒ escalation.failure_origin MUST be verify. When a higher-precedence trigger fired, suspected=true is still emitted honestly and this `if` does not match (so it is not rejected). The residual suspected⇒(result,cause) realization under precedence is an M2 validator_contract, not an M1 const binding (precedence is cross-trigger truth grammar cannot express).",
+      "if": {
+        "required": [
+          "self_misjudgment_check",
+          "result"
+        ],
+        "properties": {
+          "self_misjudgment_check": {
+            "type": "object",
+            "required": [
+              "suspected"
+            ],
+            "properties": {
+              "suspected": {
+                "const": true
+              }
+            }
+          },
+          "result": {
+            "const": "blocked"
+          },
+          "escalation": {
+            "type": "object",
+            "required": [
+              "cause"
+            ],
+            "properties": {
+              "cause": {
+                "const": "verify_self_misjudgment"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "escalation"
+        ],
+        "properties": {
+          "escalation": {
+            "type": "object",
+            "required": [
+              "failure_origin"
+            ],
+            "properties": {
+              "failure_origin": {
+                "const": "verify"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "stale_2nd_attempt routing coupling (M1, homologous to the verify_self_misjudgment const binding above). A stale-2nd block is a fixed routing fact: result=blocked AND escalation.cause=stale_2nd_attempt ⇒ escalation.failure_origin MUST be 'ground' (the stale ED is attributed to Ground). Grammar-expressible (const binding), so closed here rather than left optional/M2.",
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "blocked"
+          },
+          "escalation": {
+            "type": "object",
+            "required": [
+              "cause"
+            ],
+            "properties": {
+              "cause": {
+                "const": "stale_2nd_attempt"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "escalation"
+        ],
+        "properties": {
+          "escalation": {
+            "type": "object",
+            "required": [
+              "failure_origin"
+            ],
+            "properties": {
+              "failure_origin": {
+                "const": "ground"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "self_misjudgment_check.triggers presence coupling (M1). triggers is present (minItems 1) iff suspected=true, and forbidden when suspected=false. Closes the 'only present when suspected=true' contract in grammar (homologous to the suspected/verify coupling above): a suspected=true output must carry the auditable WHY, and a suspected=false output cannot carry stale triggers.",
+      "if": {
+        "required": [
+          "self_misjudgment_check"
+        ],
+        "properties": {
+          "self_misjudgment_check": {
+            "type": "object",
+            "required": [
+              "suspected"
+            ],
+            "properties": {
+              "suspected": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "self_misjudgment_check": {
+            "type": "object",
+            "required": [
+              "triggers"
+            ],
+            "properties": {
+              "triggers": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "self_misjudgment_check": {
+            "type": "object",
+            "properties": {
+              "triggers": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "flow_kind ⇒ which Pass-1 variant is required (grammar-enforced). code ⇒ pass1_mechanical; non_code ⇒ pass1_completeness. The OTHER variant stays absent (additionalProperties:false on internal_passes already forbids unknown keys, and the unused variant being absent is correct). EARLY-ABORT EXEMPTION: when result=blocked + escalation.cause=input_precondition_fault + internal_passes.aborted=true, the passes (incl. pass1) did not run, so the flow_kind⇒pass1 coupling is lifted (the `if` requires aborted to be absent/non-true via the nested not).",
+      "if": {
+        "allOf": [
+          {
+            "required": [
+              "flow_kind"
+            ],
+            "properties": {
+              "flow_kind": {
+                "const": "code"
+              }
+            }
+          },
+          {
+            "not": {
+              "properties": {
+                "internal_passes": {
+                  "type": "object",
+                  "properties": {
+                    "aborted": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "aborted"
+                  ]
+                }
+              },
+              "required": [
+                "internal_passes"
+              ]
+            }
+          }
+        ]
       },
       "then": {
         "properties": {
@@ -931,45 +1445,42 @@
             }
           }
         }
-      },
-      "else": {
-        "if": {
-          "required": [
-            "flow_kind"
-          ],
-          "properties": {
-            "flow_kind": {
-              "const": "non_code"
-            }
-          }
-        },
-        "then": {
-          "properties": {
-            "internal_passes": {
-              "type": "object",
-              "required": [
-                "pass1_completeness"
-              ],
-              "properties": {
-                "pass1_completeness": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        }
       }
     },
     {
       "if": {
-        "required": [
-          "flow_kind"
-        ],
-        "properties": {
-          "flow_kind": {
-            "const": "non_code"
+        "allOf": [
+          {
+            "required": [
+              "flow_kind"
+            ],
+            "properties": {
+              "flow_kind": {
+                "const": "non_code"
+              }
+            }
+          },
+          {
+            "not": {
+              "properties": {
+                "internal_passes": {
+                  "type": "object",
+                  "properties": {
+                    "aborted": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "aborted"
+                  ]
+                }
+              },
+              "required": [
+                "internal_passes"
+              ]
+            }
           }
-        }
+        ]
       },
       "then": {
         "properties": {
@@ -982,6 +1493,304 @@
               "pass1_mechanical": false,
               "pass1_completeness": {
                 "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "flow_kind is top-level REQUIRED on every branch EXCEPT the early-abort blocked branch (result=blocked + escalation.cause=input_precondition_fault + internal_passes.aborted=true), where the chain may be malformed/unreadable so Verify cannot honestly classify flow_kind and MUST NOT fabricate a default (garbage-in is not coerced to a concrete classification). The `not` matches every case except that exact abort shape; in all matched cases flow_kind is required. On the abort branch flow_kind is optional (and if present must still be code|non_code per the property schema). Homologous to the internal_passes/pass1/based_on early-abort exemptions.",
+      "if": {
+        "not": {
+          "properties": {
+            "result": {
+              "const": "blocked"
+            },
+            "escalation": {
+              "type": "object",
+              "properties": {
+                "cause": {
+                  "const": "input_precondition_fault"
+                }
+              },
+              "required": [
+                "cause"
+              ]
+            },
+            "internal_passes": {
+              "type": "object",
+              "properties": {
+                "aborted": {
+                  "const": true
+                }
+              },
+              "required": [
+                "aborted"
+              ]
+            }
+          },
+          "required": [
+            "result",
+            "escalation",
+            "internal_passes"
+          ]
+        }
+      },
+      "then": {
+        "required": [
+          "flow_kind"
+        ]
+      }
+    },
+    {
+      "$comment": "early-abort ⇒ self_misjudgment_check.suspected MUST be false (R2 not evaluable — no pass ran), which by the triggers presence coupling also forbids `triggers`. On result=blocked + escalation.cause=input_precondition_fault + internal_passes.aborted=true, no pass executed so a self-misjudgment cannot honestly be suspected; fabricating suspected=true on a not-run record is forbidden.",
+      "if": {
+        "required": [
+          "result",
+          "escalation",
+          "internal_passes"
+        ],
+        "properties": {
+          "result": {
+            "const": "blocked"
+          },
+          "escalation": {
+            "type": "object",
+            "required": [
+              "cause"
+            ],
+            "properties": {
+              "cause": {
+                "const": "input_precondition_fault"
+              }
+            }
+          },
+          "internal_passes": {
+            "type": "object",
+            "required": [
+              "aborted"
+            ],
+            "properties": {
+              "aborted": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "self_misjudgment_check"
+        ],
+        "properties": {
+          "self_misjudgment_check": {
+            "type": "object",
+            "properties": {
+              "suspected": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "blocked_on presence coupling (M1). result=blocked AND escalation.cause=gate_tool_unavailable ⇒ escalation.blocked_on REQUIRED (minItems 1) — the auditable record of WHICH gate (firebat/emberdeck) blocked the verdict and why it could not be degraded around. Mirrors the verify_self_misjudgment/stale_2nd_attempt cause⇒field const-couplings. For other blocked causes blocked_on is absent (the array is gate-tool-specific).",
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "blocked"
+          },
+          "escalation": {
+            "type": "object",
+            "required": [
+              "cause"
+            ],
+            "properties": {
+              "cause": {
+                "const": "gate_tool_unavailable"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "escalation"
+        ],
+        "properties": {
+          "escalation": {
+            "type": "object",
+            "required": [
+              "blocked_on"
+            ],
+            "properties": {
+              "blocked_on": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "degraded_pass is reachable ONLY on a high-risk forced-pyreez absence/error/timeout (a low-risk legitimately-omitted leg routes to result=pass with pass4 Omitted{not_applicable}). So result=degraded_pass ⇒ high_risk_flow=true — making high_risk_flow REQUIRED and const true on this branch, consistent with every degraded_tools entry carrying mandatory_but_unavailable=true. Binds the branch's reachability rationale into grammar.",
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "degraded_pass"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "high_risk_flow"
+        ],
+        "properties": {
+          "high_risk_flow": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "$comment": "EscalationCause partition closed in M1 (prose L267/L286 + the cause field descriptions). The shared 6-value EscalationCause is $ref'd by BOTH escalation.cause (blocked) and exhaustion.cause (retry_exhausted) for field-type consistency; these two if/then blocks NARROW it per branch so grammar forbids the cross-product. result=blocked ⇒ escalation.cause ∈ the 4 block causes {verify_self_misjudgment,gate_tool_unavailable,stale_2nd_attempt,input_precondition_fault}; result=retry_exhausted ⇒ exhaustion.cause ∈ the 2 cap causes {retry_cap,cap_exceeded}.",
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "blocked"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "escalation": {
+            "type": "object",
+            "properties": {
+              "cause": {
+                "enum": [
+                  "verify_self_misjudgment",
+                  "gate_tool_unavailable",
+                  "stale_2nd_attempt",
+                  "input_precondition_fault"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "retry_exhausted"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exhaustion": {
+            "type": "object",
+            "properties": {
+              "cause": {
+                "enum": [
+                  "retry_cap",
+                  "cap_exceeded"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "Defect 2 — failure_origin attribution is OMITTED for non-attributing block causes (prose L268). failure_origin is const-coupled to verify (cause=verify_self_misjudgment) and ground (cause=stale_2nd_attempt) above; for gate_tool_unavailable/input_precondition_fault there is NO producer-step attribution, so failure_origin must be forbidden — otherwise grammar would permit e.g. cause=gate_tool_unavailable + failure_origin=verify, an attribution prose forbids.",
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "blocked"
+          },
+          "escalation": {
+            "type": "object",
+            "required": [
+              "cause"
+            ],
+            "properties": {
+              "cause": {
+                "enum": [
+                  "gate_tool_unavailable",
+                  "input_precondition_fault"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "escalation": {
+            "type": "object",
+            "properties": {
+              "failure_origin": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "Defect 5 / robustness — input_precondition_fault FORCES the early-abort bail state. Prose L69 says Verify bails BEFORE the passes execute on an input-precondition fault, and the entire early-abort exemption machinery (4-pass / flow_kind / based_on / suspected couplings) keys on the exact triple result=blocked + escalation.cause=input_precondition_fault + internal_passes.aborted=true. Nothing otherwise ties cause=input_precondition_fault to aborted=true, so a producer could emit the fault WITHOUT aborted and re-trigger the full populated-record requirement. This binds internal_passes.aborted const true on that cause so the bail state is grammar-forced (matching prose L69 'passes 돌기 전 bail').",
+      "if": {
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "const": "blocked"
+          },
+          "escalation": {
+            "type": "object",
+            "required": [
+              "cause"
+            ],
+            "properties": {
+              "cause": {
+                "const": "input_precondition_fault"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "internal_passes"
+        ],
+        "properties": {
+          "internal_passes": {
+            "type": "object",
+            "required": [
+              "aborted"
+            ],
+            "properties": {
+              "aborted": {
+                "const": true
               }
             }
           }

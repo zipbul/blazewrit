@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>blazewrit — InputRequest 5종 시안</title>
+<style>
+  :root{
+    --bg:#15100a; --fg:#efe3cf; --panel:rgba(34,26,16,.72); --rim:rgba(245,227,207,.09);
+    --muted:#a8967a; --faint:#6f6453;
+    --primary:#e06b2e; --accent:#d4a24a; --warning:#e9b85c; --danger:#d2553f;
+    --blue:#8fd7ff; --green:#9fe6b4; --violet:#c9a9ff;
+    --elev2:rgba(255,235,210,.07); --elev3:rgba(255,235,210,.10);
+    --mono:'Spline Sans Mono',ui-monospace,'SFMono-Regular',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;font-family:var(--mono);color:var(--fg);
+    background:radial-gradient(900px 520px at 50% 6%, rgba(224,107,46,.10), transparent 60%), var(--bg);
+    display:flex;justify-content:center;padding:24px 16px 64px}
+  .wrap{width:720px;max-width:100%}
+  h1{font-size:1rem;color:var(--muted);font-weight:600;margin:0 0 4px} h1 b{color:var(--primary)}
+  .sub{color:var(--faint);font-size:.8rem;margin:0 0 18px;line-height:1.5}
+  .sub b{color:var(--accent)}
+
+  .kindcard{position:relative;background:var(--panel);border:1px solid var(--rim);border-radius:12px;
+    padding:13px 15px 14px 17px;margin-bottom:15px;overflow:hidden}
+  .kindcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c)}
+  .khead{display:flex;align-items:center;gap:8px;margin-bottom:9px;flex-wrap:wrap}
+  .badge{font:700 10px var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--bg);background:var(--c);border-radius:6px;padding:2px 7px}
+  .tier{font:700 9px var(--mono);letter-spacing:.04em;border-radius:5px;padding:2px 6px;border:1px solid currentColor}
+  .tier.low{color:var(--green)} .tier.high{color:var(--danger)}
+  .when{font-size:11px;color:var(--faint)}
+
+  .q{font-size:14px;font-weight:600;margin:0 0 9px}
+  .why{margin:-2px 0 9px} .why summary{cursor:pointer;color:var(--muted);font-size:11px;list-style:none}
+  .why summary::before{content:'▸ ';color:var(--faint)} .why .body{color:var(--muted);font-size:11.5px;line-height:1.5;margin-top:5px}
+  .params{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px}
+  .tag{font:600 11px var(--mono);border-radius:999px;padding:2px 8px;color:var(--muted);background:var(--elev2)}
+  .tag.v{color:#ffb347}.tag.t{color:var(--blue)}
+
+  .row{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+  .btn{font:700 12px var(--mono);color:var(--fg);background:var(--elev2);border:0;border-radius:8px;padding:7px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .btn:hover{background:var(--elev3)} .btn .k{font-size:9px;color:var(--accent);background:rgba(212,162,74,.16);border-radius:4px;padding:0 4px}
+  .btn.ok{background:linear-gradient(135deg,#ff7a1a,#ffb347);color:#1a0f06}.btn.ok .k{color:#1a0f06;background:rgba(0,0,0,.18)}
+  .btn.no{color:#f3b6a9} .btn.ghost{background:transparent;color:var(--faint)}
+  .btn.danger{background:var(--danger);color:#fff0e2}.btn.danger .k{color:#fff0e2;background:rgba(0,0,0,.22)}
+  .chip{font:600 12px var(--mono);color:var(--fg);background:var(--elev2);border:0;border-radius:999px;padding:7px 13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .chip:hover{background:var(--elev3)} .chip .k{font-size:9px;color:var(--accent)}
+  .chip.sel{background:rgba(224,107,46,.22);box-shadow:inset 0 0 0 1px var(--primary)}
+  .note{font-size:10.5px;color:var(--faint);margin-top:7px}
+  .ortext{font-size:10px;color:var(--faint);margin:9px 0 4px}
+  .pill{display:flex;gap:8px;align-items:center}
+  .pill input{flex:1;background:var(--elev2);border:0;border-radius:999px;color:var(--fg);font:inherit;padding:8px 13px;outline:none}
+  .pill input::placeholder{color:var(--faint)}
+  .send{flex:0 0 auto;width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#ff7a1a,#ffb347);color:#1a0f06;border:0;cursor:pointer;font-size:15px}
+
+  /* FORM fields */
+  .field{margin-bottom:9px} .field label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px}
+  .field input{width:100%;background:var(--elev2);border:0;border-radius:8px;color:var(--fg);font:inherit;padding:8px 11px;outline:none}
+  .field .hint{font-size:10px;color:var(--faint);margin-top:3px}
+  .field.num input{width:120px}
+
+  .defer{font-size:10.5px;color:var(--faint);margin-top:9px;display:flex;gap:6px;align-items:center}
+  .defer .k{color:var(--accent)}
+
+  .answered{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;background:rgba(255,235,210,.03);border-radius:10px;padding:9px 13px;margin-bottom:15px}
+  .answered .c{color:var(--accent);font-weight:700} .answered .undo{margin-left:auto;color:var(--faint);font-size:11px}
+  .modnote{color:var(--faint);font-size:11px;margin:2px 0 14px;line-height:1.5}
+  .modnote b{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><b>🜂 blazewrit</b> · 입력 요청(InputRequest) — 5종</h1>
+  <p class="sub">왼쪽 색 띠 = kind. <b>risk 티어</b>(confirm 흡수)와 <b>나중에(defer)</b>는 kind가 아니라 모든 종류에 붙는 모디파이어. 전부 dock 채팅 안 인라인 · 키보드 · 답하면 ✓ 한 줄로 접힘.</p>
+
+  <!-- ACTION (low risk) -->
+  <div class="kindcard" style="--c:var(--primary)">
+    <div class="khead"><span class="badge">action</span><span class="tier low">risk: low</span><span class="when">상태변경 제안 — 저위험: 원클릭 + 실행취소(확인창 없음)</span></div>
+    <p class="q">장바구니에 “위시리스트” 기능 작업을 만들까요?</p>
+    <div class="params"><span class="tag v">create_task</span><span class="tag t">→ 장바구니</span><span class="tag">flow: feature</span></div>
+    <details class="why"><summary>왜 · 영향</summary><div class="body">기존 작업과 중복 없음 · 장바구니 단독, 결제/쿠폰 의존 없음.</div></details>
+    <div class="row"><button class="btn ok"><span class="k">Y</span>승인</button><button class="btn"><span class="k">E</span>수정</button><button class="btn no"><span class="k">N</span>거부</button></div>
+    <div class="defer"><span class="k">.</span> 나중에 — 질문함으로 미룸</div>
+  </div>
+
+  <!-- ACTION (high risk = confirm tier) -->
+  <div class="kindcard" style="--c:var(--danger)">
+    <div class="khead"><span class="badge" style="--c:var(--danger)">action</span><span class="tier high">risk: high · 확인</span><span class="when">파괴적 — 기본값 없음, 명시 확인(예전 CONFIRM = 이 티어)</span></div>
+    <p class="q">‼ 「결제」 프로젝트를 삭제할까요? 작업 5건이 함께 사라집니다.</p>
+    <div class="params"><span class="tag v">delete_project</span><span class="tag t">결제</span></div>
+    <div class="row"><button class="btn danger"><span class="k">⏎</span>삭제 확인</button><button class="btn no"><span class="k">Esc</span>취소</button></div>
+    <div class="note">기본 포커스 없음 · 되돌리기 불가라 Undo 대신 명시 확인</div>
+  </div>
+
+  <!-- CHOICE -->
+  <div class="kindcard" style="--c:var(--blue)">
+    <div class="khead"><span class="badge" style="--c:var(--blue)">choice</span><span class="when">후보 중 하나 (번호키 1~9, 7개↑면 타입어헤드)</span></div>
+    <p class="q">어느 프로젝트의 일인가요?</p>
+    <div class="row"><button class="chip"><span class="k">1</span>배송</button><button class="chip"><span class="k">2</span>결제</button><button class="chip"><span class="k">3</span>쿠폰</button></div>
+    <div class="ortext">또는 직접 입력 ↓</div>
+    <div class="pill"><input placeholder="프로젝트 이름…"><button class="send">↑</button></div>
+  </div>
+
+  <!-- MULTI -->
+  <div class="kindcard" style="--c:var(--green)">
+    <div class="khead"><span class="badge" style="--c:var(--green)">multi</span><span class="when">여러 개 (Space 토글 · Enter 제출, 즉시반영 아님)</span></div>
+    <p class="q">어떤 알림을 켤까요? <span style="color:var(--faint);font-weight:400">(해당 항목 모두)</span></p>
+    <div class="row"><button class="chip sel">☑ 완료 시</button><button class="chip">☐ 실패 시</button><button class="chip sel">☑ 결정 필요</button></div>
+    <div class="row" style="margin-top:9px"><button class="btn ok"><span class="k">⏎</span>제출 (2개)</button></div>
+  </div>
+
+  <!-- FORM (new) -->
+  <div class="kindcard" style="--c:var(--violet)">
+    <div class="khead"><span class="badge" style="--c:var(--violet)">form</span><span class="tier low">risk: 제출=action</span><span class="when">한 번에 여러 값 (신규 프로젝트·연결) — 에이전트가 미리 채움, 델타만 수정</span></div>
+    <p class="q">새 프로젝트 등록</p>
+    <div class="field"><label>이름</label><input value="재고관리"></div>
+    <div class="field"><label>repo 경로</label><input value="github.com/zipbul/inventory"><div class="hint">에이전트 추정 — 틀리면 고치세요</div></div>
+    <div class="field num"><label>동시 실행 (valueType: number)</label><input value="3"><div class="hint">1–8</div></div>
+    <div class="row"><button class="btn ok"><span class="k">⏎</span>등록</button><button class="btn no"><span class="k">Esc</span>취소</button></div>
+  </div>
+
+  <!-- TEXT -->
+  <div class="kindcard" style="--c:var(--muted)">
+    <div class="khead"><span class="badge" style="--c:var(--muted)">text</span><span class="when">자유 입력 — 숫자·날짜·파일첨부는 여기 필드타입/affordance로 흡수</span></div>
+    <p class="q">이 버그가 어떤 상황에서 나는지 알려주세요. <span style="color:var(--faint);font-weight:400">(로그 붙여넣기/드롭 가능)</span></p>
+    <div class="pill"><input placeholder="여기에 답하세요…  📎 붙여넣기/드롭"><button class="send">↑</button></div>
+  </div>
+
+  <!-- answered collapsed -->
+  <div class="answered"><span class="c">✓</span> 배송으로 진행 — 작업 카드 생성됨 <span class="undo">실행취소</span></div>
+
+  <p class="modnote">
+    <b>risk 티어</b>: 저위험=원클릭+실행취소 / 고위험=명시 확인(기본값 없음). 별도 kind 아님 — 같은 데이터 모양, 스타일만.<br>
+    <b>나중에(defer)</b>: 모든 kind에서 <b style="color:var(--accent)">.</b>/Esc로 질문함에 미룸(거부와 다름) · 마감 TTL + 자동 에스컬레이션.<br>
+    <b>제외</b>: 랭킹/정렬 → Board, 실행제어(중지/재개) → 별도 surface.
+  </p>
+</div>
+</body>
+</html>

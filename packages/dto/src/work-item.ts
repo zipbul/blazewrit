@@ -15,6 +15,8 @@ export class WorkItemDto {
   @Field(isInt) priority!: number;
   @Field(isEnum(WORK_ITEM_SOURCES)) source!: (typeof WORK_ITEM_SOURCES)[number];
   @Field(isString, { optional: true }) activeFlowId?: string;
+  /** Correlates cross-project realizations of one user intent (A2A contextId). */
+  @Field(isString, { optional: true }) contextId?: string;
   @Field(isISO8601(), { optional: true }) completedAt?: string;
   @Field(isISO8601()) createdAt!: string;
   @Field(isISO8601()) updatedAt!: string;

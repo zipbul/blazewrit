@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>blazewrit — Side Rail</title>
+<style>
+:root{
+  --bg:#15100a; --fg:#efe3cf; --card:rgba(31,24,16,0.55); --popover:#1f1810;
+  --muted:#a8967a; --faint:#6f6453; --primary:#e06b2e; --accent:#d4a24a;
+  --ring:#e06b2e; --destructive:#d2553f; --success:#d4a24a; --warning:#e9b85c;
+  --mono:'Spline Sans Mono',ui-monospace,Consolas,monospace;
+  --glass-bd:rgba(212,162,74,0.16);
+  --shadow:0 18px 48px rgba(0,0,0,0.55);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:
+    radial-gradient(1100px 620px at 60% 8%, rgba(224,107,46,0.10), transparent 60%),
+    radial-gradient(820px 520px at 18% 92%, rgba(212,162,74,0.06), transparent 60%),
+    var(--bg);
+  color:var(--fg);
+  font-family:var(--mono);
+  font-size:13px;
+  -webkit-font-smoothing:antialiased;
+  display:flex; align-items:center; justify-content:center;
+  min-height:100vh; padding:24px;
+}
+.app{
+  width:1320px; height:860px;
+  border:1px solid var(--glass-bd);
+  border-radius:18px;
+  background:rgba(21,16,10,0.6);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+  display:flex; flex-direction:column;
+  position:relative;
+}
+
+/* ---------- HEADER ---------- */
+.header{
+  height:54px; flex:0 0 54px;
+  display:flex; align-items:center; gap:18px;
+  padding:0 18px;
+  background:linear-gradient(180deg, rgba(43,32,20,0.72), rgba(28,21,13,0.6));
+  border-bottom:1px solid var(--glass-bd);
+  backdrop-filter:blur(14px);
+  position:relative; z-index:5;
+}
+.brand{font-size:15px; font-weight:600; letter-spacing:.4px; color:var(--fg); display:flex; align-items:center; gap:7px}
+.brand .glyph{color:var(--primary); text-shadow:0 0 10px rgba(224,107,46,0.6)}
+.nav{display:flex; gap:2px; padding:3px; border-radius:11px;
+  background:rgba(0,0,0,0.28); border:1px solid var(--glass-bd)}
+.nav .tab{padding:5px 14px; border-radius:8px; color:var(--muted); font-size:12.5px; cursor:default}
+.nav .tab.on{background:linear-gradient(180deg, rgba(224,107,46,0.28), rgba(224,107,46,0.12));
+  color:var(--fg); box-shadow:inset 0 0 0 1px rgba(224,107,46,0.4), 0 0 12px rgba(224,107,46,0.18)}
+.spacer{flex:1}
+.hstat{display:flex; align-items:center; gap:14px; color:var(--muted); font-size:12px}
+.hstat .flag{color:var(--accent)}
+.hstat b{color:var(--fg); font-weight:600}
+.kbd{padding:3px 8px; border-radius:7px; border:1px solid var(--glass-bd);
+  background:rgba(0,0,0,0.3); color:var(--fg); font-size:11.5px}
+
+/* ---------- BODY GRID ---------- */
+.body{flex:1; display:flex; min-height:0; position:relative}
+
+/* ---------- LEFT RAIL ---------- */
+.rail{
+  width:260px; flex:0 0 260px;
+  border-right:1px solid var(--glass-bd);
+  background:linear-gradient(180deg, rgba(33,25,16,0.6), rgba(24,18,11,0.5));
+  backdrop-filter:blur(12px);
+  display:flex; flex-direction:column;
+  transition:width .28s cubic-bezier(.4,.0,.2,1), flex-basis .28s cubic-bezier(.4,.0,.2,1);
+  overflow:hidden;
+}
+.rail-head{
+  height:46px; flex:0 0 46px; display:flex; align-items:center; justify-content:space-between;
+  padding:0 14px; border-bottom:1px solid var(--glass-bd);
+  font-size:12px; color:var(--muted); letter-spacing:.5px;
+}
+.rail-head .ttl{color:var(--fg); font-size:13px; font-weight:600}
+.collapse-btn{
+  display:flex; align-items:center; gap:5px;
+  padding:4px 9px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--glass-bd); background:rgba(0,0,0,0.25);
+  color:var(--muted); font-family:var(--mono); font-size:11.5px;
+}
+.collapse-btn:hover{color:var(--fg); border-color:rgba(224,107,46,0.4)}
+.rail-body{flex:1; overflow:auto; padding:10px 8px}
+
+.pinned{
+  display:flex; align-items:center; gap:10px;
+  padding:9px 10px; border-radius:11px;
+  background:linear-gradient(180deg, rgba(224,107,46,0.16), rgba(224,107,46,0.05));
+  border:1px solid rgba(224,107,46,0.32);
+  box-shadow:inset 0 0 0 1px rgba(224,107,46,0.06), 0 0 16px rgba(224,107,46,0.1);
+  cursor:pointer;
+}
+.pinned .dot{width:9px;height:9px;border-radius:50%;background:var(--primary);
+  box-shadow:0 0 9px var(--primary); flex:0 0 auto}
+.pinned .txt{flex:1}
+.pinned .name{color:var(--fg); font-size:13px; font-weight:600}
+.pinned .sub{color:var(--accent); font-size:11px; margin-top:2px}
+
+.divider{height:1px; background:var(--glass-bd); margin:11px 6px}
+.grp-label{color:var(--faint); font-size:10.5px; letter-spacing:1.2px; padding:2px 8px 7px; text-transform:uppercase}
+
+.prow{
+  display:flex; align-items:center; gap:9px;
+  padding:8px 10px; border-radius:10px; cursor:pointer;
+  color:var(--fg); font-size:12.5px;
+}
+.prow:hover{background:rgba(212,162,74,0.07)}
+.prow .car{color:var(--faint); width:11px; flex:0 0 auto}
+.prow .pn{flex:1; display:flex; align-items:center; gap:6px}
+.prow .cnt{color:var(--muted); font-size:11px}
+.prow .badge{display:flex; align-items:center; gap:3px; font-size:11px}
+.prow .needs{color:var(--accent)}
+.prow .work{color:var(--warning)}
+.prow .unread{width:7px;height:7px;border-radius:50%;background:var(--primary);
+  box-shadow:0 0 7px var(--primary)}
+.prow.sel{background:rgba(224,107,46,0.12); box-shadow:inset 0 0 0 1px rgba(224,107,46,0.3)}
+
+.newconv{
+  margin:8px 6px 4px; padding:9px 11px; border-radius:10px;
+  border:1px dashed var(--glass-bd); color:var(--muted); font-size:12px; cursor:pointer;
+  text-align:left;
+}
+.newconv:hover{color:var(--fg); border-color:rgba(224,107,46,0.4)}
+
+/* collapsed spine */
+.rail.collapsed{width:56px; flex-basis:56px}
+.rail.collapsed .rail-body, .rail.collapsed .rail-head .ttl{display:none}
+.rail.collapsed .rail-head{justify-content:center; padding:0}
+.spine{display:none; flex-direction:column; align-items:center; gap:6px; padding:12px 0}
+.rail.collapsed .spine{display:flex}
+.spine .sp{
+  width:38px;height:38px;border-radius:11px; display:flex; align-items:center; justify-content:center;
+  position:relative; cursor:pointer; color:var(--muted); font-size:15px;
+  border:1px solid transparent;
+}
+.spine .sp:hover{background:rgba(212,162,74,0.08); color:var(--fg)}
+.spine .sp.center{color:var(--primary); border-color:rgba(224,107,46,0.4);
+  background:rgba(224,107,46,0.12); box-shadow:0 0 12px rgba(224,107,46,0.18)}
+.spine .sp .flag-mini{position:absolute; top:-3px; right:-1px; font-size:9px; color:var(--accent)}
+
+/* ---------- CENTER CANVAS ---------- */
+.canvas{
+  flex:1; min-width:0; position:relative; overflow:hidden;
+  background:
+    radial-gradient(900px 600px at 50% 40%, rgba(224,107,46,0.05), transparent 70%);
+}
+.canvas-ctrls{
+  position:absolute; top:14px; left:50%; transform:translateX(-50%);
+  display:flex; gap:8px; z-index:6;
+}
+.cc{
+  padding:6px 13px; border-radius:9px; font-size:12px; cursor:pointer;
+  border:1px solid var(--glass-bd); background:rgba(31,24,16,0.7);
+  color:var(--fg); backdrop-filter:blur(8px);
+}
+.cc:hover{border-color:rgba(224,107,46,0.4)}
+.cc.prim{background:linear-gradient(180deg, rgba(224,107,46,0.3), rgba(224,107,46,0.14));
+  border-color:rgba(224,107,46,0.5)}
+
+/* SVG edge layer */
+.edges{position:absolute; inset:0; pointer-events:none; z-index:1}
+
+/* hearths */
+.hearth{
+  position:absolute; width:188px;
+  border-radius:16px; padding:14px;
+  background:linear-gradient(180deg, rgba(40,30,19,0.66), rgba(26,20,12,0.6));
+  border:1px solid var(--glass-bd);
+  backdrop-filter:blur(10px);
+  box-shadow:var(--shadow);
+  z-index:3;
+}
+.hearth.lit{
+  border-color:rgba(224,107,46,0.45);
+  box-shadow:0 18px 48px rgba(0,0,0,0.55), 0 0 26px rgba(224,107,46,0.22);
+}
+.hearth.idle{opacity:0.72; filter:saturate(.6)}
+.hearth.ring{box-shadow:0 0 0 2px var(--ring), 0 18px 48px rgba(0,0,0,0.55), 0 0 30px rgba(224,107,46,0.3)}
+.h-top{display:flex; align-items:center; gap:9px; margin-bottom:4px}
+.h-ico{font-size:19px; filter:drop-shadow(0 0 8px rgba(224,107,46,0.5))}
+.hearth.idle .h-ico{filter:none}
+.h-name{font-size:14px; font-weight:600; color:var(--fg); flex:1}
+.h-state{font-size:11.5px; color:var(--accent); margin-bottom:11px; display:flex; align-items:center; gap:5px}
+.hearth.idle .h-state{color:var(--muted)}
+.chips{display:flex; flex-wrap:wrap; gap:6px}
+.chip{
+  display:flex; align-items:center; gap:5px;
+  padding:4px 9px; border-radius:8px; font-size:11px;
+  background:rgba(0,0,0,0.28); border:1px solid var(--glass-bd); color:var(--fg);
+}
+.chip .e{width:6px;height:6px;border-radius:50%;background:var(--warning);
+  box-shadow:0 0 6px var(--warning)}
+.chip.dec{background:linear-gradient(180deg, rgba(212,162,74,0.34), rgba(212,162,74,0.16));
+  border-color:rgba(212,162,74,0.55); color:#1a130a; font-weight:600}
+.chip.dec .e{background:#1a130a; box-shadow:none}
+.chip.dec.sel{box-shadow:0 0 0 2px var(--ring), 0 0 14px rgba(224,107,46,0.4)}
+.chip .fl{color:inherit}
+
+/* positions */
+#h-auth{left:60px; top:150px}
+#h-bill{left:330px; top:430px}
+#h-web{left:560px; top:120px}
+
+/* peek card */
+.peek{
+  position:absolute; left:540px; top:520px; width:264px; z-index:7;
+  border-radius:14px; overflow:hidden;
+  background:linear-gradient(180deg, rgba(36,27,17,0.93), rgba(27,20,12,0.93));
+  border:1px solid rgba(224,107,46,0.4);
+  box-shadow:0 22px 54px rgba(0,0,0,0.6), 0 0 24px rgba(224,107,46,0.16);
+  backdrop-filter:blur(12px);
+}
+.peek-head{
+  display:flex; align-items:center; gap:7px;
+  padding:9px 12px; border-bottom:1px solid var(--glass-bd);
+  font-size:12px; color:var(--muted);
+}
+.peek-head .g{color:var(--primary)}
+.peek-head b{color:var(--fg); font-weight:600}
+.peek-body{padding:11px 12px; display:flex; flex-direction:column; gap:9px}
+.msg{display:flex; gap:8px; align-items:flex-start; font-size:12px; line-height:1.5}
+.msg .who{flex:0 0 auto; color:var(--accent); font-size:11px; padding-top:1px}
+.msg .who.me{color:var(--muted)}
+.msg .bub{
+  background:rgba(0,0,0,0.3); border:1px solid var(--glass-bd);
+  border-radius:9px; padding:7px 10px; color:var(--fg);
+}
+.mention{
+  color:var(--primary); background:rgba(224,107,46,0.16);
+  border:1px solid rgba(224,107,46,0.4); border-radius:6px;
+  padding:1px 6px; font-size:11px; cursor:pointer;
+}
+.refwire{color:var(--accent); text-shadow:0 0 8px rgba(212,162,74,0.7); cursor:pointer}
+.peek-foot{padding:10px 12px; border-top:1px solid var(--glass-bd)}
+.notify-btn{
+  width:100%; padding:8px; border-radius:9px; cursor:pointer;
+  background:linear-gradient(180deg, rgba(224,107,46,0.26), rgba(224,107,46,0.12));
+  border:1px solid rgba(224,107,46,0.5); color:var(--fg);
+  font-family:var(--mono); font-size:12px;
+}
+.notify-btn:hover{background:linear-gradient(180deg, rgba(224,107,46,0.36), rgba(224,107,46,0.18))}
+
+/* auto-bank note */
+.bank-note{
+  position:absolute; left:18px; bottom:16px; max-width:330px; z-index:6;
+  padding:10px 13px; border-radius:11px;
+  background:rgba(20,15,9,0.82); border:1px solid var(--glass-bd);
+  backdrop-filter:blur(10px);
+  color:var(--muted); font-size:11px; line-height:1.55;
+}
+.bank-note b{color:var(--accent); letter-spacing:.5px}
+
+/* ---------- RIGHT DRAWER ---------- */
+.drawer{
+  width:300px; flex:0 0 300px;
+  border-left:1px solid var(--glass-bd);
+  background:linear-gradient(180deg, rgba(33,25,16,0.62), rgba(24,18,11,0.52));
+  backdrop-filter:blur(12px);
+  display:flex; flex-direction:column;
+}
+.dr-head{
+  height:46px; flex:0 0 46px; display:flex; align-items:center; gap:8px;
+  padding:0 15px; border-bottom:1px solid var(--glass-bd);
+  font-size:13px; color:var(--fg); font-weight:600;
+}
+.dr-head .cnt{margin-left:auto; font-size:11px; color:#1a130a; font-weight:700;
+  background:var(--accent); padding:2px 8px; border-radius:20px}
+.dr-body{flex:1; overflow:auto; padding:13px}
+
+.qcard{
+  border-radius:13px; padding:13px;
+  background:linear-gradient(180deg, rgba(40,30,19,0.7), rgba(27,20,12,0.66));
+  border:1px solid rgba(212,162,74,0.34);
+  box-shadow:inset 0 0 0 1px rgba(212,162,74,0.05), 0 10px 26px rgba(0,0,0,0.4);
+}
+.qc-top{display:flex; align-items:center; gap:8px; margin-bottom:9px}
+.qc-agent{
+  font-size:11px; color:var(--accent); padding:2px 8px; border-radius:7px;
+  background:rgba(212,162,74,0.12); border:1px solid rgba(212,162,74,0.3);
+}
+.qc-wait{margin-left:auto; font-size:11px; color:var(--warning); display:flex; align-items:center; gap:4px}
+.qc-q{font-size:13px; color:var(--fg); line-height:1.5; margin-bottom:13px}
+.qc-q .label{color:var(--muted)}
+.qc-actions{display:flex; gap:8px}
+.btn{flex:1; padding:8px; border-radius:9px; cursor:pointer; font-family:var(--mono); font-size:12px}
+.btn.ok{background:linear-gradient(180deg, rgba(212,162,74,0.32), rgba(212,162,74,0.16));
+  border:1px solid rgba(212,162,74,0.55); color:var(--fg)}
+.btn.ok:hover{background:linear-gradient(180deg, rgba(212,162,74,0.44), rgba(212,162,74,0.22))}
+.btn.no{background:rgba(0,0,0,0.3); border:1px solid var(--glass-bd); color:var(--muted)}
+.btn.no:hover{color:var(--fg); border-color:rgba(210,85,63,0.5)}
+
+.queue-label{color:var(--faint); font-size:10.5px; letter-spacing:1px; margin:18px 2px 9px; text-transform:uppercase}
+.qitem{
+  display:flex; align-items:center; gap:9px;
+  padding:10px 11px; border-radius:10px; cursor:pointer;
+  background:rgba(0,0,0,0.22); border:1px solid var(--glass-bd); margin-bottom:8px;
+}
+.qitem:hover{border-color:rgba(212,162,74,0.4)}
+.qitem .qa{font-size:10.5px; color:var(--accent); padding:2px 7px; border-radius:6px;
+  background:rgba(212,162,74,0.1); flex:0 0 auto}
+.qitem .qt{flex:1; font-size:11.5px; color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.qitem .qd{width:7px;height:7px;border-radius:50%;background:var(--primary);box-shadow:0 0 6px var(--primary);flex:0 0 auto}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="brand"><span class="glyph">🜂</span> blazewrit</div>
+    <div class="nav">
+      <span class="tab on">Canvas</span>
+      <span class="tab">Board</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="hstat">
+      <span><span class="flag">⚑</span> 질문 <b>3</b></span>
+      <span>·</span>
+      <span><b>5</b> agents 작업 중</span>
+      <span>·</span>
+      <span class="kbd">⌘K</span>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <!-- LEFT RAIL -->
+    <aside class="rail" id="rail">
+      <div class="rail-head">
+        <span class="ttl">대화</span>
+        <button class="collapse-btn" onclick="toggleRail()" id="railToggle">◧ 접기</button>
+      </div>
+
+      <!-- expanded list -->
+      <div class="rail-body">
+        <div class="pinned">
+          <span class="dot"></span>
+          <span class="txt">
+            <div class="name">● 중앙</div>
+            <div class="sub">⚑2 봐주세요</div>
+          </span>
+        </div>
+
+        <div class="divider"></div>
+        <div class="grp-label">프로젝트</div>
+
+        <div class="prow sel">
+          <span class="car">▸</span>
+          <span class="pn">auth <span class="cnt">(6)</span></span>
+          <span class="badge needs">⚑2</span>
+        </div>
+        <div class="prow">
+          <span class="car">▸</span>
+          <span class="pn">billing <span class="cnt">(4)</span></span>
+          <span class="badge work">◔</span>
+        </div>
+        <div class="prow">
+          <span class="car">▸</span>
+          <span class="pn">web-fe <span class="cnt">(3)</span></span>
+          <span class="unread"></span>
+        </div>
+
+        <button class="newconv">+ 새 대화</button>
+      </div>
+
+      <!-- collapsed icon spine -->
+      <div class="spine">
+        <div class="sp center" title="중앙">◆</div>
+        <div class="sp" title="auth">●<span class="flag-mini">⚑</span></div>
+        <div class="sp" title="billing">◉<span class="flag-mini">⚑</span></div>
+        <div class="sp" title="web-fe">○</div>
+        <div class="sp" title="새 대화" style="margin-top:6px;color:var(--faint)">＋</div>
+      </div>
+    </aside>
+
+    <!-- CENTER CANVAS -->
+    <main class="canvas">
+      <div class="canvas-ctrls">
+        <button class="cc">⊙ 맞춤</button>
+        <button class="cc prim">+ 프로젝트</button>
+        <button class="cc" onclick="toggleRail()">레일 접기</button>
+      </div>
+
+      <!-- edge layer -->
+      <svg class="edges" viewBox="0 0 760 740" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="lit" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#e06b2e" stop-opacity="0.95"/>
+            <stop offset="1" stop-color="#d4a24a" stop-opacity="0.85"/>
+          </linearGradient>
+          <filter id="glow"><feGaussianBlur stdDeviation="3"/></filter>
+        </defs>
+        <!-- depends: auth -> web-fe (LIT) -->
+        <path d="M 248 200 C 360 150, 470 150, 560 175" fill="none"
+              stroke="url(#lit)" stroke-width="3.5" filter="url(#glow)" opacity="0.7"/>
+        <path d="M 248 200 C 360 150, 470 150, 560 175" fill="none"
+              stroke="url(#lit)" stroke-width="2"/>
+        <text x="400" y="138" fill="#d4a24a" font-size="11" font-family="monospace" text-anchor="middle">depends ↗</text>
+
+        <!-- leader line: peek card -> billing hearth -->
+        <path d="M 520 540 C 480 520, 450 500, 424 478" fill="none"
+              stroke="#d4a24a" stroke-width="1.4" stroke-dasharray="3 4" opacity="0.7"/>
+
+        <!-- ref wire: peek mention -> auth hearth -->
+        <path d="M 540 560 C 380 560, 180 380, 154 250" fill="none"
+              stroke="#e06b2e" stroke-width="1.6" stroke-dasharray="2 5" opacity="0.55" filter="url(#glow)"/>
+      </svg>
+
+      <!-- HEARTHS -->
+      <div class="hearth lit" id="h-auth">
+        <div class="h-top"><span class="h-ico">🔥</span><span class="h-name">auth-svc</span></div>
+        <div class="h-state">● 3 작업 중</div>
+        <div class="chips">
+          <span class="chip"><span class="e"></span>impl</span>
+          <span class="chip"><span class="e"></span>test</span>
+          <span class="chip dec"><span class="e"></span>dec <span class="fl">⚑</span></span>
+        </div>
+      </div>
+
+      <div class="hearth idle" id="h-bill">
+        <div class="h-top"><span class="h-ico">🪵</span><span class="h-name">billing</span></div>
+        <div class="h-state">유휴</div>
+        <div class="chips">
+          <span class="chip dec sel"><span class="e"></span>dec <span class="fl">⚑</span></span>
+        </div>
+      </div>
+
+      <div class="hearth lit" id="h-web">
+        <div class="h-top"><span class="h-ico">🔥</span><span class="h-name">web-fe</span></div>
+        <div class="h-state">● 2 작업 중</div>
+        <div class="chips">
+          <span class="chip"><span class="e"></span>impl</span>
+          <span class="chip"><span class="e"></span>impl</span>
+        </div>
+      </div>
+
+      <!-- PEEK CHAT CARD -->
+      <div class="peek">
+        <div class="peek-head"><span class="g">🜂</span> <b>billing</b> #dec</div>
+        <div class="peek-body">
+          <div class="msg">
+            <span class="who">auth</span>
+            <span class="bub">토큰 만료에 의존
+              <span class="mention">@auth</span>
+              <span class="refwire">↗</span>
+            </span>
+          </div>
+          <div class="msg">
+            <span class="who me">나</span>
+            <span class="bub">30일 환불로 가자</span>
+          </div>
+          <div class="msg" style="opacity:.8">
+            <span class="who me">·</span>
+            <span class="bub" style="background:transparent;border:0;padding:2px 0;color:var(--muted)">
+              <span class="refwire">⟿ ref</span> auth-svc #token-exp
+            </span>
+          </div>
+        </div>
+        <div class="peek-foot">
+          <button class="notify-btn">[ 중앙에 알리기 ]</button>
+        </div>
+      </div>
+
+      <!-- AUTO-BANK NOTE -->
+      <div class="bank-note">
+        <b>AUTO-BANK</b> — 질문함이 열리거나 화면이 좁으면 좌측 레일이 세로 아이콘 스파인(◆중앙 ●auth ◉billing⚑ ○web)으로 접혀 캔버스가 3면에서 눌리지 않음.
+      </div>
+    </main>
+
+    <!-- RIGHT DRAWER -->
+    <aside class="drawer">
+      <div class="dr-head">질문함 <span class="cnt">3</span></div>
+      <div class="dr-body">
+        <div class="qcard">
+          <div class="qc-top">
+            <span class="qc-agent">decide</span>
+            <span class="qc-wait">⏸ 대기 중</span>
+          </div>
+          <div class="qc-q"><span class="label">검토:</span> 환불 30일로 변경?</div>
+          <div class="qc-actions">
+            <button class="btn ok">승인</button>
+            <button class="btn no">거부</button>
+          </div>
+        </div>
+
+        <div class="queue-label">대기열 2</div>
+        <div class="qitem">
+          <span class="qa">review</span>
+          <span class="qt">토큰 만료 정책 확인</span>
+          <span class="qd"></span>
+        </div>
+        <div class="qitem">
+          <span class="qa">plan</span>
+          <span class="qt">web-fe 배포 일정 승인</span>
+          <span class="qd"></span>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+function toggleRail(){
+  var rail = document.getElementById('rail');
+  var t = document.getElementById('railToggle');
+  rail.classList.toggle('collapsed');
+  t.textContent = rail.classList.contains('collapsed') ? '◧ 펼치기' : '◧ 접기';
+}
+</script>
+</body>
+</html>

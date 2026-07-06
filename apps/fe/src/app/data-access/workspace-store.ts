@@ -1,6 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import type { WorkItemDto, FlowDto, DecisionRequestDto } from '@bw/dto';
-import { BlazewritApi, type ConnectionVm, type ProjectVm } from './api';
+import { BlazewritApi, type ProjectVm, type RelationshipVm } from './api';
 
 /**
  * Workspace snapshot shared across the views (DECISIONS §15). A single root store loads
@@ -15,7 +15,7 @@ export class WorkspaceStore {
   readonly workItems = signal<readonly WorkItemDto[]>([]);
   readonly flows = signal<readonly FlowDto[]>([]);
   readonly decisions = signal<readonly DecisionRequestDto[]>([]);
-  readonly connections = signal<readonly ConnectionVm[]>([]);
+  readonly relationships = signal<readonly RelationshipVm[]>([]);
 
   readonly activeCount = computed(
     () => this.workItems().filter((w) => w.state === 'in_flow').length,
@@ -28,15 +28,29 @@ export class WorkspaceStore {
 
   readonly loadError = signal<string | null>(null);
 
+  /** Bumped on every live (SSE) backend event so views re-derive (e.g. re-fetch step runs). */
+  readonly liveTick = signal(0);
+
+  private readonly onError = (what: string) => (err: unknown) =>
+    this.loadError.set(`${what} 로드 실패: ${err instanceof Error ? err.message : String(err)}`);
+
   constructor() {
-    // One-shot GETs complete after a single emission — no teardown needed for a root singleton.
-    const onError = (what: string) => (err: unknown) =>
-      this.loadError.set(`${what} 로드 실패: ${err instanceof Error ? err.message : String(err)}`);
-    this.api.projects().subscribe({ next: (v) => this.projects.set(v), error: onError('projects') });
-    this.api.workItems().subscribe({ next: (v) => this.workItems.set(v), error: onError('work-items') });
-    this.api.flows().subscribe({ next: (v) => this.flows.set(v), error: onError('flows') });
-    this.api.decisions().subscribe({ next: (v) => this.decisions.set(v), error: onError('decisions') });
-    this.api.connections().subscribe({ next: (v) => this.connections.set(v), error: onError('connections') });
+    this.reload();
+  }
+
+  /** Re-fetch the projections that change as flows run (after a center prompt / live tick). */
+  reload(): void {
+    this.api.projects().subscribe({ next: (v) => this.projects.set(v), error: this.onError('projects') });
+    this.api.workItems().subscribe({ next: (v) => this.workItems.set(v), error: this.onError('work-items') });
+    this.api.flows().subscribe({ next: (v) => this.flows.set(v), error: this.onError('flows') });
+    this.api.decisions().subscribe({ next: (v) => this.decisions.set(v), error: this.onError('decisions') });
+    this.api.relationships().subscribe({ next: (v) => this.relationships.set(v), error: this.onError('relationships') });
+  }
+
+  /** Called by LiveSync on each backend SSE event: re-pull snapshots + tick derived views. */
+  notifyLive(): void {
+    this.liveTick.update((t) => t + 1);
+    this.reload();
   }
 
   flowFor(workItem: WorkItemDto): FlowDto | undefined {

@@ -8,12 +8,12 @@
     "validator_contracts": [
       {
         "id": "INV-M2-1-affected_files_count",
-        "rule": "R23/R32 — impact_map.affected_files_count.value MUST equal impact_map.affected_files.length (mechanical derive, dedup'd). Also re-hash affected_files_count.source.raw_stdout_sha256 and re-derive value.",
+        "rule": "R23/R32 — impact_map.affected_files_count.value MUST equal impact_map.affected_files.length (mechanical derive, dedup'd). Investigate has NO Bash, so the count is NOT a CountClaim (no command/raw_stdout): re-derive value from the affected_files_count.derived_from upstream rows (based_on_ground row's task_subgraph.entry_nodes + this investigation's impact_map.ripple), NOT from any re-hashed stdout.",
         "fields": [
           "impact_map.affected_files",
           "impact_map.affected_files_count"
         ],
-        "check": "assert affected_files_count.value == dedup(affected_files).length AND value derivable from re-hashed source.raw_stdout"
+        "check": "assert affected_files_count.value == dedup(affected_files).length AND value re-derivable from affected_files_count.derived_from rows (resolve each RowRef, union entry_nodes file paths + ripple file-type node paths, dedup, count)"
       },
       {
         "id": "INV-M2-2-derivation_consistency",
@@ -38,18 +38,19 @@
       },
       {
         "id": "INV-M2-4-verdict-V1-V14b",
-        "rule": "compatibility-verdict.md V1-V14b — V1 (empty issues AND entry_nodes nonempty)=>proceed; V2 splits on scope when any blocks_flow=true: V2a (any blocking issue project-wide OR blocking scope-union covers all affected area => blocked, all blocking issues scope_confined=false); V2b (all blocking issues scope-confined + proceed remainder>=1 => not blocked, defer to V13 partial_proceed, those issues scope_confined=true); V3 (no V2a) any requires_user=>needs_clarification; V4 else proceed; V5 dedup (root_cause hash+scope hash, max severity); V6 issues<=50 else issues_overflow; V7 type=other=>custom_type; V8 blocked=>blockers nonempty; V9 needs_clarification=>open_questions nonempty; V10 every issue has evidence; V11 no_op=>no_op_details complete; V12 result enum valid; V13 partial_proceed iff V2b (partial_scope_handling required); V14 (Compound) result=no_op iff sub_flow_verdicts all result=no_op; V14b (Compound mixed) some no_op + some non-no_op => result decided by non-no_op sub-flows, no_op sub-flows preserved in partial_scope_handling.no_op_set (partial_proceed) or sub_flow_verdicts (proceed), never blocked_set/proceed_set.",
+        "rule": "compatibility-verdict.md V1-V14b — V1 (empty issues AND entry_nodes nonempty)=>proceed; V2 splits on scope when any blocks_flow=true: V2a (any blocking issue project-wide OR blocking scope-union covers all affected area => blocked, all blocking issues scope_confined=false); V2b (all blocking issues scope-confined + proceed remainder>=1 => not blocked, defer to V13 partial_proceed, those issues scope_confined=true); V3 (no V2a) any requires_user=>needs_clarification; V4 else proceed; V5 dedup (root_cause hash+scope hash, max severity); V6 issues<=50 else issues_overflow; V7 type=other=>custom_type; V8 blocked=>blockers nonempty; V9 needs_clarification=>open_questions nonempty; V10 every issue has evidence; V11 no_op=>no_op_details complete; V12 result enum valid; V13 partial_proceed iff V2b (partial_scope_handling required); V14 (Compound) — flow_type=='compound' REQUIRES sub_flow_verdicts PRESENT and non-empty (for ANY result, not just no_op; so the aggregate-no_op precondition can never be vacuously satisfied by omission), AND result=no_op iff sub_flow_verdicts all result=no_op; V14b (Compound mixed) some no_op + some non-no_op => result decided by non-no_op sub-flows, no_op sub-flows preserved in partial_scope_handling.no_op_set (partial_proceed only) or in sub_flow_verdicts[result=no_op] (proceed/blocked/needs_clarification — those branches forbid partial_scope_handling, and sub_flow_verdicts is verdict-level optional permitted in every branch), never blocked_set/proceed_set. COMPOUND PRESENCE (sub_flow_identification + sub_flow_verdicts): flow_type=='compound' REQUIRES both sub_flow_identification (non-empty) and sub_flow_verdicts (non-empty) present; flow_type!='compound' REQUIRES both absent.",
         "fields": [
-          "compatibility_verdict"
+          "compatibility_verdict",
+          "sub_flow_identification",
+          "based_on"
         ],
-        "check": "run V1..V14b over compatibility_verdict.issues and result branch; assert V2a/V2b scope split via issue.scope_confined (V2a all blocking scope_confined=false flow-wide; V2b all blocking scope_confined=true + proceed remainder>=1 -> partial_proceed); for Compound assert V14/V14b sub_flow_verdicts aggregation and no_op_set routing; reject on any violation grammar cannot see"
+        "check": "run V1..V14b over compatibility_verdict.issues and result branch; assert V2a/V2b scope split via issue.scope_confined (V2a all blocking scope_confined=false flow-wide; V2b all blocking scope_confined=true + proceed remainder>=1 -> partial_proceed); V14/V14b (Compound-conditional) — flow_type is NOT a field of this schema (it lives upstream in Triage, resolved via based_on.triage_ref), so sub_flow_verdicts/sub_flow_identification stay unconditionally optional in grammar and their Compound-conditional presence is M2-only here: when based_on.triage_ref's flow_type=='compound' assert sub_flow_identification present+non-empty AND sub_flow_verdicts present+non-empty, then assert V14/V14b sub_flow_verdicts aggregation and no_op_set routing; when flow_type!='compound' assert both sub_flow_identification and sub_flow_verdicts absent; reject on any violation grammar cannot see"
       },
       {
         "id": "INV-M2-5-evidence-rowrefs",
-        "rule": "R26 provenance — every issue.evidence, no_op_details.evidence, risk item evidence, follow_up_ref, unknown_ref, based_on_ground, and based_on.* MUST resolve to an existing Postgres step_runs / sub-row id (RowRef), not a dangling/file ref.",
+        "rule": "R26 provenance — every issue.evidence, no_op_details.evidence, risk item evidence, unknown_ref, based_on_ground, and based_on.* MUST resolve to an existing Postgres step_runs / sub-row id (RowRef), not a dangling/file ref. EXEMPT: ground_unknowns_addressed[].follow_up_ref (and its sub_dispositions[] recursion) is NOT a RowRef — it is a LOCAL invocation-scoped id pointing at an in-document collection item (risk_id/constraint_id/compat_issue_id/blocker_id/deferred_decision_id), so it is resolved by INV-M2-7's collection-membership check, never here.",
         "fields": [
           "compatibility_verdict.issues[].evidence",
-          "ground_unknowns_addressed[].follow_up_ref",
           "ground_unknowns_addressed[].unknown_ref",
           "based_on_ground",
           "based_on"
@@ -58,38 +59,44 @@
       },
       {
         "id": "INV-M2-6-clarification-autolink",
-        "rule": "unknown-disposition.md — a ground_unknowns_addressed item with disposition='clarification' MUST auto-link to a compatibility issue: its follow_up_ref points at an issue whose requires_user=true, and that issue forces verdict.result=needs_clarification (unless a blocks_flow issue forces blocked first).",
+        "rule": "unknown-disposition.md — a ground_unknowns_addressed item with disposition='clarification' MUST auto-link to a compatibility issue: its follow_up_ref points at an issue whose requires_user=true, and that issue forces verdict.result=needs_clarification (unless a blocks_flow issue forces blocked first). RECURSES into sub_dispositions[]: a partially_resolved item's residual part with disposition='clarification' applies the SAME auto-link (its follow_up_ref -> requires_user=true issue) — a residual clarification part can never be left un-routed.",
         "fields": [
           "ground_unknowns_addressed[].disposition",
           "ground_unknowns_addressed[].follow_up_ref",
+          "ground_unknowns_addressed[].sub_dispositions[].disposition",
+          "ground_unknowns_addressed[].sub_dispositions[].follow_up_ref",
           "compatibility_verdict.issues"
         ],
-        "check": "for each clarification disposition: assert follow_up_ref -> issue with requires_user=true; assert verdict.result consistent with V2/V3"
+        "check": "for each clarification disposition (top-level AND sub_dispositions[]): assert follow_up_ref -> issue with requires_user=true; assert verdict.result consistent with V2/V3"
       },
       {
         "id": "INV-M2-7-escalate-autolink",
-        "rule": "unknown-disposition.md — disposition='escalate' MUST link to a blocker issue (blocks_flow=true) forcing verdict.result=blocked; disposition='risk'=>follow_up_ref in risk_surface; disposition='constraint'=>follow_up_ref in constraints; disposition='defer'=>deferred_decisions entry.",
+        "rule": "unknown-disposition.md — disposition='escalate' MUST link to a blocker issue (blocks_flow=true) forcing verdict.result=blocked; disposition='risk'=>follow_up_ref in risk_surface; disposition='constraint'=>follow_up_ref in constraints; disposition='defer'=>deferred_decisions entry. RECURSES into sub_dispositions[]: a partially_resolved item's residual part with disposition risk/constraint/clarification/defer/escalate applies the SAME disposition->collection mapping to its follow_up_ref (schema if/then already grammar-requires follow_up_ref present for non-resolved sub-dispositions; this check binds it to the correct collection so a residual escalate part links to a real blocker).",
         "fields": [
           "ground_unknowns_addressed[].disposition",
           "ground_unknowns_addressed[].follow_up_ref",
+          "ground_unknowns_addressed[].sub_dispositions[].disposition",
+          "ground_unknowns_addressed[].sub_dispositions[].follow_up_ref",
           "risk_surface",
           "constraints",
           "deferred_decisions"
         ],
-        "check": "assert follow_up_ref target collection matches disposition mapping (risk->risk_surface, constraint->constraints, defer->deferred_decisions, escalate/clarification->issues)"
+        "check": "assert follow_up_ref target collection matches disposition mapping (risk->risk_surface, constraint->constraints, defer->deferred_decisions, escalate/clarification->issues) for BOTH top-level dispositions AND sub_dispositions[] residual parts"
       },
       {
         "id": "INV-M2-8-matrix-default",
-        "rule": "unknown-disposition.md — matrix_default=false (deviated from recommended disposition) REQUIRES strengthened rationale (non-trivial length / explicit justification). Reviewer parity.",
+        "rule": "unknown-disposition.md — matrix_default=false (deviated from recommended disposition) REQUIRES strengthened rationale (non-trivial length / explicit justification). Reviewer parity. OFF-MATRIX unknown_type rule (closes the open-enum hole): unknown_type is a constrained-but-open string, so a value with NO row in the default Matrix (README '기본 Matrix' table) has no recommended disposition — matrix lookup is undefined. In that case matrix_default MUST be false (there is no default to have followed) and the strengthened-rationale requirement applies. matrix_default=true is only legal when unknown_type matches a Matrix row AND disposition equals that row's recommendation.",
         "fields": [
+          "ground_unknowns_addressed[].unknown_type",
           "ground_unknowns_addressed[].matrix_default",
+          "ground_unknowns_addressed[].disposition",
           "ground_unknowns_addressed[].rationale"
         ],
-        "check": "if matrix_default==false assert rationale length/specificity threshold met"
+        "check": "if unknown_type has no Matrix row assert matrix_default==false; if matrix_default==true assert unknown_type matches a Matrix row AND disposition==that row's recommendation; if matrix_default==false assert rationale length/specificity threshold met"
       },
       {
         "id": "INV-M2-9-no-silent-unknown",
-        "rule": "Reviewer (README L122) — every Ground unknown is addressed (silent 미처리 0). The set of unknown_ref in ground_unknowns_addressed MUST cover every unknown id in the based_on_ground row.",
+        "rule": "Reviewer (README L122) — every Ground unknown is addressed (silent 미처리 0). The set of unknown_ref in ground_unknowns_addressed MUST cover every unknown id in the based_on_ground row. PRECONDITION: PC6 has already asserted Ground.unknowns is present and an array, and PC6b has asserted each element has a non-empty id + unknown_type (absent/non-array container => PC6 mechanical error; present-but-malformed element => PC6b mechanical error; neither reaches here) — so this coverage check cannot be vacuously satisfied by a missing/malformed unknowns set nor consume a garbage element id.",
         "fields": [
           "ground_unknowns_addressed[].unknown_ref",
           "based_on_ground"
@@ -123,19 +130,38 @@
         "check": "re-hash all *_sha256/result_hash; re-read read_files; assert every source_manifest cited line exists"
       },
       {
-        "id": "INV-M2-13-countclaim-rehash",
-        "rule": "R23 — every CountClaim.source.raw_stdout_sha256 re-hashed and value re-derived (affected_files_count, issues_overflow.total_found if measured, any count field).",
+        "id": "INV-M2-13-issues_overflow-total_found",
+        "rule": "R23 — issues_overflow.total_found is NOT a CountClaim (Investigate has no Bash, so no command/raw_stdout): like affected_files_count it is derivation-based. Re-derive total_found.value from total_found.derived_from rows (the enumerated issue rows), NOT from any re-hashed stdout. affected_files_count is the other derivation-based count, covered by INV-M2-1.",
         "fields": [
-          "impact_map.affected_files_count",
           "compatibility_verdict.issues_overflow.total_found"
         ],
-        "check": "re-parse source.raw_stdout, re-hash, re-derive value"
+        "check": "assert issues_overflow.total_found.value re-derivable from issues_overflow.total_found.derived_from rows (resolve each RowRef, count the enumerated issue rows); assert value > 50 (overflow precondition)"
+      },
+      {
+        "id": "INV-M2-14-error-kind-precondition-mapping",
+        "rule": "README Input preconditions PC5 rule — investigate_error.kind MUST map to which precondition/tool failed: PC1-PC4 + PC6 + PC6b (input-precondition violations) => kind=precondition_violation; PC5 (ED MCP / PRIMARY tool absence/error/timeout) => kind=primary_tool_unavailable (NEVER precondition_violation). This forces the schema if/then to require ed_availability=Omitted on ED failure so an ED-down state is never left un-flagged. failure_origin must agree: PC1/PC4/PC6/PC6b=>ground, PC3=>triage, PC5=>investigate. (PC6: Ground.unknowns absent/non-array => kind=precondition_violation, failure_origin=ground — closes the vacuous-INV-M2-9 hole where an absent unknowns set is silently 'fully covered' by an empty ground_unknowns_addressed. PC6b: each Ground.unknowns[] element MUST have non-empty id + unknown_type => kind=precondition_violation, failure_origin=ground — closes the present-but-malformed-element hole where INV-M2-9 coverage / INV-M2-8 matrix lookup would consume garbage ids/types.) (Cross-field truth — which precondition fired drives kind — grammar cannot see WHICH PC failed, only that kind=primary_tool_unavailable=>ed_availability=Omitted AND evidence pinned to its correct arm (primary_tool_unavailable=>Omitted tool-probe, precondition_violation=>RowRef), both of which the root if/then DOES grammar-enforce — so a precondition_violation can no longer fabricate an Omitted tool-probe evidence.)",
+        "fields": [
+          "investigate_error.kind",
+          "investigate_error.failure_origin",
+          "ed_availability"
+        ],
+        "check": "assert PC5(ED-down) emitted as kind=primary_tool_unavailable (not precondition_violation); PC1-PC4 + PC6 + PC6b as precondition_violation; failure_origin consistent with the failing PC (ground/triage/investigate)"
+      },
+      {
+        "id": "INV-M2-15-no-results-handling",
+        "rule": "external-research.md No-Results table (README 'No-Results 처리') — external_research[].no_results_handling is present IFF result.status=='omitted' (it is only meaningful on a degraded/no-results finding), AND when present its value is the DETERMINISTIC claim_class mapping: decision_critical=>compat_issue, conflict_with_internal=>compat_issue, version_sensitive=>risk_surface, background_context=>defer, feasibility_critical=>negative_signal. A present no_results_handling on a Measured result, an absent one on an Omitted result, or a value that contradicts the claim_class row all FAIL. (Cross-field TRUTH: presence is gated on result.status AND the value is fixed by claim_class — grammar cannot read result.status from the no_results_handling sibling nor key the enum on claim_class.)",
+        "fields": [
+          "external_research[].no_results_handling",
+          "external_research[].result",
+          "external_research[].claim_class"
+        ],
+        "check": "for each ExternalFinding: assert (no_results_handling present) == (result.status=='omitted'); when present assert no_results_handling == {decision_critical:'compat_issue', conflict_with_internal:'compat_issue', version_sensitive:'risk_surface', background_context:'defer', feasibility_critical:'negative_signal'}[claim_class]"
       }
     ]
   },
   "type": "object",
   "additionalProperties": false,
-  "$comment": "Two terminal shapes (README 'Mechanical error 분기', P8/principle 1·3): the NORMAL interpretation output (carries the 5-state compatibility_verdict + impact_map/risk_surface/etc.) OR a MECHANICAL-ERROR output (investigate_error) emitted on input-precondition violation (PC1-PC5) or PRIMARY-tool (ED MCP) failure — which produces NO compatibility_verdict and does NOT masquerade as proceed/no_op. The oneOf below is keyed on the presence of investigate_error.",
+  "$comment": "Two terminal shapes (README 'Mechanical error 분기', P8/principle 1·3): the NORMAL interpretation output (carries the 5-state compatibility_verdict + impact_map/risk_surface/etc.) OR a MECHANICAL-ERROR output (investigate_error) emitted on input-precondition violation (PC1-PC4+PC6+PC6b) or PRIMARY-tool (ED MCP) failure (PC5) — which produces NO compatibility_verdict and does NOT masquerade as proceed/no_op. The oneOf below is keyed on the presence of investigate_error.",
   "required": [
     "flow_id",
     "based_on",
@@ -144,7 +170,7 @@
   ],
   "oneOf": [
     {
-      "$comment": "NORMAL output branch — full interpretation. investigate_error MUST be absent.",
+      "$comment": "NORMAL output branch — full interpretation. investigate_error MUST be absent. A result-bearing compatibility_verdict can only be produced when ED traversal succeeded, so ed_availability is PINNED to the Measured arm here (README Failure & degrade (1) + reviewer 'Omitted인데 verdict 산출 시 fail'): ED-down (Omitted) can appear ONLY in the mechanical-error branch (kind=primary_tool_unavailable), never alongside a verdict. The Omitted arm is forbidden by requiring the Measured value object.",
       "required": [
         "impact_map",
         "constraints",
@@ -152,10 +178,33 @@
         "architecture_impact",
         "compatibility_verdict",
         "ground_unknowns_addressed",
-        "verification_proof"
+        "verification_proof",
+        "ed_availability"
       ],
       "properties": {
-        "investigate_error": false
+        "investigate_error": false,
+        "ed_availability": {
+          "$comment": "Pinned to the Measured arm (value.ed_snapshot_version required) — the Omitted branch (status:'omitted') cannot satisfy this, so ED-down can never carry a normal verdict.",
+          "$ref": "./_defs.schema.json#/$defs/Measured",
+          "type": "object",
+          "required": [
+            "value"
+          ],
+          "properties": {
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ed_snapshot_version"
+              ],
+              "properties": {
+                "ed_snapshot_version": {
+                  "$ref": "./_defs.schema.json#/$defs/Sha256"
+                }
+              }
+            }
+          }
+        }
       }
     },
     {
@@ -169,7 +218,15 @@
         "constraints": false,
         "risk_surface": false,
         "architecture_impact": false,
-        "ground_unknowns_addressed": false
+        "ground_unknowns_addressed": false,
+        "verification_proof": false,
+        "triage_mismatch": false,
+        "external_research": false,
+        "sub_flow_identification": false,
+        "deferred_decisions": false,
+        "source_manifest": false,
+        "declared_next_step": false,
+        "unverified": false
       },
       "if": {
         "properties": {
@@ -189,6 +246,7 @@
         ]
       },
       "then": {
+        "$comment": "kind=primary_tool_unavailable (ED MCP down) => ed_availability is the ONLY non-identity field allowed in the error branch, and it is REQUIRED + pinned to Omitted (ED-down state never left un-flagged). evidence is ALSO pinned to the Omitted tool-probe arm: a PC5 self-tool failure has NO upstream artifact row, so a RowRef evidence is forbidden here (README L318: the Omitted tool-probe arm is reserved for PC5).",
         "required": [
           "ed_availability"
         ],
@@ -196,6 +254,28 @@
           "ed_availability": {
             "$comment": "PRIMARY-tool failure => ED unusable => ed_availability MUST be the Omitted branch (not Measured/absent). Reuses the shared Omitted $def.",
             "$ref": "./_defs.schema.json#/$defs/Omitted"
+          },
+          "investigate_error": {
+            "properties": {
+              "evidence": {
+                "$comment": "PC5 tool-probe arm only — pinned to Omitted (no upstream RowRef exists for a self-tool failure).",
+                "$ref": "./_defs.schema.json#/$defs/Omitted"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "$comment": "kind=precondition_violation (PC1-PC4 + PC6 + PC6b) => the error shape carries EXACTLY {kind, failure_origin, reason, evidence} + root identity; ed_availability is a non-identity interpretation field excluded from the error shape (README L318/L321 'precondition_violation에는 불요'), so it is forbidden here. evidence is pinned to the RowRef arm: a precondition violation MUST point at the offending Ground/Triage artifact row, never fabricate an Omitted tool-probe (README L318).",
+        "properties": {
+          "ed_availability": false,
+          "investigate_error": {
+            "properties": {
+              "evidence": {
+                "$comment": "PC1-PC4 + PC6 + PC6b arm only — pinned to the RowRef of the failing upstream artifact row (no tool-probe Omitted allowed).",
+                "$ref": "./_defs.schema.json#/$defs/RowRef"
+              }
+            }
           }
         }
       }
@@ -351,8 +431,33 @@
           }
         },
         "affected_files_count": {
-          "description": "R23 — count of affected files = affected_files.length (R6 mechanical-eval cache). MUST be CountClaim (M2 INV-M2-1 re-derives value == dedup(affected_files).length); a bare integer here is the exact R23 hallucination.",
-          "$ref": "./_defs.schema.json#/$defs/CountClaim"
+          "description": "R23 — count of affected files = affected_files.length (R6 mechanical-eval cache). NOT a CountClaim: Investigate has NO Bash (README 'Bash 도구 제거') so there is no shell command + raw_stdout that produces this count. It is DERIVED from upstream structured graph rows (Ground.task_subgraph.entry_nodes + impact_map.ripple), so it carries DERIVATION provenance (derived_from RowRefs + source_tool) instead of CountClaim's command+raw_stdout. M2 INV-M2-1 re-derives value == dedup(affected_files).length from those rows; a bare integer is still the R23 hallucination.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "derived_from",
+            "source_tool"
+          ],
+          "properties": {
+            "value": {
+              "description": "The counted integer. Meaningless without derived_from — never emit alone (R23 polarity).",
+              "type": "integer",
+              "minimum": 0
+            },
+            "derived_from": {
+              "description": "§5 RowRefs of the upstream structured rows this count is mechanically derived from (the based_on_ground row's task_subgraph + this investigation's ripple). M2 INV-M2-1 re-derives value from these, not from any shell stdout.",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "./_defs.schema.json#/$defs/RowRef"
+              }
+            },
+            "source_tool": {
+              "description": "R26 provenance — the ED traversal / graph derivation that produced this count (no shell command exists for Investigate).",
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
+            }
+          }
         }
       }
     },
@@ -399,7 +504,7 @@
       }
     },
     "risk_surface": {
-      "description": "Failure modes = impact × Ground concerns. Each item: area + severity (RISK scale low|med|high|critical) + probability + evidence + source_tool. Reviewer requires one per god_node_in_scope.",
+      "description": "Failure modes = impact × Ground concerns. Each item: area + severity (RISK scale low|med|high|critical) + probability + evidence + source_tool. Reviewer requires risk_surface to cover the high-impact nodes of impact_map (primary_areas/ripple), derived in Activity 3 — no reference to any undefined input.",
       "type": "array",
       "items": {
         "type": "object",
@@ -518,12 +623,6 @@
           "properties": {
             "ed_snapshot_version": {
               "$ref": "./_defs.schema.json#/$defs/Sha256"
-            },
-            "rules_version": {
-              "$ref": "./_defs.schema.json#/$defs/Sha256"
-            },
-            "contracts_version": {
-              "$ref": "./_defs.schema.json#/$defs/Sha256"
             }
           }
         },
@@ -577,7 +676,7 @@
           }
         },
         "issues_overflow": {
-          "description": "V6 — present iff total_found > 50. total_found is a measured count (R23 CountClaim if it comes from a tool enumeration; here the issue set is enumerated so total_found is CountClaim).",
+          "description": "V6 — present iff total_found > 50. total_found is NOT a CountClaim: Investigate has NO Bash, so there is no shell command + raw_stdout that enumerates the issue set. The issue set is enumerated via ED traversal / LLM judgment over the upstream graph rows, so total_found carries DERIVATION provenance (value + derived_from RowRefs + source_tool), the same shape as impact_map.affected_files_count.",
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -587,8 +686,33 @@
           ],
           "properties": {
             "total_found": {
-              "description": "R23 — total issues found before the 50-cap. CountClaim (measured count of an enumeration).",
-              "$ref": "./_defs.schema.json#/$defs/CountClaim"
+              "description": "R23 — total issues found before the 50-cap. NOT a CountClaim (Investigate has no Bash; the issue set is enumerated, not produced by a shell command + raw_stdout). DERIVED from the enumerated issue rows: value + derived_from RowRefs + source_tool. M2 INV-M2-13 re-derives value from those rows.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value",
+                "derived_from",
+                "source_tool"
+              ],
+              "properties": {
+                "value": {
+                  "description": "The total issue count before the cap. Meaningless without derived_from — never emit alone (R23 polarity).",
+                  "type": "integer",
+                  "minimum": 51
+                },
+                "derived_from": {
+                  "description": "§5 RowRefs of the enumerated issue rows this count is derived from. M2 INV-M2-13 re-derives value from these, not from any shell stdout.",
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "./_defs.schema.json#/$defs/RowRef"
+                  }
+                },
+                "source_tool": {
+                  "description": "R26 provenance — the ED traversal / enumeration that produced this count (no shell command exists for Investigate).",
+                  "$ref": "./_defs.schema.json#/$defs/SourceTool"
+                }
+              }
             },
             "captured": {
               "description": "Number captured (always 50 at overflow). Fixed cap constant, not a measured-from-tool count.",
@@ -923,7 +1047,7 @@
       "$ref": "./_defs.schema.json#/$defs/UnverifiedFlag"
     },
     "investigate_error": {
-      "description": "MECHANICAL-ERROR terminal output (README 'Failure & degrade handling', P8/principle 1·3). Emitted on input-precondition violation (PC1-PC5) or PRIMARY-tool (ED MCP) absence/error/timeout — OUTSIDE the 5-state compatibility_verdict. When present, NO compatibility_verdict is produced (the root oneOf forbids it), so a missing/degenerate input is never disguised as proceed/no_op.",
+      "description": "MECHANICAL-ERROR terminal output (README 'Failure & degrade handling', P8/principle 1·3). Emitted on input-precondition violation (PC1-PC4 + PC6 + PC6b) or PRIMARY-tool (ED MCP) absence/error/timeout (PC5) — OUTSIDE the 5-state compatibility_verdict. When present, NO compatibility_verdict is produced (the root oneOf forbids it), so a missing/degenerate input is never disguised as proceed/no_op.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -962,8 +1086,17 @@
           "minLength": 1
         },
         "evidence": {
-          "description": "§5 RowRef to the Ground/Triage artifact row or the tool-probe result that evidences the failure.",
-          "$ref": "./_defs.schema.json#/$defs/RowRef"
+          "description": "What evidences the failure. oneOf: (a) a §5 RowRef to the Ground/Triage artifact row whose missing/malformed field tripped a PC1-PC4 + PC6 + PC6b input precondition (kind=precondition_violation); OR (b) a TOOL-PROBE provenance object for a PC5 self-tool failure (kind=primary_tool_unavailable) — ED MCP absence/timeout has NO upstream artifact row, so it cannot be a RowRef. The probe object reuses the shared Omitted $def (the same absence cause/source_tool grammar used for ed_availability), keeping a self-tool failure from being forced to fabricate a RowRef.",
+          "oneOf": [
+            {
+              "$comment": "PC1-PC4 + PC6 + PC6b input-precondition violations: the failing upstream artifact row.",
+              "$ref": "./_defs.schema.json#/$defs/RowRef"
+            },
+            {
+              "$comment": "PC5 primary-tool failure: tool-probe result (no upstream row). Reuses Omitted (status:'omitted' + reason + source_tool) — same shape as ed_availability's Omitted branch.",
+              "$ref": "./_defs.schema.json#/$defs/Omitted"
+            }
+          ]
         }
       }
     }
@@ -1116,7 +1249,7 @@
           "$ref": "./_defs.schema.json#/$defs/RowRef"
         },
         "unknown_type": {
-          "description": "Ground unknown type for matrix matching (capture_failed:timeout, capture_failed:tool_error, inaccessible:permission_denied, tool_unavailable, referent_unresolved, ed_ambiguous, ed_inferred, ed_drift, external_unknown, contradiction, racing_changes, ...). Kept as a constrained-but-open string to stay faithful to the matrix without inventing a closed enum beyond the prose.",
+          "description": "Ground unknown type for matrix matching (capture_failed:timeout, capture_failed:tool_error, inaccessible:permission_denied, tool_unavailable, referent_unresolved, ed_ambiguous, ed_inferred, ed_drift, external_unknown, contradiction, racing_changes, ...). Kept as a constrained-but-open string to stay faithful to the matrix without inventing a closed enum beyond the prose. OFF-MATRIX rule (INV-M2-8): a value with no Matrix row has no recommended disposition, so matrix_default MUST be false (strengthened rationale required) — matrix_default=true is only legal for a type matching a Matrix row with the recommended disposition.",
           "type": "string",
           "minLength": 1
         },
@@ -1139,12 +1272,13 @@
           "minLength": 1
         },
         "matrix_default": {
-          "description": "Optional — true if this followed the matrix-recommended disposition. false => rationale must be strengthened (M2 INV-M2-8).",
+          "description": "Optional — true if this followed the matrix-recommended disposition (only legal when unknown_type matches a Matrix row AND disposition==that row's recommendation). false => rationale must be strengthened (M2 INV-M2-8). An OFF-MATRIX unknown_type (no Matrix row) FORCES false (no default to follow).",
           "type": "boolean"
         },
         "follow_up_ref": {
-          "description": "Optional §5 RowRef to the artifact this disposition produced (risk_id | constraint_id | compat_issue_id | deferred_decision_id | blocker_id). REQUIRED in practice for risk/constraint/clarification/defer/escalate (M2 enforces the disposition->collection mapping; resolved/partially_resolved-fully may omit).",
-          "$ref": "./_defs.schema.json#/$defs/RowRef"
+          "description": "Optional LOCAL invocation-scoped id (NOT a §5 RowRef) of the in-document collection item this disposition produced: risk_id (risk_surface[]) | constraint_id (constraints[]) | compat_issue_id/blocker_id (compatibility_verdict.issues[].id) | deferred_decision_id (deferred_decisions[]). All five targets are invocation-scoped string ids living inside THIS output, not Postgres step_runs rows — so this is a plain local id string, not a RowRef (it is NOT resolved by INV-M2-5; collection-membership is checked by INV-M2-7). REQUIRED in practice for risk/constraint/clarification/defer/escalate (M2 enforces the disposition->collection mapping; resolved/partially_resolved-fully may omit).",
+          "type": "string",
+          "minLength": 1
         },
         "sub_dispositions": {
           "description": "REQUIRED when disposition='partially_resolved' (if/then) — each residual part gets its own disposition + follow_up_ref.",
@@ -1174,8 +1308,31 @@
                 ]
               },
               "follow_up_ref": {
-                "$ref": "./_defs.schema.json#/$defs/RowRef"
+                "description": "LOCAL invocation-scoped id (NOT a §5 RowRef) of the in-document collection item this residual part produced (risk_id | constraint_id | compat_issue_id/blocker_id | deferred_decision_id), same target space as the top-level follow_up_ref. REQUIRED for any non-resolved sub-disposition (risk/constraint/clarification/defer/escalate) — the if/then below grammar-enforces presence so a residual escalate/clarification part can never be left un-routed (same no-silent-미처리 rule as top-level). The disposition->collection MAPPING (escalate->blocker issue, clarification->requires_user issue, risk->risk_surface, constraint->constraints, defer->deferred_decisions) is cross-field TRUTH, recursed by M2 INV-M2-7 (collection-membership; NOT INV-M2-5 RowRef-resolution).",
+                "type": "string",
+                "minLength": 1
               }
+            },
+            "if": {
+              "properties": {
+                "disposition": {
+                  "enum": [
+                    "risk",
+                    "constraint",
+                    "clarification",
+                    "defer",
+                    "escalate"
+                  ]
+                }
+              },
+              "required": [
+                "disposition"
+              ]
+            },
+            "then": {
+              "required": [
+                "follow_up_ref"
+              ]
             }
           }
         },
@@ -1216,7 +1373,7 @@
           "minLength": 1
         },
         "claim_class": {
-          "description": "external-research.md provenance-depth driver. decision_critical/version_sensitive/conflict_with_internal => full provenance; background_context => aggregated.",
+          "description": "external-research.md provenance-depth driver. decision_critical/version_sensitive/conflict_with_internal/feasibility_critical => full provenance; background_context => aggregated.",
           "type": "string",
           "enum": [
             "decision_critical",
@@ -1227,7 +1384,7 @@
           ]
         },
         "no_results_handling": {
-          "description": "Optional sibling of `result` (only meaningful when result is Omitted) — external-research.md no-results disposition by claim importance: decision_critical=>compat issue; version_sensitive=>risk; background=>defer; feasibility_critical=>negative-signal fact. Lifted out of the Omitted branch because the shared Omitted $def is additionalProperties:false (cannot be extended in place).",
+          "description": "Optional sibling of `result` (only meaningful when result is Omitted) — external-research.md no-results disposition by claim_class (covers ALL 5 claim_class values so no Omitted+claim_class combination is silent): decision_critical=>compat_issue; conflict_with_internal=>compat_issue (external check failed => unresolved internal-vs-external conflict blocks / needs user); version_sensitive=>risk_surface; background_context=>defer; feasibility_critical=>negative_signal. Lifted out of the Omitted branch because the shared Omitted $def is additionalProperties:false (cannot be extended in place).",
           "type": "string",
           "enum": [
             "compat_issue",
@@ -1269,7 +1426,7 @@
                       ]
                     },
                     "provenance": {
-                      "description": "Provenance depth scales with claim_class. decision_critical/version_sensitive/conflict => full (url+accessed_at+content_hash+source_type+version_snapshot); background => aggregated (sources_consulted+primary).",
+                      "description": "Provenance depth scales with claim_class. decision_critical/version_sensitive/conflict/feasibility_critical => full (url+accessed_at+content_hash+source_type+version_snapshot); background => aggregated (sources_consulted+primary).",
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {

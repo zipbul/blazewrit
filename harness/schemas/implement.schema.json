@@ -21,7 +21,7 @@
   ],
   "properties": {
     "result": {
-      "description": "P1 first-class result discriminant (reuses the Investigate compatibility_verdict pattern — success is a declared enum branch, not just failure). implemented = changes written, GATEs (firebat blockers=0 AND emberdeck_drift=0, both measured) passed, commit done. blocked = a GATE blocked (firebat blockers>0 or emberdeck_drift≠0 unresolved by 3x self-converge loop), or commit structurally failed, or a precondition violation / GATE-tool-absent escalate. needs_setup_recovery = setup (deps/infra) failed and auto-rollback restored a clean state — code phase never entered. no_op = LEGITIMATELY no code to change (requested change already exists = real GREEN, or a Decide-only chain whose decision is 'no code change'; principle 3 empty-legal, distinct from a missing/malformed-input escalate). The orchestrator routing table keys off this field; escalate branches (result != implemented) additionally carry failure_origin/escalate_reason/escalate_evidence, and no_op carries no_op_details.",
+      "description": "P1 first-class result discriminant (reuses the Investigate compatibility_verdict pattern — success is a declared enum branch, not just failure). implemented = changes written, GATEs (firebat blockers=0 AND emberdeck_drift=0, both measured) passed, commit done. blocked = a GATE blocked (firebat blockers>0 or emberdeck_drift≠0 unresolved by 3x self-converge loop), or commit structurally failed, or a precondition violation / GATE-tool-absent escalate. needs_setup_recovery = setup (deps/infra) failed and auto-rollback restored a clean state — code phase never entered. no_op = LEGITIMATELY no code to change (requested change already exists = real GREEN, or a Decide-only chain whose decision is 'no code change'; principle 3 empty-legal, distinct from a missing/malformed-input escalate). The orchestrator routing table keys off this field; the escalate branches (result ∈ {blocked, needs_setup_recovery}) additionally carry failure_origin/escalate_reason/escalate_evidence, and no_op carries no_op_details only (no failure routing — it is a legitimate empty result, not a failure).",
       "type": "string",
       "enum": [
         "implemented",
@@ -31,7 +31,7 @@
       ]
     },
     "changes": {
-      "description": "Every file the implementation touched, with the kind of change. file_path is a git-versioned CODE path (DECISIONS §5 L66 — code stays a file, NOT a Postgres RowRef and NOT a .blazewrit/* artifact). change_type is a closed enum (grammar-enforced). This array is the ground truth the emberdeck card↔code drift check and the firebat scan run against. minItems:0 — legitimate zero-change results (result=no_op, result=needs_setup_recovery, and pre-code blocked branches: precondition violations, setup-dirty, GATE-tool-absent) emit an empty array rather than fabricating a change; minItems:1 is gated on result=='implemented' via the allOf conditional below.",
+      "description": "Every file the implementation touched, with the kind of change. file_path is a git-versioned CODE path (DECISIONS §5 L66 — code stays a file, NOT a Postgres RowRef and NOT a .blazewrit/* artifact). change_type is a closed enum (grammar-enforced). This array is the ground truth the emberdeck card↔code drift check and the firebat scan run against. It records COMMITTED changes only (the <base>..HEAD committed surface, matching changed_files_count); uncommitted working-tree edits left by a post-code 'blocked' fix-and-rescan loop (atomicity-preserved, never committed) are NOT listed here — they surface as escalate_evidence, so changed_files_count.value==changes.length holds even on the dirty-but-uncommitted blocked case. minItems:0 — legitimate zero-change results (result=no_op, result=needs_setup_recovery, and pre-code blocked branches: precondition violations, setup-dirty, GATE-tool-absent) emit an empty array rather than fabricating a change; a post-code blocked with all work uncommitted likewise emits an empty changes[] (no committed change). minItems:1 is gated on result=='implemented' via the allOf conditional below.",
       "type": "array",
       "minItems": 0,
       "items": {
@@ -60,7 +60,7 @@
       }
     },
     "commits": {
-      "description": "Atomic commits produced — one commit = one logical change (implement-reviewer asserts atomicity). sha is the git commit hash; files[] are git-versioned CODE paths (NOT RowRefs). x-validator-contract (M2): re-resolve each sha in the repo; assert commits[].files == git-recorded files of that commit; assert atomic-commit policy (one logical change per commit) — grammar cannot judge 'logical'.",
+      "description": "Atomic commits produced — one commit = one logical change (implement-reviewer asserts atomicity). sha is the git commit hash; files[] are git-versioned CODE paths (NOT RowRefs). minItems:0 baseline — the zero-commit case is reserved for no_op / needs_setup_recovery / pre-code blocked branches (no code phase, README: setup-fail/precondition branches never reach commit); minItems:1 is gated on result=='implemented' via the allOf conditional below (implemented => commit 성공, README L86/L144). x-validator-contract (M2): re-resolve each sha in the repo; assert commits[].files == git-recorded files of that commit; assert atomic-commit policy (one logical change per commit) — grammar cannot judge 'logical'.",
       "type": "array",
       "minItems": 0,
       "items": {
@@ -95,11 +95,17 @@
       }
     },
     "firebat_results": {
-      "description": "Result of the firebat code-quality scan run after the changes. firebat is MCP-backed and optional + graceful-degrade (DECISIONS §8) — so this is an M3 DegradableMeasurement, NOT a bare object. MEASURED branch: value carries blockers and warnings, EACH a CountClaim (R23 — a bare integer for a measured count is the exact hallucination R23 kills; M2 re-parses raw_stdout and re-derives the count). OMITTED branch (R22): firebat absent/failed/timed out — first-class absence, never null, never a '# OMITTED' string, never over-typed to fake-zero blockers. implement-reviewer requires firebat blockers=0; when firebat is Omitted, that gate is delegated to Verify Pass1 (which has its own firebat degrade policy).",
+      "description": "Result of the firebat code-quality scan run after the changes. firebat is MCP-backed and optional + graceful-degrade (DECISIONS §8) — so this is an M3 DegradableMeasurement, NOT a bare object. MEASURED branch: value carries blockers and warnings, EACH a CountClaim (R23 — a bare integer for a measured count is the exact hallucination R23 kills; M2 re-reads the externally-captured stdout identified by source.raw_stdout_sha256 and re-derives the count). MCP-COUNT SOURCING (README 'MCP-backed GATE count 소싱'): firebat is an MCP tool, not a shell command, so CountClaim.source.command is the SERIALIZED MCP call (canonical 'mcp:firebat scan --json' replay identifier, not necessarily shell-runnable) and source.raw_stdout_sha256 is the SHA-256 of the captured MCP JSON response treated as stdout — M2 replays the MCP call and re-derives the count from that captured payload (no fabricated shell command). OMITTED branch (R22): firebat absent/failed/timed out — first-class absence, never null, never a '# OMITTED' string, never over-typed to fake-zero blockers. implement-reviewer requires firebat blockers=0. When firebat is Omitted the GATE is not mechanically enforceable: the DEFAULT disposition is escalate (result=blocked + failure_origin=implement, README Failure & degrade handling); delegating the gate to Verify Pass1 is a CONFIG opt-in only, and when taken it proceeds as result=implemented + unverified=true so the unenforced gate is surfaced (never a silent rubber-stamp). The config-delegation Omitted branch labels reason=='skipped' with detail=='delegated to Verify Pass1 by config' (README L130 — reusing the shared Omitted enum's 'skipped' rather than minting a 'delegated' member). reason=='not_applicable' carries the GATE-not-reached disposition on the two branches where the code phase is never entered: no_op (no code to scan), needs_setup_recovery (setup failed pre-code, auto-rollback restored clean state), and the precondition-violation / setup-dirty pre-code 'blocked' sub-cases (block before code) — in all of these firebat never ran, so its absence is 'not applicable', NOT a tool-failure mislabel.",
       "type": "object",
       "required": [
         "status"
       ],
+      "properties": {
+        "gate_invocation_attempted": {
+          "description": "TYPED GATE-invocation marker (defect-2 fix). Optional top-level boolean recording whether the firebat tool was ACTUALLY invoked (the scan reached and ran) on this run. true = firebat was invoked but absent/failed/timed out (a tool-failure Omitted member is honest); false = firebat was never invoked (GATE-not-reached → not_applicable, or config-delegation → skipped). This gives M2 a MECHANICAL signal to discriminate reached-but-failed from not-reached on a blocked GATE omission, instead of parsing the free-string escalate_evidence. Meaningful on the Omitted branch (status=='omitted'); on a measured GATE the tool obviously ran. Optional for backward-compat: when absent M2 falls back to escalate_evidence. This is a sibling of status at the firebat_results top level — NOT inside the shared Omitted $def (which is additionalProperties:false and M4-single-source), so the shared primitive is untouched.",
+          "type": "boolean"
+        }
+      },
       "oneOf": [
         {
           "type": "object",
@@ -112,6 +118,9 @@
           "properties": {
             "status": {
               "const": "measured"
+            },
+            "gate_invocation_attempted": {
+              "type": "boolean"
             },
             "source_tool": {
               "$ref": "./_defs.schema.json#/$defs/SourceTool"
@@ -125,11 +134,11 @@
               ],
               "properties": {
                 "blockers": {
-                  "description": "Count of firebat blocker findings (R23 CountClaim). implement-reviewer requires this == 0 (M2 asserts value==0 from re-parsed raw_stdout).",
+                  "description": "Count of firebat blocker findings (R23 CountClaim). On result=='implemented' implement-reviewer requires this == 0 (M2 asserts value==0 from the re-read externally-captured stdout identified by source.raw_stdout_sha256); on result=='blocked' a measured value > 0 is the documented escalate evidence (unconverged GATE), not a fail.",
                   "$ref": "./_defs.schema.json#/$defs/CountClaim"
                 },
                 "warnings": {
-                  "description": "Count of firebat warning findings (R23 CountClaim). Non-blocking; M2 re-derives value from raw_stdout.",
+                  "description": "Count of firebat warning findings (R23 CountClaim). Non-blocking; M2 re-derives value from the externally-captured stdout identified by source.raw_stdout_sha256.",
                   "$ref": "./_defs.schema.json#/$defs/CountClaim"
                 }
               }
@@ -137,16 +146,46 @@
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Omitted arm INLINED (not a bare $ref) only so the firebat-local optional gate_invocation_attempted marker can sit beside the shared Omitted fields under additionalProperties:false. The status/reason/detail/source_tool shape and the reason enum are kept IDENTICAL to the shared _defs Omitted $def (M4 single-source semantics preserved — no new primitive, no divergent enum); gate_invocation_attempted is the sole step-local addition (defect-2 typed invocation marker).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason",
+            "source_tool"
+          ],
+          "properties": {
+            "status": {
+              "const": "omitted"
+            },
+            "reason": {
+              "$ref": "./_defs.schema.json#/$defs/Omitted/properties/reason"
+            },
+            "detail": {
+              "$ref": "./_defs.schema.json#/$defs/Omitted/properties/detail"
+            },
+            "source_tool": {
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
+            },
+            "gate_invocation_attempted": {
+              "type": "boolean"
+            }
+          }
         }
       ]
     },
     "emberdeck_drift": {
-      "description": "emberdeck validate_code_links result: card↔code drift count. Prose FORCES this to 0 ('emberdeck_drift: 0  # 강제') — but the contract is enforced by an M2 VALIDATOR, not by a schema const, because emberdeck is MCP-backed and degradable (DECISIONS §8). MEASURED branch: value is a CountClaim whose count M2 re-parses and asserts == 0 (drift != 0 fails implement-reviewer). OMITTED branch (R22): emberdeck unavailable/failed — first-class absence; the drift gate is then delegated to Verify Pass1. Modeling the forced-0 as const would make absence inexpressible and force an R22 placeholder; the degradable union + M2 ==0 check is the faithful translation.",
+      "description": "emberdeck validate_code_links result: card↔code drift count. Prose FORCES this to 0 ('emberdeck_drift: 0  # 강제') — but the contract is enforced by an M2 VALIDATOR, not by a schema const, because emberdeck is MCP-backed and degradable (DECISIONS §8). MEASURED branch: value is a CountClaim whose count M2 re-parses and asserts == 0 (drift != 0 fails implement-reviewer). MCP-COUNT SOURCING (README 'MCP-backed GATE count 소싱'): emberdeck is an MCP tool, not a shell command, so CountClaim.source.command is the SERIALIZED MCP call (canonical 'mcp:emberdeck validate_code_links --json' replay identifier) and source.raw_stdout_sha256 is the SHA-256 of the captured MCP JSON response treated as stdout — M2 replays the MCP call and re-derives drift from that captured payload (no fabricated shell command). The drift value is a SINGLE intentionally UNDIFFERENTIATED count (defect-4): re-linkable card-mapping-missing vs genuine-code drift are NOT split at the value level; the re-link disposition lives in escalate_evidence prose. OMITTED branch (R22): emberdeck unavailable/failed — first-class absence. The drift GATE is then not mechanically enforceable: the DEFAULT disposition is escalate (result=blocked + failure_origin=implement); delegating the gate to Verify Pass1 is a CONFIG opt-in only, surfaced via result=implemented + unverified=true (Omitted reason=='skipped' + detail=='delegated to Verify Pass1 by config', README L130). reason=='not_applicable' carries the GATE-not-reached disposition on the branches whose code phase is never entered (no_op, needs_setup_recovery, and precondition-violation / setup-dirty pre-code 'blocked'): emberdeck never ran, so its absence is 'not applicable', NOT a tool-failure. Modeling the forced-0 as const would make absence inexpressible and force an R22 placeholder; the degradable union + M2 ==0 check is the faithful translation.",
       "type": "object",
       "required": [
         "status"
       ],
+      "properties": {
+        "gate_invocation_attempted": {
+          "description": "TYPED GATE-invocation marker (defect-2 fix), mirror of firebat_results.gate_invocation_attempted. Optional top-level boolean recording whether the emberdeck validate_code_links tool was ACTUALLY invoked on this run. true = invoked but absent/failed/timed out (tool-failure Omitted member honest); false = never invoked (GATE-not-reached → not_applicable, or config-delegation → skipped). Gives M2 a mechanical signal to discriminate reached-but-failed from not-reached on a blocked GATE omission instead of parsing free-string escalate_evidence. Optional for backward-compat (absent => M2 falls back to escalate_evidence). Sibling of status at the emberdeck_drift top level — NOT inside the shared Omitted $def, so the M4-single-source primitive is untouched.",
+          "type": "boolean"
+        }
+      },
       "oneOf": [
         {
           "type": "object",
@@ -160,30 +199,57 @@
             "status": {
               "const": "measured"
             },
+            "gate_invocation_attempted": {
+              "type": "boolean"
+            },
             "source_tool": {
               "$ref": "./_defs.schema.json#/$defs/SourceTool"
             },
             "value": {
-              "description": "card↔code drift count (R23 CountClaim). M2 forces value==0 — drift != 0 = implement-reviewer FAIL.",
+              "description": "card↔code drift count (R23 CountClaim) — a SINGLE, intentionally UNDIFFERENTIATED count (defect-4: it does NOT break drift into re-linkable card-mapping-missing vs genuine-code drift; the re-link disposition taken by the 3x loop is recorded in escalate_evidence prose only, not at the value level). On result=='implemented' M2 forces value==0 — drift != 0 there = implement-reviewer FAIL; on result=='blocked' a measured value != 0 is the documented escalate evidence (3x re-link loop did not converge), not a fail.",
               "$ref": "./_defs.schema.json#/$defs/CountClaim"
             }
           }
         },
         {
-          "$ref": "./_defs.schema.json#/$defs/Omitted"
+          "$comment": "Omitted arm INLINED (not a bare $ref) only so the emberdeck-local optional gate_invocation_attempted marker can sit beside the shared Omitted fields under additionalProperties:false. status/reason/detail/source_tool shape and the reason enum are kept IDENTICAL to the shared _defs Omitted $def (M4 single-source preserved — no new primitive, no divergent enum); gate_invocation_attempted is the sole step-local addition.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason",
+            "source_tool"
+          ],
+          "properties": {
+            "status": {
+              "const": "omitted"
+            },
+            "reason": {
+              "$ref": "./_defs.schema.json#/$defs/Omitted/properties/reason"
+            },
+            "detail": {
+              "$ref": "./_defs.schema.json#/$defs/Omitted/properties/detail"
+            },
+            "source_tool": {
+              "$ref": "./_defs.schema.json#/$defs/SourceTool"
+            },
+            "gate_invocation_attempted": {
+              "type": "boolean"
+            }
+          }
         }
       ]
     },
     "new_commits_count": {
-      "description": "Number of new commits this Implement run created (R23 CountClaim — a measured count, never a bare integer). M2 re-parses source.raw_stdout (e.g. 'git rev-list --count HEAD ^<base>') and asserts value is derivable AND value == commits.length.",
+      "description": "Number of new commits this Implement run created (R23 CountClaim — a measured count, never a bare integer). source.command = 'git rev-list --count <BASE_SHA>..HEAD' where <BASE_SHA> is the RESOLVED run-entry base commit sha SUBSTITUTED IN (not the literal token '<base>') — the COMMITTED measurement surface (base = the run-entry commit Implement recorded; see README Input preconditions 'base'定義). The emitted command MUST carry the real base sha so source.raw_stdout_sha256 hashes the stdout of a runnable command and M2 can re-execute it. On zero-work branches (result ∈ {no_op, needs_setup_recovery} and pre-code blocked) HEAD == base so this command's stdout is the literal '0' against the unchanged HEAD — a real measured 0, NOT a fabricated source. On post-code blocked-with-uncommitted-work the surface still counts only committed commits (uncommitted fix-and-rescan edits go to escalate_evidence), so value == commits.length is preserved. M2 re-reads the externally-captured stdout identified by source.raw_stdout_sha256 and re-parses it, asserting value is derivable AND value == commits.length.",
       "$ref": "./_defs.schema.json#/$defs/CountClaim"
     },
     "changed_files_count": {
-      "description": "Number of files the changes[] array touched (R23 CountClaim — measured, never bare). M2 re-parses source.raw_stdout (e.g. 'git diff --name-only <base>..HEAD | wc -l') and asserts value is derivable AND value == changes.length.",
+      "description": "Number of files the changes[] array touched (R23 CountClaim — measured, never bare). source.command = 'git diff --name-only <BASE_SHA>..HEAD | wc -l' where <BASE_SHA> is the RESOLVED run-entry base commit sha SUBSTITUTED IN (not the literal token '<base>') — the COMMITTED measurement surface (base = the run-entry commit; see README 'base'定義). The emitted command MUST carry the real base sha so source.raw_stdout_sha256 hashes a runnable command's stdout and M2 can re-execute it. On zero-work branches (result ∈ {no_op, needs_setup_recovery} and pre-code blocked) HEAD == base so the diff is empty and this command's stdout is the literal '0' against the unchanged HEAD — a real measured 0, NOT a fabricated source. On post-code blocked-with-uncommitted-work the committed <base>..HEAD diff excludes the uncommitted working-tree edits (those go to escalate_evidence), so value == changes.length holds — the dirty-but-uncommitted blocked case does NOT violate the identity. M2 re-reads the externally-captured stdout identified by source.raw_stdout_sha256 and re-parses it, asserting value is derivable AND value == changes.length.",
       "$ref": "./_defs.schema.json#/$defs/CountClaim"
     },
     "emergency_mode": {
-      "description": "P0 emergency-mode FLAG (README §P0). When flow_type=bugfix-p0, Implement runs emergency mode: Test bypassed (Test runs Verify-retroactively), shallow forced, fast fix prioritized, post-stabilization follow-up auto-queued after Verify PASS. CRITICAL: the Test bypass is a FLAG here, NOT a dropped field — Implement still emits the full output shape; emergency_mode records that the bypass happened so it is auditable and so the orchestrator can queue the retroactive Test follow-up. On all non-P0 flows, active=false. x-validator-contract (M2): active=true => orchestrator's flow_type=='bugfix-p0' AND depth=='shallow' AND retroactive_test_followup_queued is honored after Verify PASS.",
+      "description": "P0 emergency-mode FLAG (README §P0). When flow_type=bugfix-p0, Implement runs emergency mode: Test bypassed (Test runs Verify-retroactively), shallow forced, fast fix prioritized, post-stabilization follow-up auto-queued after Verify PASS. CRITICAL: the Test bypass is a FLAG here, NOT a dropped field — Implement still emits the full output shape; emergency_mode records that the bypass happened so it is auditable and so the orchestrator can queue the retroactive Test follow-up. On all non-P0 flows, active=false, and the P0-only sub-flags test_bypass/retroactive_test_followup_queued are then ABSENT (grammar-forbidden by the active==false allOf conditional below — output shape is unchanged, the sub-flags simply do not appear). On active==true the allOf conditional below grammar-REQUIRES test_bypass to be PRESENT, forces depth=='shallow', AND forbids retroactive_test_followup_queued (queueing is post-Verify, so its emit-time initial state is pinned ABSENT — not present-false), so the P0 invariant 'shallow 강제 + Test bypass FLAG recorded' is enforced at shape level, not solely M2-deferred. x-validator-contract (M2): the remaining TRUTH — active=true => orchestrator's flow_type=='bugfix-p0' AND test_bypass==true (value, not mere presence) AND retroactive_test_followup_queued honored after Verify PASS.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -199,13 +265,13 @@
           "type": "boolean"
         },
         "retroactive_test_followup_queued": {
-          "description": "true = the post-stabilization follow-up (add Test + normal Bug Fix flow) was queued. Set after Verify PASS path. Only meaningful when active=true.",
+          "description": "true = the post-stabilization follow-up (add Test + normal Bug Fix flow) was queued. Set by the orchestrator on the Verify PASS path — i.e. POST-Verify, AFTER this Implement run emits. Therefore at Implement emit time it is ABSENT: the active==true allOf forbids its presence (no present-false ambiguity), the active==false allOf also forbids it. It can only appear on the orchestrator's later mutation of this row, never in Implement's own structured_output.",
           "type": "boolean"
         }
       }
     },
     "based_on": {
-      "description": "§5 cross-step references — ALL RowRefs (Postgres step_runs row ids), NEVER file paths. INPUT CONTRACT (README L18): minimum 1 of (spec_ref | decide_ref) — exactly one required upstream producer; Spec on Spec-chains, Decide on Decide-only chains (Bug Fix / Chore / Release / Spike / P0). test_ref required only when the flow chain names a Test step (M2/reviewer checks per chain). investigate_ref and ground_ref are always-present enrichment when those steps ran. The anyOf below makes grammar enforce 'at least Spec OR Decide is present'. (anyOf = at-least-one, so a Decide-then-Spec chain carrying BOTH refs is valid; oneOf would wrongly reject it.)",
+      "description": "§5 cross-step references — ALL RowRefs (Postgres step_runs row ids), NEVER file paths. INPUT CONTRACT (README L18): minimum 1 of (spec_ref | decide_ref) — exactly one required upstream producer; Spec on Spec-chains, Decide on Decide-only chains (Bug Fix / Chore / Release / Spike / P0). test_ref required only when the flow chain names a Test step — M2/reviewer reads the ORCHESTRATOR-INJECTED flow chain descriptor (flow_type→chain step-set mapping, the same injected source declared_next_step's expected_next_step comes from), NOT a free-filled field here. investigate_ref and ground_ref are always-present enrichment when those steps ran. The anyOf below makes grammar enforce 'at least Spec OR Decide is present'. (anyOf = at-least-one, so a Decide-then-Spec chain carrying BOTH refs is valid; oneOf would wrongly reject it.) BOUNDARY (README precondition table): the 'both refs literally absent' case is NOT an Implement-emittable output — anyOf grammar-forbids a ref-less output, and the orchestrator never dispatches Implement without at least one acceptance-target ref (a triage/orchestrator dispatch precondition, not an Implement precondition), so the producer is never forced to fabricate a ref. The blocked-on-missing-ref precondition Implement DOES emit is the 'present-but-unresolvable' sub-case (a ref string is present but its row does not resolve) — that satisfies anyOf and routes via result=blocked + failure_origin=implement.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -244,7 +310,7 @@
       ]
     },
     "depth": {
-      "description": "Adaptive Step Depth the run executed at (README Step Depth Policy). shallow = minimal patch (single concern); deep = full implementation + setup + multiple commits. Deepen triggers: flow_type ∈ {Feature, Migration, Performance, Compound} | Spec.tasks.length ≥ 3 | Spec.code_architecture.files.length ≥ 5. P0 emergency mode forces shallow (M2: emergency_mode.active=true => depth=='shallow').",
+      "description": "Adaptive Step Depth the run executed at (README Step Depth Policy). shallow = minimal patch (single concern); deep = full implementation + setup + multiple commits. Deepen triggers: flow_type ∈ {Feature, Migration, Performance, Compound} | Spec.tasks.length ≥ 3 | Spec.code_architecture.files.length ≥ 5. P0 emergency mode forces shallow — grammar-enforced (M1): the active==true allOf branch below forces depth=='shallow' at token generation, NOT an M2 check. The zero-work result branches result ∈ {no_op, needs_setup_recovery} ALSO force depth=='shallow' via their own allOf (Deepen sizing inapplicable, README L185); pre-code 'blocked' is meant-shallow too but is not enum-discriminable from post-code blocked, so it is an M2/SHOULD default rather than grammar-forced.",
       "$ref": "./_defs.schema.json#/$defs/Depth"
     },
     "unverified": {
@@ -256,16 +322,16 @@
       "$ref": "./_defs.schema.json#/$defs/StepName"
     },
     "failure_origin": {
-      "description": "Escalate-branch routing field. Reuses the shared FailureOrigin $def (M4 single-source primitive: triage|ground|investigate|decide|spec|test|implement|report|verify|cap_exceeded|multiple) for grammar shape, but only the Implement-reachable SUBSET {implement, spec, decide, test, ground, investigate, cap_exceeded} is a legitimate origin for THIS step — the other shared values (triage, report, verify, multiple) are NOT reachable from Implement and are constrained by the sibling M2 validator-contract, NOT by grammar (grammar keeps the shared $ref unchanged for M4). REQUIRED whenever result != 'implemented' (blocked / needs_setup_recovery / cap_exceeded branches — see the allOf conditional below). principle 2/3: Implement detects an upstream defect and routes via failure_origin (it does NOT emit request_upstream_deepen, which is Decide-only). cap_exceeded = step budget exhausted → orchestrator-level halt+escalate (no auto Implement⇄Reviewer reentry).",
+      "description": "Escalate-branch routing field. Reuses the shared FailureOrigin $def (M4 single-source primitive: triage|ground|investigate|decide|spec|test|implement|report|verify|cap_exceeded|multiple) for grammar shape, but only the Implement-reachable SUBSET {implement, spec, decide, test, ground, investigate, cap_exceeded} is a legitimate origin for THIS step — the other shared values (triage, report, verify, multiple) are NOT reachable from Implement and are grammar-REJECTED by the failure_origin-subset allOf below (M1 narrows the enum at token generation; the property keeps the shared $ref unchanged for M4 single-source shape, the allOf tightens the legal members). REQUIRED on the ESCALATE branches result ∈ {blocked, needs_setup_recovery} (see the allOf conditional below) — NOT on implemented (success) and NOT on no_op (legitimate empty result, which carries no_op_details only, never a fabricated failure_origin). principle 2/3: Implement detects an upstream defect and routes via failure_origin (it does NOT emit request_upstream_deepen, which is Decide-only). cap_exceeded = step budget exhausted → orchestrator-level halt+escalate (no auto Implement⇄Reviewer reentry).",
       "$ref": "./_defs.schema.json#/$defs/FailureOrigin"
     },
     "escalate_reason": {
-      "description": "Human-readable reason for the escalate branch (GATE 3x-fail residual blockers, GATE-tool-absent, setup-dirty-unrecoverable, commit conflict, budget exhausted, precondition violation). Populated whenever result != 'implemented' (see allOf).",
+      "description": "Human-readable reason for the escalate branch (GATE 3x-fail residual blockers, GATE-tool-absent, setup-dirty-unrecoverable, commit conflict, budget exhausted, precondition violation). Populated on the escalate branches result ∈ {blocked, needs_setup_recovery} (see allOf); absent on implemented and no_op.",
       "type": "string",
       "minLength": 1
     },
     "escalate_evidence": {
-      "description": "Evidence backing the escalate (a RowRef, a file:line, firebat/emberdeck raw_stdout ref, git status, or progress summary). Populated whenever result != 'implemented' (see allOf).",
+      "description": "Evidence backing the escalate (a RowRef, a file:line, firebat/emberdeck raw_stdout ref, git status, or progress summary). Populated on the escalate branches result ∈ {blocked, needs_setup_recovery} (see allOf); absent on implemented and no_op.",
       "type": "string",
       "minLength": 1
     },
@@ -306,7 +372,7 @@
   },
   "allOf": [
     {
-      "$comment": "P1: result=='implemented' requires at least one change; the success branch cannot be empty. Zero-change is reserved for no_op / needs_setup_recovery / pre-code blocked branches.",
+      "$comment": "P1: result=='implemented' requires at least one change AND at least one commit (README L86/L144: implemented => commit 성공). Zero-change/zero-commit is reserved for no_op / needs_setup_recovery / pre-code blocked branches. (new_commits_count.value==commits.length is the M2 backstop, so this also forces new_commits_count.value>=1 on implemented.)",
       "if": {
         "properties": {
           "result": {
@@ -321,23 +387,27 @@
         "properties": {
           "changes": {
             "minItems": 1
+          },
+          "commits": {
+            "minItems": 1
           }
         }
       }
     },
     {
-      "$comment": "principle 2/3: every escalate branch (result != implemented) must carry failure_origin/escalate_reason/escalate_evidence so the orchestrator can route. implemented does not.",
+      "$comment": "principle 2/3: every ESCALATE branch (result ∈ {blocked, needs_setup_recovery}) must carry failure_origin/escalate_reason/escalate_evidence so the orchestrator can route. implemented does NOT (success), and no_op does NOT (legitimate empty result — principle 3, distinct from a failure/escalate; it carries no_op_details only).",
       "if": {
-        "not": {
-          "properties": {
-            "result": {
-              "const": "implemented"
-            }
-          },
-          "required": [
-            "result"
-          ]
-        }
+        "properties": {
+          "result": {
+            "enum": [
+              "blocked",
+              "needs_setup_recovery"
+            ]
+          }
+        },
+        "required": [
+          "result"
+        ]
       },
       "then": {
         "required": [
@@ -345,6 +415,106 @@
           "escalate_reason",
           "escalate_evidence"
         ]
+      }
+    },
+    {
+      "$comment": "P0 sub-flags are P0-only: when emergency_mode.active==false the P0-only sub-flags test_bypass/retroactive_test_followup_queued MUST be absent (README L52/L206 부재). active==true coherence (=> depth=shallow, test_bypass=true) is the M2 emergency_mode contract.",
+      "if": {
+        "properties": {
+          "emergency_mode": {
+            "properties": {
+              "active": {
+                "const": false
+              }
+            },
+            "required": [
+              "active"
+            ]
+          }
+        },
+        "required": [
+          "emergency_mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "emergency_mode": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "test_bypass"
+                  ]
+                },
+                {
+                  "required": [
+                    "retroactive_test_followup_queued"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "P0 active=true coherence at SHAPE level: when emergency_mode.active==true the P0 invariant requires the Test-bypass FLAG to be PRESENT (test_bypass required-present, README §P0) AND depth forced to shallow (Deepen trigger보다 우선). test_bypass==true truth (vs the orchestrator flow_type=='bugfix-p0' cross-row) stays an M2 backstop; presence + depth==shallow are grammar-expressible and enforced here so the P0 invariant is not solely M2-deferred. Additionally retroactive_test_followup_queued MUST be ABSENT at Implement emit time: queueing happens POST-Verify (orchestrator sets it on the Verify PASS path, README §P0 L217), so within a single Implement run — which always precedes Verify — the flag has not yet been set; grammar forbids its presence here to pin the active=true initial state (no ambiguous present-false vs absent).",
+      "if": {
+        "properties": {
+          "emergency_mode": {
+            "properties": {
+              "active": {
+                "const": true
+              }
+            },
+            "required": [
+              "active"
+            ]
+          }
+        },
+        "required": [
+          "emergency_mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "emergency_mode": {
+            "required": [
+              "test_bypass"
+            ],
+            "not": {
+              "required": [
+                "retroactive_test_followup_queued"
+              ]
+            }
+          },
+          "depth": {
+            "const": "shallow"
+          }
+        }
+      }
+    },
+    {
+      "$comment": "Depth Policy invariant (README Step Depth Policy L185): on the zero-work result branches result ∈ {no_op, needs_setup_recovery} there is no implementation work, so the Deepen-trigger sizing (Spec.tasks count / Decide change-intent count) is structurally inapplicable and depth defaults to shallow. Grammar forces depth=='shallow' on these two branches so the stated default is ENFORCED, not merely asserted (a no_op with depth:deep is now rejected). pre-code 'blocked' (precondition/setup-dirty/GATE-absent) is ALSO meant to be shallow, but 'blocked' is not discriminable from post-code blocked by the result enum alone, so that sub-case is an M2/SHOULD check (README L185), not grammar-forced here.",
+      "if": {
+        "properties": {
+          "result": {
+            "enum": [
+              "no_op",
+              "needs_setup_recovery"
+            ]
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "depth": {
+            "const": "shallow"
+          }
+        }
       }
     },
     {
@@ -364,33 +534,368 @@
           "no_op_details"
         ]
       }
+    },
+    {
+      "$comment": "failure_origin Implement-reachable SUBSET, grammar-enforced (M1). The property keeps the shared FailureOrigin $ref for M4 single-source shape, but only {implement, spec, decide, test, ground, investigate, cap_exceeded} is a legitimate origin for THIS step — the other shared values (triage, report, verify, multiple) are structurally unreachable from Implement. This allOf narrows the enum at token generation so grammar REJECTS triage/report/verify/multiple rather than deferring that floor to M2. (The sibling x-validator-contract is now a redundant backstop, not the sole enforcer.) Conditioned on presence so success/no_op branches that omit failure_origin are unaffected.",
+      "if": {
+        "required": [
+          "failure_origin"
+        ]
+      },
+      "then": {
+        "properties": {
+          "failure_origin": {
+            "enum": [
+              "implement",
+              "spec",
+              "decide",
+              "test",
+              "ground",
+              "investigate",
+              "cap_exceeded"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "$comment": "no_op GATE-measurement law: on result=='no_op' there is no code change, so running firebat/emberdeck measures nothing — the required-but-meaningless GATE fields take the first-class ABSENCE branch (R22 Omitted) with reason=='not_applicable' (NOT a fabricated measured-0, NOT a silent escalate — no_op is not a failure). Grammar forces status=='omitted' AND reason=='not_applicable' on both GATE fields for the no_op branch. The Omitted branch's source_tool stays required by the shared Omitted $def, and because the tool was never invoked on a no_op (no code to scan), grammar PINS the value to the literal GATE-tool name as a declared-but-unrun marker: firebat_results.source_tool=='firebat', emberdeck_drift.source_tool=='emberdeck' (README L91 — a slot label identifying WHICH tool's not_applicable absence this is, not a claim the tool ran).",
+      "if": {
+        "properties": {
+          "result": {
+            "const": "no_op"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "firebat_results": {
+            "properties": {
+              "status": {
+                "const": "omitted"
+              },
+              "reason": {
+                "const": "not_applicable"
+              },
+              "source_tool": {
+                "const": "firebat"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "source_tool"
+            ]
+          },
+          "emberdeck_drift": {
+            "properties": {
+              "status": {
+                "const": "omitted"
+              },
+              "reason": {
+                "const": "not_applicable"
+              },
+              "source_tool": {
+                "const": "emberdeck"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "source_tool"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "$comment": "needs_setup_recovery GATE-measurement law (mirrors the no_op branch): on result=='needs_setup_recovery' setup failed BEFORE the code phase (README L96/L143-144 — auto-rollback restored clean state, code never entered), so firebat/emberdeck never ran and measured nothing. The required-but-unrun GATE fields take the first-class ABSENCE branch (R22 Omitted) with reason=='not_applicable' — the GATE was not applicable because the code phase was not reached (NOT a fabricated measured-0, NOT a tool-failure mislabel: nothing was scanned, and needs_setup_recovery is the setup-rollback disposition, not a GATE-tool failure). Grammar forces status=='omitted' AND reason=='not_applicable' on both GATE fields, with the Omitted $def's required source_tool PINNED to the literal GATE-tool name as a declared-but-unrun marker (firebat_results.source_tool=='firebat', emberdeck_drift.source_tool=='emberdeck'), identical to the no_op slot-label law. Without this allOf needs_setup_recovery fell through every conditional, leaving the GATE reason unconstrained across all six Omitted members.",
+      "if": {
+        "properties": {
+          "result": {
+            "const": "needs_setup_recovery"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "firebat_results": {
+            "properties": {
+              "status": {
+                "const": "omitted"
+              },
+              "reason": {
+                "const": "not_applicable"
+              },
+              "source_tool": {
+                "const": "firebat"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "source_tool"
+            ]
+          },
+          "emberdeck_drift": {
+            "properties": {
+              "status": {
+                "const": "omitted"
+              },
+              "reason": {
+                "const": "not_applicable"
+              },
+              "source_tool": {
+                "const": "emberdeck"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "source_tool"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "$comment": "GATE-Omitted reason law on result=='blocked' — splits by blocked phase (README L79/L134). Two honest omission causes exist on a blocked output: (a) a GATE-tool was absent/failed/timed out (GATE-tool-absent pre-code blocked, or a post-code blocked whose tool dropped) => a tool-failure member {tool_absent|tool_failed|timeout|unavailable} ('unavailable' for a missing MCP); (b) the GATE was NEVER REACHED because the block happened before the code phase (precondition-violation / setup-dirty pre-code blocked — no code to scan) => 'not_applicable' (the GATE was not applicable, reusing the shared Omitted member rather than minting a 'not_reached' primitive). Grammar therefore allows reason∈{tool_absent,tool_failed,timeout,unavailable,not_applicable} and FORBIDS 'skipped' on a blocked GATE omission ('skipped' is reserved for the config-delegation branch result=='implemented', so labeling a blocked-escalate omission with it would mislabel it as a delegation). WHICH of the allowed members is honest for a given blocked output (tool-failure vs not_applicable-not_reached) is a TRUTH the result enum cannot discriminate (pre-code vs post-code blocked are enum-identical) — pinned by the x-validator-contract (M2). Applied per-GATE-field, conditioned on that field taking the Omitted (status=='omitted') branch, so a measured GATE is unaffected.",
+      "if": {
+        "properties": {
+          "result": {
+            "const": "blocked"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "firebat_results": {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "omitted"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "not_applicable"
+                  ]
+                }
+              }
+            }
+          },
+          "emberdeck_drift": {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "omitted"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "tool_absent",
+                    "tool_failed",
+                    "timeout",
+                    "unavailable",
+                    "not_applicable"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "Config-delegation path = the ONLY way result=='implemented' coexists with an Omitted GATE (README L136 + firebat_results/emberdeck_drift descriptions). DELEGATION IS ALL-OR-NOTHING (defect-1 fix): when config delegates the GATE to Verify Pass1, BOTH firebat_results AND emberdeck_drift go Omitted(reason=='skipped') together — a single-tool 'skipped' delegation never coexists with a measured-blocking sibling that would force result=='blocked', so 'skipped' appears ONLY on result=='implemented' and the blocked allOf's reject of 'skipped' creates no unreachable mixed case. The 'never a silent rubber-stamp' invariant: if implemented AND a GATE field is Omitted, that omission MUST be the explicit delegation (reason=='skipped' + detail=='delegated to Verify Pass1 by config') AND unverified MUST be true (the unenforced gate surfaced). Grammar forbids implemented+omitted with reason∈{tool_absent,tool_failed,timeout,unavailable} (that is the escalate disposition, which is result=='blocked', not implemented) and forbids unverified:false on this branch. Applied per-GATE-field, conditioned on that field's Omitted branch.",
+      "if": {
+        "properties": {
+          "result": {
+            "const": "implemented"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "firebat_results": {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "omitted"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "const": "skipped"
+                },
+                "detail": {
+                  "const": "delegated to Verify Pass1 by config"
+                }
+              },
+              "required": [
+                "detail"
+              ]
+            }
+          },
+          "emberdeck_drift": {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "omitted"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "const": "skipped"
+                },
+                "detail": {
+                  "const": "delegated to Verify Pass1 by config"
+                }
+              },
+              "required": [
+                "detail"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "Silent-rubber-stamp ban (truth half): when result=='implemented' AND either GATE field is Omitted (config-delegation path), unverified MUST be true so the unenforced gate is surfaced down-chain (Verify Pass1 becomes the single gate). Expressed as: if implemented and (firebat_results OR emberdeck_drift is omitted) then unverified==true. Grammar-enforced here; the reason=='skipped'+detail binding is the sibling allOf above.",
+      "if": {
+        "allOf": [
+          {
+            "properties": {
+              "result": {
+                "const": "implemented"
+              }
+            },
+            "required": [
+              "result"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "properties": {
+                  "firebat_results": {
+                    "properties": {
+                      "status": {
+                        "const": "omitted"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ]
+                  }
+                },
+                "required": [
+                  "firebat_results"
+                ]
+              },
+              {
+                "properties": {
+                  "emberdeck_drift": {
+                    "properties": {
+                      "status": {
+                        "const": "omitted"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ]
+                  }
+                },
+                "required": [
+                  "emberdeck_drift"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "unverified": {
+            "const": true
+          }
+        }
+      }
     }
   ],
   "x-validator-contracts": [
     {
+      "field": "depth",
+      "rule": "pre-code blocked => depth=='shallow' (the M2/SHOULD default grammar cannot discriminate)",
+      "check": "M2 REQUIRED: 'blocked' is not enum-discriminable from post-code blocked, so the pre-code shallow default cannot be grammar-forced (unlike no_op/needs_setup_recovery, forced by allOf). On result=='blocked' identified as PRE-CODE — HEAD==base AND new_commits_count.value==0 AND changed_files_count.value==0 (no commits, no committed file changes against the run-entry base) — assert depth=='shallow' (Deepen-trigger sizing is structurally inapplicable with zero implementation work; a pre-code blocked with depth=='deep' is rejected by this check). On a POST-CODE blocked (HEAD!=base OR either count>0) this check does not apply — depth there reflects the implementation work actually sized."
+    },
+    {
+      "field": "firebat_results.reason|emberdeck_drift.reason (result=='blocked' Omitted)",
+      "rule": "blocked-phase GATE-omission reason honesty (pre-code not_reached vs tool-failure)",
+      "check": "M2 REQUIRED: grammar allows reason∈{tool_absent,tool_failed,timeout,unavailable,not_applicable} on a blocked GATE omission and forbids 'skipped', but cannot discriminate WHICH is honest because pre-code and post-code blocked are enum-identical. The PRIMARY discriminator is the TYPED marker firebat_results.gate_invocation_attempted / emberdeck_drift.gate_invocation_attempted (defect-2 fix): gate_invocation_attempted==false => the GATE tool was never invoked => reason MUST be 'not_applicable' (GATE-not-reached); gate_invocation_attempted==true => the tool was invoked but dropped => reason MUST be a tool-failure member {tool_absent,tool_failed,timeout,unavailable} backed by escalate_evidence (which <tool> exit / MCP attach state). When the marker is ABSENT (backward-compat) fall back to: identify the blocked phase — PRE-CODE iff HEAD==base AND new_commits_count.value==0 AND changed_files_count.value==0; a PRE-CODE blocked whose cause is precondition-violation or setup-dirty (escalate_reason/escalate_evidence show the block happened before any GATE invocation) => reason=='not_applicable'; a GATE-tool-absent pre-code blocked OR any post-code blocked (HEAD!=base OR either count>0) where a GATE tool was actually invoked and dropped => a tool-failure member. The honest member is pinned by the typed gate_invocation_attempted marker (or, absent it, the captured tool-invocation evidence), not by the enum alone."
+    },
+    {
       "field": "firebat_results.value.blockers",
       "rule": "R23 count↔stdout consistency + reviewer gate",
-      "check": "M2 REQUIRED: re-hash firebat_results.value.blockers.source.raw_stdout to confirm raw_stdout_sha256, re-parse it, assert blockers.value is derivable. implement-reviewer additionally requires blockers.value == 0 (firebat blockers=0). Grammar gives shape; only code makes the count trustworthy."
+      "check": "M2 REQUIRED: re-read the externally-captured firebat output identified by firebat_results.value.blockers.source.raw_stdout_sha256 (re-hash to confirm the digest), re-parse it, assert blockers.value is derivable. firebat is MCP-backed: source.command is the serialized MCP call ('mcp:firebat …'), source.raw_stdout_sha256 hashes the captured MCP JSON response (the 'stdout'); M2 replays the MCP call and matches by replay equivalence, NOT shell-command string equality. On result=='implemented' implement-reviewer additionally requires blockers.value == 0 (firebat blockers=0). On result=='blocked' a measured blockers.value > 0 is the documented escalate evidence (3x fix-and-rescan loop did not converge) and is NOT a validator fail. Grammar gives shape; only code makes the count trustworthy."
     },
     {
       "field": "firebat_results.value.warnings",
       "rule": "R23 count↔stdout consistency",
-      "check": "M2 REQUIRED: re-hash + re-parse firebat_results.value.warnings.source.raw_stdout, assert warnings.value is derivable. Self-asserted count is the R23 residual."
+      "check": "M2 REQUIRED: re-read the externally-captured firebat output identified by firebat_results.value.warnings.source.raw_stdout_sha256 (re-hash to confirm the digest) + re-parse, assert warnings.value is derivable. firebat is MCP-backed: source.command is the serialized MCP call and source.raw_stdout_sha256 hashes the captured MCP JSON response; M2 matches by MCP replay equivalence, not shell-string equality. Self-asserted count is the R23 residual."
     },
     {
       "field": "emberdeck_drift.value",
       "rule": "R23 count↔stdout + prose forced-0 gate",
-      "check": "M2 REQUIRED: re-hash + re-parse emberdeck_drift.value.source.raw_stdout, assert value is derivable, AND assert value == 0 (README 'emberdeck_drift: 0  # 강제'). drift != 0 = implement-reviewer FAIL. Modeled as Measured|Omitted (not const 0) because emberdeck is degradable; the ==0 contract lives in this code check, not in grammar. When Omitted, the drift gate is delegated to Verify Pass1."
+      "check": "M2 REQUIRED: re-read the externally-captured emberdeck output identified by emberdeck_drift.value.source.raw_stdout_sha256 (re-hash to confirm the digest) + re-parse, assert value is derivable. emberdeck is MCP-backed: source.command is the serialized MCP call ('mcp:emberdeck validate_code_links …') and source.raw_stdout_sha256 hashes the captured MCP JSON response; M2 matches by MCP replay equivalence, not shell-string equality. The drift value is a single undifferentiated count (re-link disposition lives in escalate_evidence, not at value level). On result=='implemented' assert value == 0 (README '강제') — drift != 0 there = implement-reviewer FAIL. On result=='blocked' a measured value != 0 is the documented escalate evidence (unconverged re-link loop) and is NOT a validator fail. Modeled as Measured|Omitted (not const 0) because emberdeck is degradable; the ==0 contract lives in this code check, not in grammar. When Omitted the gate is not enforceable: DEFAULT = escalate (result=blocked + failure_origin=implement); Verify-Pass1 delegation is a config opt-in only, surfaced via result=implemented + unverified=true."
     },
     {
       "field": "new_commits_count",
       "rule": "R23 count↔stdout + array consistency",
-      "check": "M2 REQUIRED: re-hash + re-parse new_commits_count.source.raw_stdout (e.g. git rev-list --count), assert value derivable AND value == commits.length."
+      "check": "M2 REQUIRED: re-read the externally-captured stdout identified by new_commits_count.source.raw_stdout_sha256 (re-hash to confirm the digest). Validate source.command MATCHES the pattern 'git rev-list --count <BASE_SHA>..HEAD' with <BASE_SHA> == the resolved run-entry base sha (a regex/parse match, NOT a literal string equality against the token '<base>' — the producer emits the substituted real sha, README sourcing 절). Re-parse, assert value derivable AND value == commits.length. The surface is fixed to committed <base>..HEAD: uncommitted working-tree edits (e.g. a post-code 'blocked' that left fix-and-rescan changes uncommitted for atomicity) are NOT counted here, so value==commits.length holds on ALL branches (commits[] carries only committed atomic units). On result=='implemented' commits.minItems:1 (allOf) forces value>=1 — implemented with zero commits is rejected. On zero-work branches (no_op / needs_setup_recovery / pre-code blocked) HEAD==base, so the same command legitimately yields '0' against the unchanged HEAD (value==0==commits.length). On post-code blocked-with-uncommitted-work, committed commits may be 0 (all work uncommitted) or >=1 (some units committed before the block); either way value==commits.length because uncommitted edits live only in escalate_evidence (working-tree 'git diff'), never in commits[] — no fabricated source."
     },
     {
       "field": "changed_files_count",
       "rule": "R23 count↔stdout + array consistency",
-      "check": "M2 REQUIRED: re-hash + re-parse changed_files_count.source.raw_stdout (e.g. git diff --name-only | wc -l), assert value derivable AND value == changes.length (deduped by file_path)."
+      "check": "M2 REQUIRED: re-read the externally-captured stdout identified by changed_files_count.source.raw_stdout_sha256 (re-hash to confirm the digest). Validate source.command MATCHES the pattern 'git diff --name-only <BASE_SHA>..HEAD | wc -l' with <BASE_SHA> == the resolved run-entry base sha (a regex/parse match, NOT a literal string equality against the token '<base>' — the producer emits the substituted real sha, README sourcing 절). Re-parse, assert value derivable AND value == changes.length (deduped by file_path). The surface is fixed to committed <base>..HEAD: uncommitted working-tree edits are NOT counted, and changes[] likewise carries ONLY committed changes, so value==changes.length holds on ALL branches. On zero-work branches (no_op / needs_setup_recovery / pre-code blocked) HEAD==base, so the empty diff legitimately yields '0' (value==0==changes.length). On post-code blocked-with-uncommitted-work, the committed <base>..HEAD diff excludes the uncommitted fix-and-rescan edits (those go to escalate_evidence as a working-tree 'git diff'), so changed_files_count.value==changes.length is NOT violated by the dirty-but-uncommitted case — no fabricated source."
     },
     {
       "field": "commits[]",
@@ -400,22 +905,22 @@
     {
       "field": "changes[]",
       "rule": "changes↔git diff consistency",
-      "check": "M2: assert every changes[].file_path with its change_type matches git's actual diff status against the base (create/modify/delete) — a claimed change with no diff is hallucinated."
+      "check": "M2: assert every changes[].file_path with its change_type matches git's COMMITTED diff status against the base (create/modify/delete via <base>..HEAD) — a claimed change with no committed diff is hallucinated. changes[] is the committed surface ONLY: uncommitted working-tree fix-and-rescan edits (post-code blocked, atomicity-preserved) are NOT listed in changes[] — they belong in escalate_evidence as a working-tree 'git diff'. base = the run-entry HEAD commit the upstream acceptance-target row presumes (README Input preconditions 'base'定義); the precondition step validates base exists AND matches the upstream-presumed commit before code is written (stale/missing base => result=blocked)."
     },
     {
       "field": "based_on.spec_ref|decide_ref|test_ref",
       "rule": "R16/input-contract + §5 row existence",
-      "check": "M2: assert min 1 of (spec_ref|decide_ref) present (grammar's anyOf gives shape; code resolves the rows). Each RowRef must resolve to an existing step_runs row of the right step_name. test_ref required iff the flow chain names a Test step (reviewer per chain)."
+      "check": "M2: assert min 1 of (spec_ref|decide_ref) present (grammar's anyOf gives shape; code resolves the rows). Each RowRef must resolve to an existing step_runs row of the right step_name. test_ref required iff the flow chain names a Test step — the M2 check reads the ORCHESTRATOR-INJECTED flow chain descriptor (the flow_type→chain step-set mapping the orchestrator supplies for this run, the SAME injected-context source declared_next_step reads its expected_next_step from), NOT a free-filled field in this output: if that descriptor's step-set includes Test then test_ref MUST be present-and-resolvable, else test_ref MUST be absent."
     },
     {
       "field": "failure_origin",
-      "rule": "Implement-reachable origin subset (M4 shared $def, M2-constrained)",
-      "check": "M2: failure_origin reuses the shared FailureOrigin enum for shape, but for Implement only {implement, spec, decide, test, ground, investigate, cap_exceeded} is a legitimate origin. Assert failure_origin ∈ that subset; the shared values triage|report|verify|multiple are unreachable from Implement and must be rejected here (grammar keeps the shared $ref for single-source, so this floor is code-enforced)."
+      "rule": "Implement-reachable origin subset (M4 shared $def; M1 grammar-narrowed, M2 redundant backstop)",
+      "check": "M1 grammar now narrows failure_origin to {implement, spec, decide, test, ground, investigate, cap_exceeded} via the failure_origin-subset allOf — triage|report|verify|multiple are grammar-REJECTED at token generation. This M2 check is a REDUNDANT backstop asserting the same subset membership (defense in depth); it is no longer the sole enforcer of the floor. The property keeps the shared FailureOrigin $ref for M4 single-source shape; the allOf tightens the legal members."
     },
     {
       "field": "emergency_mode",
       "rule": "P0 mode coherence",
-      "check": "M2: emergency_mode.active=true => orchestrator flow_type=='bugfix-p0' AND depth=='shallow' AND test_bypass=true; retroactive_test_followup_queued honored only after Verify PASS. active=false on all non-P0 flows."
+      "check": "M2: emergency_mode.active=true => orchestrator flow_type=='bugfix-p0' AND test_bypass==true (value); retroactive_test_followup_queued is set by the orchestrator ONLY after Verify PASS, so it is absent in Implement's own emit (grammar forbids it on both active=true and active=false branches) and the M2 honored-check applies to the orchestrator's later mutation, not to this Implement row. depth=='shallow' on active=true and test_bypass PRESENCE on active=true are grammar-enforced by the active==true allOf branch (this M2 check on the test_bypass VALUE and flow_type cross-row is the truth backstop). active=false on all non-P0 flows, and on active=false the P0-only sub-flags test_bypass/retroactive_test_followup_queued are absent (grammar-forbidden by the active==false allOf branch — redundant backstop)."
     },
     {
       "field": "declared_next_step",

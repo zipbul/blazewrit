@@ -1,56 +1,162 @@
 <div class="canvas">
   <h1 class="sr-only">Canvas</h1>
-  <svg class="wires" aria-hidden="true" focusable="false" preserveAspectRatio="none">
-    @for (n of nodes(); track n.item.id) {
-      <path [attr.d]="n.wire"></path>
-    }
-    <path class="live-wire" [attr.d]="liveWire"></path>
-  </svg>
 
-  @if (project(); as p) {
-    <div class="glass node proj">
-      <div class="h">PROJECT</div>
-      <div class="nm">{{ p.name }}</div>
-      <div class="st" [class.ok]="p.status === 'up'">
-        <span class="b" role="img" [attr.aria-label]="p.name + ': ' + p.status"></span>{{ p.activeCount }} active · {{ p.status }}
-      </div>
-    </div>
-  }
+  <div class="bar">
+    <button class="ghostbtn" type="button" (click)="resetView()" title="시야 초기화">⊙ 맞춤</button>
+    <button class="add" type="button" (click)="addProject()"
+            title="작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다">+ 프로젝트</button>
+  </div>
 
-  @for (n of nodes(); track n.item.id) {
-    <div class="glass node task" [class.focus]="n.focus" [style.top.px]="n.top">
-      <div class="id">#{{ n.item.id }} · {{ n.flow?.flowType }}</div>
-      <div class="t">{{ n.item.title }}</div>
-      <div class="flowrow">
-        @for (step of n.steps; track step.name; let last = $last) {
-          <span class="fn" role="img" [attr.aria-label]="step.name + ': ' + step.state"
-                [class.dn]="step.state === 'done'" [class.ac]="step.state === 'active'"
-                [class.gh]="step.state === 'pending'"></span>
-          @if (!last) { <span class="fs" [class.dn]="step.state === 'done'"></span> }
+  <section class="map" #mapEl (wheel)="onWheel($event)"
+           (pointerdown)="onPointerDown($event)" (pointermove)="onPointerMove($event)"
+           (pointerup)="onPointerUp()" (pointerleave)="onPointerUp()">
+    <div class="field"
+         [style.width.px]="fieldWidth()" [style.height.px]="fieldHeight()"
+         [style.transform]="'translate(' + panX() + 'px,' + panY() + 'px) scale(' + zoom() + ')'">
+
+      <svg class="links" [attr.width]="fieldWidth()" [attr.height]="fieldHeight()">
+        <defs>
+          <radialGradient id="cloudLit" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(246,160,82,0.5)" />
+            <stop offset="45%" stop-color="rgba(224,107,46,0.2)" />
+            <stop offset="100%" stop-color="rgba(150,56,24,0)" />
+          </radialGradient>
+          <radialGradient id="cloudIdle" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(150,132,104,0.18)" />
+            <stop offset="100%" stop-color="rgba(150,132,104,0)" />
+          </radialGradient>
+          <radialGradient id="cloudFlag" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.46)" />
+            <stop offset="100%" stop-color="rgba(210,85,63,0)" />
+          </radialGradient>
+          <radialGradient id="coreLit" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(255,224,170,0.95)" />
+            <stop offset="45%" stop-color="rgba(246,160,82,0.5)" />
+            <stop offset="100%" stop-color="rgba(224,107,46,0)" />
+          </radialGradient>
+          <!-- ember base glow (잉걸) -->
+          <radialGradient id="auraLit" cx="50%" cy="58%" r="60%">
+            <stop offset="0%" stop-color="rgba(246,160,82,0.7)" />
+            <stop offset="35%" stop-color="rgba(224,107,46,0.4)" />
+            <stop offset="100%" stop-color="rgba(224,107,46,0)" />
+          </radialGradient>
+          <!-- 잉걸불(banked embers): deep red coals, no yellow → reads as "resting / cooling" -->
+          <radialGradient id="auraIdle" cx="50%" cy="60%" r="60%">
+            <stop offset="0%" stop-color="rgba(212,74,40,0.5)" />
+            <stop offset="45%" stop-color="rgba(150,42,24,0.28)" />
+            <stop offset="100%" stop-color="rgba(110,30,18,0)" />
+          </radialGradient>
+          <radialGradient id="auraFlag" cx="50%" cy="58%" r="60%">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.55)" />
+            <stop offset="100%" stop-color="rgba(210,85,63,0)" />
+          </radialGradient>
+          <!-- 불기운 plume gradient: hot base → ash, fading at the top (from the gallery card) -->
+          <linearGradient id="plumeLit" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stop-color="rgba(246,160,82,0.7)" />
+            <stop offset="35%" stop-color="rgba(224,107,46,0.45)" />
+            <stop offset="75%" stop-color="rgba(111,100,83,0.22)" />
+            <stop offset="100%" stop-color="rgba(111,100,83,0)" />
+          </linearGradient>
+          <linearGradient id="plumeFlag" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0%" stop-color="rgba(240,120,90,0.7)" />
+            <stop offset="55%" stop-color="rgba(210,85,63,0.3)" />
+            <stop offset="100%" stop-color="rgba(210,85,63,0)" />
+          </linearGradient>
+          <filter id="soften" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.5" /></filter>
+          <!-- 잉걸 베드: very hazy, no defined disc edge -->
+          <filter id="bedhaze" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="13" /></filter>
+        </defs>
+
+        @for (g of regions(); track g.id; let i = $index) {
+          <!-- per-project turbulence so each 불기운 plume distorts differently (gallery bE_glow9) -->
+          <filter [attr.id]="'plm' + i" x="-70%" y="-50%" width="240%" height="200%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.011 0.02" numOctaves="3" [attr.seed]="g.seed" result="n">
+              <animate attributeName="baseFrequency" [attr.dur]="g.churn + 's'"
+                       values="0.011 0.02;0.02 0.013;0.013 0.026;0.016 0.018;0.011 0.02" repeatCount="indefinite" />
+            </feTurbulence>
+            <feDisplacementMap in="SourceGraphic" in2="n" scale="20" xChannelSelector="R" yChannelSelector="G" result="disp">
+              <animate attributeName="scale" [attr.dur]="g.churn + 's'"
+                       values="15;28;19;25;15" repeatCount="indefinite" />
+            </feDisplacementMap>
+            <feGaussianBlur in="disp" stdDeviation="2" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="b" /></feMerge>
+          </filter>
+          <g class="cloud" [class.lit]="g.active" [class.idle]="!g.active && !g.ghost"
+             [class.flagged]="g.flagged" [class.ghost]="g.ghost">
+            <!-- 잉걸 base glow (holds the tasks) — boundary heavily feathered (no disc edge) -->
+            <ellipse class="aura" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.rx]="g.auraRx" [attr.ry]="g.auraRy"
+                     filter="url(#bedhaze)" />
+            <!-- 달아오른 불기운: turbulence-displaced incandescent plume (nested svg keeps the filter look) -->
+            <svg class="plumebox" [attr.x]="g.px" [attr.y]="g.py" [attr.width]="g.pw" [attr.height]="g.ph"
+                 viewBox="0 0 120 128">
+              <g [attr.filter]="'url(#plm' + i + ')'">
+                <path class="plume" [attr.d]="PLUME"
+                      [style.animation-duration]="g.churn + 's'" [style.animation-delay]="g.delay + 's'" />
+              </g>
+            </svg>
+            <!-- 분수 불티: spark fountain rising + drifting outward, fading -->
+            <g class="fountain">
+              @for (s of g.fountain; track $index) {
+                <circle class="fspark" [attr.cx]="s.sx" [attr.cy]="s.y0" [attr.r]="s.r">
+                  <animate attributeName="cy" [attr.from]="s.y0" [attr.to]="s.y1"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                  <animate attributeName="cx" [attr.values]="s.sx + ';' + (s.sx + s.dx)"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0;1;0.9;0"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                </circle>
+              }
+            </g>
+            <!-- 잉걸불: lone ember(s) rising occasionally — only when idle (banked) -->
+            <g class="loneember">
+              @for (s of g.lone; track $index) {
+                <circle class="lone" [attr.cx]="s.sx" [attr.cy]="s.y0" [attr.r]="s.r">
+                  <animate attributeName="cy" [attr.from]="s.y0" [attr.to]="s.y1"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                  <animate attributeName="cx" [attr.values]="s.sx + ';' + (s.sx + s.dx)"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0;0;1;0.7;0" keyTimes="0;0.12;0.4;0.7;1"
+                           [attr.dur]="s.dur + 's'" [attr.begin]="s.begin + 's'" repeatCount="indefinite" />
+                </circle>
+              }
+            </g>
+            <!-- hot core -->
+            <circle class="core" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.coreR" filter="url(#soften)" />
+            <!-- selection ring + click target -->
+            <circle class="hit" [class.sel]="g.selected" [attr.cx]="g.cx" [attr.cy]="g.cy" [attr.r]="g.hitR"
+                    (click)="selectProject(g.id)" />
+          </g>
         }
-      </div>
-      <div class="badge" [class.dim]="n.flow?.currentStep === 'ground'">▸ {{ n.flow?.currentStep }}</div>
-    </div>
-  }
 
-  <div class="glass node livenode">
-    <div class="h"><span class="pd"></span>LIVE · agent&#64;{{ project()?.id }}</div>
-    <div class="lv" role="log" aria-live="polite" aria-relevant="additions" aria-label="에이전트 활동 스트림">
-      @for (line of liveLines(); track $index) {
-        @switch (line.kind) {
-          @case ('tool') { <div><span class="c">{{ line.text }}</span></div> }
-          @case ('ok') { <div><span class="ok">{{ line.text }}</span></div> }
-          @default { <div>{{ line.text }}</div> }
+        <!-- dependency trails; A2A rides them as sparks -->
+        @for (t of trails(); track t.id) {
+          <path [attr.d]="t.d" class="trail" [class.proposed]="t.proposed"></path>
+          <text [attr.x]="t.lx" [attr.y]="t.ly" class="trail-lbl">depends</text>
+          @if (t.hasFlow) {
+            <circle r="3.4" class="flowspark"><animateMotion dur="2.2s" repeatCount="indefinite" [attr.path]="t.d" /></circle>
+          }
+        }
+      </svg>
+
+      <!-- floating labels + task embers -->
+      @for (g of regions(); track g.id) {
+        <div class="rlabel" [style.left.px]="g.cx" [style.top.px]="g.top">
+          <span class="rname">{{ g.ghost ? '＋' : (g.active ? '🔥' : '🪵') }} {{ g.name }}</span>
+          <span class="rmeta">{{ g.ghost ? '등록 대기' : (g.active ? g.activeCount + ' 작업 중' : 'idle') }}{{ g.extra ? ' · +' + g.extra : '' }}</span>
+          @if (g.flagged) { <span class="qtag">질문</span> }
+        </div>
+        @for (e of g.embers; track e.id) {
+          <button class="emb" type="button" (click)="selectTask(e.id, $event)"
+                  [class.run]="e.state === 'in_flow'" [class.done]="e.state === 'done'"
+                  [style.left.px]="e.x" [style.top.px]="e.y">
+            <span class="edot"></span>
+            <span class="etitle">{{ e.title }}</span>
+            @if (e.step) { <span class="estep">{{ e.step }}</span> }
+          </button>
         }
       } @empty {
-        <div>스트림 대기 중…</div>
+        <div class="empty">아직 프로젝트가 없습니다. 위 입력창에 작업 의도를 입력하면 blazewrit이 프로젝트 등록을 제안합니다.</div>
       }
     </div>
-  </div>
-
-  <div class="glass zoom">
-    <button type="button" aria-label="Zoom in"><span aria-hidden="true">+</span></button>
-    <button type="button" aria-label="Zoom out"><span aria-hidden="true">−</span></button>
-    <button type="button" aria-label="Fit to screen"><span aria-hidden="true">⤢</span></button>
-  </div>
+  </section>
 </div>

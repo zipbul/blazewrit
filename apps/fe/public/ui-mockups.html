@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>blazewrit · UI/UX 시안 갤러리</title>
+<style>
+  :root{
+    --bg:#15100a; --fg:#efe3cf; --card:rgba(31,24,16,0.55); --popover:#1f1810;
+    --muted:#a8967a; --faint:#6f6453; --primary:#e06b2e; --accent:#d4a24a;
+    --ring:#e06b2e; --destructive:#d2553f; --success:#d4a24a; --warning:#e9b85c;
+    --mono:'Spline Sans Mono',ui-monospace,'SFMono-Regular',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(224,107,46,.10), transparent 60%),
+      var(--bg);
+    color:var(--fg); font-family:var(--mono); line-height:1.5; min-height:100vh;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:40px 24px 80px}
+  h1{font-size:1.5rem; margin:0 0 4px} h1 b{color:var(--primary)}
+  .sub{color:var(--muted); margin:0 0 28px; font-size:.9rem}
+  .mark{color:var(--primary); text-shadow:0 0 12px rgba(224,107,46,.6)}
+  .grid{display:grid; grid-template-columns:1fr; gap:16px}
+  .card{
+    display:block; text-decoration:none; color:inherit;
+    background:var(--card); border:1px solid rgba(255,255,255,.10);
+    border-radius:14px; padding:18px 20px; backdrop-filter:blur(8px);
+    transition:border-color .15s, transform .15s;
+  }
+  .card:hover{border-color:rgba(224,107,46,.7); transform:translateY(-2px)}
+  .card.rec{border-color:rgba(212,162,74,.55); box-shadow:0 0 30px rgba(224,107,46,.10)}
+  .row{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+  .name{font-size:1.1rem; font-weight:700}
+  .badge{font-size:.66rem; font-weight:700; padding:.15rem .5rem; border-radius:999px;
+    border:1px solid var(--accent); color:var(--accent)}
+  .one{color:var(--fg); margin:.5rem 0 .35rem}
+  .meta{color:var(--muted); font-size:.82rem; margin:.15rem 0}
+  .meta .k{color:var(--accent)}
+  .chips{display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.6rem}
+  .chip{font-size:.7rem; color:var(--muted); border:1px solid rgba(255,255,255,.14);
+    border-radius:999px; padding:.12rem .5rem}
+  .open{color:var(--primary); font-size:.8rem; margin-top:.6rem; display:inline-block}
+  .note{margin-top:30px; color:var(--faint); font-size:.78rem; border-top:1px solid rgba(255,255,255,.08); padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="mark">🜂</span> blaze<b>writ</b> · UI/UX 시안 갤러리</h1>
+  <p class="sub">중앙 채팅 + 태스크별 채팅 · 접이식 · 상호참조 · 불-캔버스와 조화 — 삼자 브레인스토밍(리서치 5 → 컨셉 3 → 비평 3×3 → 종합) 산출 시안. 카드를 눌러 실제 화면을 보세요.</p>
+
+  <div class="grid">
+    <a class="card rec" href="ui-dock.html">
+      <div class="row"><span class="name">① Hearth Dock — 하단 단일 독</span><span class="badge">★ 추천(종합)</span></div>
+      <p class="one">하단 한 줄 독이 손잡이. 펼치면 중앙↔태스크 두 고도, 캔버스는 살아있음. 4가지 상태 토글 제공.</p>
+      <p class="meta"><span class="k">중앙/태스크</span> 스레드 탭(실제 id) · <span class="k">상호참조</span> 기존 depends선 점등 + @멘션 칩 + 양방향 백링크</p>
+      <p class="meta"><span class="k">강점</span> 균형·확장(프로젝트 그룹 레일+⌘K)·바닥 1층 통합 · <span class="k">왜 추천</span> 4대 요건 다 충족 + 두 탈락안의 best 이식</p>
+      <div class="chips"><span class="chip">평상시</span><span class="chip">펼침·중앙</span><span class="chip">펼침·태스크</span><span class="chip">집중 보기(Z)</span></div>
+      <span class="open">→ 열기</span>
+    </a>
+
+    <a class="card" href="ui-rail.html">
+      <div class="row"><span class="name">② Side Rail — 좌측 독</span><span class="badge">대안 A</span></div>
+      <p class="one">좌측 대화 레일 + 중앙 캔버스 + 우측 질문함. 긴 중앙 스레드/와이드 모니터에 유리.</p>
+      <p class="meta"><span class="k">유리</span> 멀티모니터·plan 승인 높이 · <span class="k">약점</span> 질문함과 동시에 열면 캔버스 3면 조임 → 그래서 대안 (자동-뱅크로 완화)</p>
+      <div class="chips"><span class="chip">프로젝트 그룹 레일</span><span class="chip">우측 질문함 유지</span><span class="chip">레일 접기→아이콘 스파인</span></div>
+      <span class="open">→ 열기</span>
+    </a>
+
+    <a class="card" href="ui-canvas.html">
+      <div class="row"><span class="name">③ Canvas-native embers — 캔버스 임베드</span><span class="badge">대안 B</span></div>
+      <p class="one">대화가 불(잉걸불)에 공간적으로 붙음. 카드는 가장자리 도킹+리더선, 중앙은 하단 얇은 바.</p>
+      <p class="meta"><span class="k">유리</span> ≤8화로 + 브랜드 "와우"(조화·참신함 최고) · <span class="k">약점</span> 학습성·확장성 낮음 → 밀집 시 LOD로 보강</p>
+      <div class="chips"><span class="chip">잉걸불 클릭→가장자리 카드</span><span class="chip">리더선</span><span class="chip">밀집 LOD 피커</span></div>
+      <span class="open">→ 열기</span>
+    </a>
+  </div>
+
+  <p class="note">팔레트·글래스·코어 크롬(헤더/캔버스/화로/depends선)은 세 시안 공통 — 챗 배치만 달라 공정 비교됩니다. 카피는 모두 표준 한국어(불은 시각으로만). 로컬 FE에서 <b>http://localhost:4200/ui-mockups.html</b> 로 열림.</p>
+</div>
+</body>
+</html>
