@@ -1,5 +1,6 @@
 import './seal'; // baker: seal all @bw/dto recipes once before any validate (A2A JSON-RPC ingress)
 import { SQL } from 'bun';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createRestApi } from './api/rest';
 import { ensureSchema } from './infra/schema';
 import { AgentStepExecutor } from './orchestrator/infra/agent-step-executor';
@@ -27,6 +28,10 @@ const executor = real
 // Central triage runs a real Claude Agent SDK call with a read-only DB tool — always available.
 const triage = new TriageAgent({ sql });
 
+// Flow assembler: the project agent composes the step chain per task (a cheap, tool-less, read-only
+// SDK call). Gated by BW_REAL so paced/demo mode keeps the curated workflow (no API cost).
+const assembler = real ? { queryFn: query as never } : undefined;
+
 // Loopback only: the API is unauthenticated, so it must never be reachable from the network.
-createRestApi(sql, { executor, triage, selfBaseUrl: `http://localhost:${port}` }).listen({ hostname: '127.0.0.1', port });
-console.log(`blazewrit REST API on 127.0.0.1:${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'}, triage=agent-sdk)`);
+createRestApi(sql, { executor, triage, assembler, selfBaseUrl: `http://localhost:${port}` }).listen({ hostname: '127.0.0.1', port });
+console.log(`blazewrit REST API on 127.0.0.1:${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'}, triage=agent-sdk, assembler=${real ? 'agent-sdk' : 'curated'})`);
