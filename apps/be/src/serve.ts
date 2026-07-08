@@ -5,6 +5,7 @@ import { createRestApi } from './api/rest';
 import { ensureSchema } from './infra/schema';
 import { AgentStepExecutor } from './orchestrator/infra/agent-step-executor';
 import { buildStepPrompt } from './harness/prompts';
+import { stepAgentSystemPrompt, stepAgentTools } from './harness/step-agent-wiring';
 import { ensureTriageReadModel } from './triage/db/views.sql';
 import { TriageAgent } from './triage/triage-agent';
 
@@ -22,6 +23,9 @@ const executor = real
       permissionMode: 'bypassPermissions',
       maxTurns: 40,
       promptFor: buildStepPrompt,
+      // Step agents: one-line identity + ring-enforcing tool grant per step (step-taxonomy.md).
+      systemPromptFor: stepAgentSystemPrompt,
+      allowedToolsFor: stepAgentTools,
     })
   : undefined;
 
