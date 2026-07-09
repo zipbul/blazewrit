@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { KNOWN_STEPS } from './build-workflow';
-import { REVIEWER_PROMPT, REVIEWER_TOOLS, STEP_AGENTS } from './step-agents';
+import { REVIEWER_PROMPT, STEP_AGENTS } from './step-agents';
 
 /**
- * Step agents v1: one-line identity + tool scoping (the ring is enforced by TOOLS, not prose —
- * step-taxonomy.md). Prompts stay deliberately thin until reflect data justifies detail.
+ * Step agents v1: one-line identity per step. Deliberately thin until reflect data justifies
+ * detail. (Tool grants were removed: allowedTools does not bind under bypassPermissions —
+ * a boundary that doesn't bind is false safety.)
  */
 describe('STEP_AGENTS', () => {
   it('covers every grammar step (and the v2 vocabulary ideate/ship ahead of wiring)', () => {
@@ -20,36 +21,8 @@ describe('STEP_AGENTS', () => {
     }
   });
 
-  it('read-only steps cannot write (ring R0/R1: no Edit/Write)', () => {
-    for (const name of ['ground', 'investigate', 'ideate', 'decide', 'spec', 'verify', 'report', 'reflect']) {
-      const tools = STEP_AGENTS[name]!.tools;
-      expect(tools, name).not.toContain('Edit');
-      expect(tools, name).not.toContain('Write');
-    }
-  });
-
-  it('investigate reads files in full — no Grep (정독 강제는 도구경계로)', () => {
-    expect(STEP_AGENTS.investigate!.tools).not.toContain('Grep');
-    expect(STEP_AGENTS.investigate!.tools).toContain('Read');
-  });
-
-  it('mutating steps write (R2); verify/ship execute but never edit', () => {
-    for (const name of ['test', 'implement']) {
-      expect(STEP_AGENTS[name]!.tools, name).toContain('Edit');
-      expect(STEP_AGENTS[name]!.tools, name).toContain('Write');
-    }
-    for (const name of ['verify', 'ship']) {
-      expect(STEP_AGENTS[name]!.tools, name).toContain('Bash');
-      expect(STEP_AGENTS[name]!.tools, name).not.toContain('Edit');
-    }
-    // decide judges options already in context — it reads, nothing else.
-    expect(STEP_AGENTS.decide!.tools).toEqual(['Read']);
-  });
-
-  it('the reviewer is one generic judge: read-only, never redoes the work', () => {
+  it('the reviewer is one generic judge', () => {
     expect(REVIEWER_PROMPT.includes('\n')).toBe(false);
-    expect(REVIEWER_TOOLS).not.toContain('Edit');
-    expect(REVIEWER_TOOLS).not.toContain('Write');
-    expect(REVIEWER_TOOLS).not.toContain('Bash');
+    expect(REVIEWER_PROMPT).toContain('never redo the work');
   });
 });

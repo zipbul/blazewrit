@@ -128,9 +128,11 @@ export async function runFlow(workflow: WorkflowDef, deps: RunFlowDeps): Promise
       }
     }
 
-    // Reflect: persist a learning.
+    // Reflect: persist the agent's ACTUAL lessons (observed live: real output was being
+    // discarded in favour of boilerplate — that severs the learning circuit at its source).
     if (step.name === 'reflect') {
-      await deps.onLearning?.({ flowId, text: `Learned from "${deps.request}" (${workflow.flowType}).` });
+      const text = typeof output === 'string' ? output : JSON.stringify(output);
+      await deps.onLearning?.({ flowId, text });
     }
   }
 

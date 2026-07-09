@@ -39,8 +39,6 @@ export interface AgentExecutorDeps {
   promptFor: (ctx: StepContext, role: 'producer' | 'reviewer') => string;
   /** Optional per-step system prompt. */
   systemPromptFor?: (ctx: StepContext, role: 'producer' | 'reviewer') => string | undefined;
-  /** Optional per-step tool grant — the permission ring, enforced by the SDK. */
-  allowedToolsFor?: (ctx: StepContext, role: 'producer' | 'reviewer') => string[] | undefined;
   /** Defaults to the real SDK `query`. */
   queryFn?: QueryFn;
 }
@@ -79,8 +77,6 @@ export class AgentStepExecutor implements StepExecutor {
     if (this.deps.maxTurns !== undefined) options.maxTurns = this.deps.maxTurns;
     const systemPrompt = this.deps.systemPromptFor?.(ctx, callRole);
     if (systemPrompt) options.systemPrompt = systemPrompt;
-    const allowedTools = this.deps.allowedToolsFor?.(ctx, callRole);
-    if (allowedTools) options.allowedTools = allowedTools;
     if (outputFormat) options.outputFormat = outputFormat;
 
     const run = this.deps.queryFn ?? (query as QueryFn);

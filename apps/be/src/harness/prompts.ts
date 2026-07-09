@@ -36,7 +36,9 @@ function priorContext(ctx: StepContext): string {
 
 export function buildStepPrompt(ctx: StepContext, role: 'producer' | 'reviewer'): string {
   const instruction = STEP_INSTRUCTIONS[ctx.step] ?? `Perform the "${ctx.step}" step.`;
-  const header = `You are the "${ctx.step}" step of a "${ctx.flowType}" workflow.\nUser request: ${ctx.request}`;
+  // "cwd IS the project" — observed live: without this, ground scanned the whole disk (find /)
+  // looking for a project it was already standing in.
+  const header = `You are the "${ctx.step}" step of a "${ctx.flowType}" workflow.\nThe current working directory IS the target project's repository — do not search for it elsewhere.\nUser request: ${ctx.request}`;
 
   if (role === 'producer') {
     return `${header}${priorContext(ctx)}\n\nTask: ${instruction}`;
