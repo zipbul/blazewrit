@@ -84,6 +84,7 @@ export interface AssembleDeps {
 export async function assembleChain(input: AssembleInput, deps: AssembleDeps = {}): Promise<AssembleResult> {
   const options: Options = {
     cwd: tmpdir(),
+    settingSources: [],
     // The SDK spends turn 1 on the model's own reasoning; the structured-output result lands on
     // turn 2. maxTurns:1 always ends in error_max_turns (→ silent degrade), so 2 is the floor.
     maxTurns: 2,

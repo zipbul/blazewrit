@@ -92,6 +92,7 @@ export class TriageAgent {
     });
     const options: Options = {
       cwd: tmpdir(), // no repo access; only the in-process MCP tools are pre-approved
+      settingSources: [], // platform agent — no operator filesystem config
       mcpServers: { [TRIAGE_MCP_SERVER]: server },
       allowedTools: [DB_READ_TOOL_FQN, PROPOSE_INTENT_TOOL_FQN, RECORD_FEEDBACK_TOOL_FQN, SHOW_TABLE_TOOL_FQN],
       permissionMode: 'dontAsk', // deny anything not pre-approved, never prompt (headless-safe)

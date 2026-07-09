@@ -68,7 +68,10 @@ export class AgentStepExecutor implements StepExecutor {
     outputFormat?: typeof VERDICT_SCHEMA,
   ): Promise<SDKResultSuccess> {
     const callRole = role === 'review' ? 'reviewer' : 'producer';
-    const options: Options = { cwd: this.deps.cwd };
+    // 'project' only: the repo's own CLAUDE.md applies (the project declares its config);
+    // the operator's personal ~/.claude must NOT leak into step agents (observed live: a step
+    // agent read the user's RTK.md — default settingSources loads user+project+local).
+    const options: Options = { cwd: this.deps.cwd, settingSources: ['project'] };
     if (this.deps.model) options.model = this.deps.model;
     if (this.deps.permissionMode) {
       options.permissionMode = this.deps.permissionMode;

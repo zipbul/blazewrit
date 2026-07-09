@@ -21,7 +21,7 @@ export interface ReAskDeps {
  * that can't be resumed throws rather than returning a misleading empty answer.
  */
 export async function reAskSession(sessionId: string, question: string, deps: ReAskDeps = {}): Promise<ReAskResult> {
-  const options: Options = { cwd: tmpdir(), resume: sessionId, maxTurns: 2, allowedTools: [] };
+  const options: Options = { cwd: tmpdir(), resume: sessionId, maxTurns: 2, allowedTools: [], settingSources: [] };
   if (deps.model) options.model = deps.model;
 
   const run = deps.queryFn ?? (query as QueryFn);
