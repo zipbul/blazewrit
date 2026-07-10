@@ -3,6 +3,7 @@ import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent
 import type { FlowType } from '@bw/dto';
 import type { QueryFn } from '../orchestrator/infra/agent-step-executor';
 import { KNOWN_STEPS } from './build-workflow';
+import { withMindset } from './mindset';
 
 /** Facts ground surfaced, on which the agent bases its step selection. */
 export interface GroundFacts {
@@ -85,6 +86,7 @@ export async function assembleChain(input: AssembleInput, deps: AssembleDeps = {
   const options: Options = {
     cwd: tmpdir(),
     settingSources: [],
+    systemPrompt: withMindset('You are the flow assembler: compose the step chain this task needs, each pick justified by a ground fact.'),
     // The SDK spends turn 1 on the model's own reasoning; the structured-output result lands on
     // turn 2. maxTurns:1 always ends in error_max_turns (→ silent degrade), so 2 is the floor.
     maxTurns: 2,
