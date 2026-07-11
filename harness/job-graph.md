@@ -1,88 +1,92 @@
-# Job Graph (동결 v1)
+# Task / Job Graph (동결 v2)
 
-> Status: **설계 동결.** 2라운드 크로스 적대리뷰(grok×2, codex×1[1라운드 세션한도 탈락→2라운드 참여], 자체 트레이스) 통과본. `step-taxonomy.md`(스텝 층)의 상위 층. 원칙: 스텝 층에서 검증된 패턴의 프랙탈 — **에이전트가 조합하고, 기계 문법이 검증하고, 멍청한 엔진이 실행한다.**
+> Status: **설계 동결.** 다중 라운드 크로스 적대리뷰(grok×N, codex×N, 자체) + 오너 교정 반영. v1의 "중앙 플래너/의도 소유자" 모델은 **폐기** — 오너 교정: 총괄자 없이 주권 프로젝트들이 A2A로 창발 조율. `step-taxonomy.md`(잡 내부 실행)의 상위 층.
 
-## 층 구조
+## 개념 (오너 고정)
 
+- **태스크(Task)** = 사용자 요구사항. **프로젝트를 가로질러 걸친다.** 1 : N 잡.
+- **잡(Job)** = 한 프로젝트에 속한 할일 = 태스크 의존 그래프의 노드. **각 프로젝트가 자기 잡의 주권자** — 아무도 남의 잡을 편집하지 않는다.
+- **플로우(Flow)** = 잡을 실행하는 내부 스텝 체인(잡 1:1, 구현어). 잡은 pending일 때 플로우 없이 존재; dispatch되면 플로우 생성.
+- **중앙 소유자/플래너 없음.** 조율은 주권 프로젝트 에이전트들의 A2A 대화에서 **창발**.
+- **협업 = 태스크 자동생성.** A가 일하다 B 소관 일을 발견 → A2A 요청 → B가 **자기 잡**을 생성·관리(같은 태스크 밑 / 다른 활성 태스크에 제안 / 새 태스크; 완료된 태스크 재개봉 금지).
+- **의존 대처**: A 잡이 B 잡을 기다리는데 B가 실패·변경 → 파급이 A에게 전달, **A가 자기 잡을** 대기·재계획·대안. 남이 A 잡 안 건드림.
+- **자율 모드 = 전역 설정.** ON이면 사람한테 안 묻고 진행. 사람은 게이트가 아니라 **투명성(상황·이유 전달) + 언제든 대화·개입(일시정지/수정/취소)**.
+- **판단에 인위적 제약 금지** — 예산·쿼터·왕복상한·승인게이트 없음. 안전 = 주권 + 타입 문법 + 전 기록 + 가시성.
+
+## DB 스키마 (타입 보장, jsonb는 진짜 가변 페이로드에만)
+
+```sql
+tasks (
+  id text pk, title text not null, description text,
+  status text not null check (status in ('open','done','cancelled')),
+  created_at timestamptz not null default now()
+)
+jobs (
+  id text pk,
+  task_id text not null references tasks(id),
+  project_id text not null references projects(id),
+  title text not null, description text,
+  status text not null check (status in
+    ('pending','ready','running','blocked','done','failed','cancelled')),
+  generation int not null default 1,
+  created_at timestamptz not null default now()
+)
+job_deps (                              -- 순서·의존 = 간선. 없으면 병렬.
+  waiter_job text not null references jobs(id),
+  provider_job text not null references jobs(id),
+  provider_gen int not null,            -- 의존 시점 generation (stale 판정)
+  status text not null check (status in ('active','released','stale')),
+  primary key (waiter_job, provider_job),
+  check (waiter_job <> provider_job)
+)
+task_events (                           -- 공유 진실 = append-only. 시각화·감사·사이클 검사의 원천.
+  seq bigserial pk, task_id text not null references tasks(id),
+  actor text not null,                  -- machine | project:<id> | human
+  kind text not null,                   -- 아래 메시지/이벤트 종류
+  job_id text, edge jsonb,              -- jsonb는 여기(타입별 가변)만 정당
+  created_at timestamptz not null default now()
+)
 ```
-사용자 의도 (work_item = 의도 앵커, 1:N)
-  → 잡 그래프: jobs + job_edges (프로젝트 경계를 넘는 DAG)
-    → 잡 1개 = 프로젝트 하나에서 flow 하나로 실행 (기존 스텝 기계 그대로)
-```
 
-의도가 잡 1개로 퇴화(N=1)하면 오늘의 동작과 동일 — 하위호환은 문법이 보장한다.
+FK=매달린 간선 차단, CHECK=상태값 강제, PK=중복 간선 차단, `<>`=자기루프 차단 — 전부 DB가 보장. **DB가 진실, A2A는 그 위에 이벤트 얹는 것뿐.**
 
-## 데이터 모델
+## 에이전트는 언제·무슨 기준으로 판단하나 (핵심)
 
-- `jobs(id, work_item_id, project_id, title, scope, state, generation, lease_until, attempt, priority, scope_hash, flow_id?, created_at)`
-- `job_edges(from_job, to_job)` — 명시 의존 간선
-- `graph_events` — append-only 변이·결정 로그 (감사/디버그/재질의용; **결정 주체 L0/L1/L2와 거부 사유 필수 기록** — 학습 회로의 입력). 현재 상태의 권위는 jobs/job_edges + generation CAS (완전 이벤트소싱은 필요가 증명되면).
+**에이전트는 스케줄링을 하지 않는다. 의존을 선언할 뿐이다. 기계는 준비된 것을 돌린다.**
 
-## 잡 상태기계 (엄격 — 허용 전이 외 불가)
+판단 시점 = 3개 이벤트 (매순간 상주 아님):
+1. **분해 시** — 태스크가 오면 잡들 + 의존 간선을 쓴다.
+2. **실행 중 발견 시** — 필요한 게 생기면 잡 추가 / 타프로젝트 요청.
+3. **의존 해소·실패 시** — 기다리던 게 done/failed 되면 대처.
 
-```
-pending → ready → dispatched → running → done
-                                   ↘ failed(attempt·transient/terminal 필드로 재시도 판정)
-held(사유 enum: dependency | failure | conflict | approval)
-cancelled / superseded(세대 교체 — 구 산출물 무효화)
-```
+기준 (직렬/병렬/타프로젝트):
+- **순서 = 결과 의존 하나뿐.** "이 잡이 저 잡의 *결과*가 필요한가?" → 필요하면 의존 간선(직렬), 아니면 간선 없음(병렬). 취향·추측 아님, 결과 의존만.
+- **타프로젝트 = 소관.** "이 일이 다른 프로젝트 도메인인가?" → A2A 요청. 그쪽이 자기 잡 선언.
+- 판단 결과 = DB 쓰기(잡·간선), 문법(사이클 검사 등)이 검증.
 
-- **하류 신뢰 규칙**: 하류 잡은 `done` 잡의 산출물만 신뢰한다. 체크포인트 산출물은 잡 내부 전용.
-- **타임아웃 2종 분리**: lease 타임아웃(워커 생존 — 회수·재발사) ≠ job 타임아웃(SLA 초과 — hold+에스컬레이션). hung running이 큐를 영구 점유하지 못하게.
-- 실패 전파: failed → 의존 잡 `held(failure)` (자동 cancel 금지) → 에스컬레이션. cancel은 명시 행위.
+## A2A = DB 위의 이벤트 (타입별)
 
-## 그래프 문법 (기계 검증, 순수함수)
+`job.requested`(A→B) / `accepted·rejected·countered`(B 주권) / `dep.declared` / `job.changed` / `job.terminal`(done·failed·cancelled·superseded) / `fact.request·reply`(읽기, provenance 데이터 — 지시로 프롬프트에 넣지 않음). 상관: `contextId=task_id`, `messageId` 멱등, 의존은 `(project_id, job_id, generation)`에 건다.
 
-DAG(간선 추가 시마다 사이클 검사) · 간선 양끝 실존 · 활성 프로젝트 라우팅(환각 프로젝트 hard reject) · N=1 퇴화 = 현행 동작. 상한류 숫자 제약 없음 — 이상한 분해는 킥오프 승인과 모니터링에서 보인다.
+## 기계 (물리, 판단 아님 — L0)
 
-## 분해: rolling-wave
+- **reconcile 컨트롤러**: 의존 다 released인 잡 → ready → 기존 A2A dispatch로 실행. 병렬 = ready 여럿 동시(프로젝트 다르면). 재시작 = 전체 reconcile.
+- **사이클**: 간선 insert 시 검사 → 순환이면 **거절**(DAG 물리). 거절당한 에이전트가 대안 판단.
+- **정체(stall)**: lease/heartbeat 침묵 = 관측된 사실(쿼터 아님) → 의존 잡 blocked로 깨어나 대처.
+- **stale**: provider가 supersede(generation↑) → 옛 간선 stale → 대기자 자동 wake·재계획.
 
-`assembleJobs`(웨이브 분해기, assembleChain과 동형 — structured output·세션 기록·문법 벽이 소비): 의도+정찰 사실+현 그래프 → **이번 웨이브 잡/간선만 확정**, 나머지는 다음 웨이브. 선행 전체분해(BDUF) 금지 — LLM 계획 품질은 horizon에 반비례. 의도 수준 목표(수용기준)는 별도 보관해 웨이브가 표류하지 않게.
+## 시각화
 
-## 실행: 조정(reconcile) 컨트롤러
+`task_events` projection. 상위 뷰 = 프로젝트 간 A2A/의존 흐름, 하위 뷰 = 프로젝트별 잡 그래프(자기 슬라이스). 같은 edge id로 조인. 상태·의존·막힘·파급 실시간. (일관된 실시간 그래프 요구가 공유 로그를 강제 — 나중 join은 skew로 거짓말.)
 
-명령형 "완료되면 다음 찍기" 금지. 이벤트+주기 스윕으로 desired vs observed 대조:
-- READY = 의존 전부 done ∧ not held ∧ generation 최신 → **멱등 dispatch (키: job_id+generation, `ready→dispatched` 전이는 generation 포함 단일 CAS)**
-- **이중 방어**: 워커(flow)는 시작 시 권위 generation 재확인 — CAS는 이미 나간 dispatch를 못 막는다
-- 병렬 = READY 여러 개 동시 발사 (프로젝트가 다르면), 프로젝트당 동시 1 flow(v1) + FIFO/priority 큐
-- 재시작 = 전체 active 의도 reconcile. lease 만료 → 정책따라 재큐/실패
+## 만들지 않는 것
 
-## 변이 (동적 재계획)
-
-연산: split / merge / reorder / amend / add / cancel / 크로스 요청. **running은 신성불가침이 아니다**: (a) 스텝 경계 체크포인트에서 남은 계획 amend (b) cancel+respawn(generation+1, 구 잡 superseded) (c) 토폴로지 안 건드리는 수용기준 편입.
-
-## 권한: 에이전트 전권
-
-**잡·태스크 관리에 제약을 걸지 않는다.** per-intent 플래너가 자기 의도의 그래프에 전권을 갖는다 — split/merge/reorder/amend/add/cancel 전부, 프로젝트 경계와 무관하게. 타 의도의 잡은 소유권이 다르므로 제안으로 조율하고, 상대 플래너가 자율 결정한다.
-
-**인간은 게이트가 아니다.** 시스템은 어디서도 승인을 기다리며 멈추지 않는다. 인간이 갖는 것은 개입 **능력**(모니터링에서 보고, 원할 때 일시정지/수정/취소) — 요구되는 승인이 아니라 선택적 개입. 기계(L0)가 하는 것은 판단이 아니라 동작뿐: READY 발사, CAS, lease 회수, 실패 hold 전파, 사이클 검사, 재발견 승격.
-
-## 플래너 간 조율 프로토콜
-
-- 요청 = 제안(proposed → accepted | rejected | 역제안). **역제안 = 원요청 참조하는 새 제안** — 협상 FSM 없음.
-- **조율에 제약 없음.** 왕복 횟수·예산·무진전 판정 같은 인위적 울타리를 두지 않는다 — 판단은 에이전트의 일이다. 안전 모델은 울타리가 아니라 **가시성**: 모든 제안·수락·거절이 graph_events에 남고, 이상 패턴은 사람이 모니터링에서 보고 원인(프롬프트·학습)을 고친다. 증상을 쿼터로 가리는 것은 땜질이다(마인드셋 #3).
-- stale 감지: 제안이 참조한 generation이 지나가면 자동 무효 (이건 제약이 아니라 사실 — 대상이 이미 변했다).
-
-## 충돌 (교차 의도)
-
-같은 프로젝트를 두 의도가 다투면 플래너끼리 제안으로 조율한다 — 중재 룰·심판 없음. 동시 쓰기의 정합만 기계가 지킨다(generation CAS — 룰이 아니라 물리). 조율 과정은 전부 기록되고, 인간은 보이는 대로 원하면 개입한다.
-
-## 스케줄링
-
-프로젝트당 동시 1 flow(v1 물리 제약: 프로세스당 cwd 1개) + 대기열. 순서는 플래너들이 조율로 정한다 — 스케줄링 정책을 시스템이 강제하지 않는다.
-
-## 발견 처리
-
-발견은 discovery 이벤트로 방출되고 per-intent 플래너가 판단해 처분한다(즉시/편입/새 잡/기록). 4처분은 어휘지 강제 룰이 아니다 — 플래너의 판단이 우선하고, 판단 근거는 기록된다.
-
-## 만들지 않는 것 (합의)
-
-협상 FSM · 글로벌 최적 스케줄러 · partial-done 상태 · 완전 이벤트소싱(로그는 감사용) · 왕복 상한 · 변이/조율 예산 · 무진전 판정기 · 승인 게이트 · 중재 룰 · preempt/kill. **판단과 관리에 대한 제약 일절 금지 — 에이전트 전권, 안전은 가시성+기록+사람의 선택적 개입에서 나온다.**
+중앙 플래너·중앙 그래프 소유자 · 크로스 프로젝트 잡 편집 · 예산/쿼터/왕복상한/승인게이트 · 협상 FSM · 글로벌 스케줄러 · 완료 태스크 재개봉.
 
 ## 구현 순서
 
-1. **P1** 스키마(jobs/job_edges/graph_events) + 그래프 문법 순수함수 + 상태기계 전이 검증 (TDD; N=1 퇴화=현행 증명)
-2. **P2** assembleJobs 웨이브 분해기 + 세션 기록
-3. **P3** 조정 컨트롤러 (멱등 dispatch·이중 generation 방어·lease/job 타임아웃·재시작 reconcile) — 기존 A2A dispatch 재사용
-4. **P4** 변이 연산 + 조율 프로토콜 + supersede
-5. **P5** 발견 이벤트 + 인간 개입 수단(일시정지/수정/취소 — 게이트 아님)
+1. **P1** 스키마(tasks/jobs/job_deps/task_events) + 상태기계 전이 + 사이클 검사 순수함수 (TDD; N=1 잡 = 현행 동작 보존)
+2. **P2** reconcile 컨트롤러 (ready 판정·기존 dispatch 재사용·stale/stall 물리)
+3. **P3** A2A 이벤트 종류 + 멱등/상관 + task_events append
+4. **P4** 분해·발견 판단(에이전트) → 잡·간선 쓰기 + 타프로젝트 요청
+5. **P5** 시각화(2층 뷰) + 자율모드 토글 + 투명성/개입 UI
