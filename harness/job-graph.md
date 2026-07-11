@@ -23,7 +23,7 @@
 ```
 pending → ready → dispatched → running → done
                                    ↘ failed(attempt·transient/terminal 필드로 재시도 판정)
-held(사유 enum: dependency | failure | conflict | approval | budget)
+held(사유 enum: dependency | failure | conflict | approval)
 cancelled / superseded(세대 교체 — 구 산출물 무효화)
 ```
 
@@ -33,7 +33,7 @@ cancelled / superseded(세대 교체 — 구 산출물 무효화)
 
 ## 그래프 문법 (기계 검증, 순수함수)
 
-DAG(간선 추가 시마다 사이클 검사) · 간선 양끝 실존 · 활성 프로젝트 라우팅(환각 프로젝트 hard reject) · depth/fan-out/잡 수 상한 · N=1 퇴화 = 현행 동작.
+DAG(간선 추가 시마다 사이클 검사) · 간선 양끝 실존 · 활성 프로젝트 라우팅(환각 프로젝트 hard reject) · N=1 퇴화 = 현행 동작. 상한류 숫자 제약 없음 — 이상한 분해는 킥오프 승인과 모니터링에서 보인다.
 
 ## 분해: rolling-wave
 
@@ -57,7 +57,7 @@ DAG(간선 추가 시마다 사이클 검사) · 간선 양끝 실존 · 활성 
 
 | 레벨 | 결정자 | 대상 |
 |---|---|---|
-| **L0 기계** | 룰 | READY 발사, CAS 재시도, lease 회수, 실패 hold 전파, 사이클 검사, 동일해시 중복 차단, 재발견 승격, 블로킹 발견의 현재잡 편입 |
+| **L0 기계** | 룰 | READY 발사, CAS 재시도, lease 회수, 실패 hold 전파, 사이클 검사, 재발견 승격, 블로킹 발견의 현재잡 편입 |
 | **L1 에이전트** | per-intent 플래너 | **자기 의도의** pending/held 잡 — 프로젝트가 달라도: amend/split/add/비순환 edge 추가. 타 의도 잡에는 **제안만**; 대상 의도 플래너가 자율 수락/거절 |
 | **L2 인간** | 승인함 | remove/reorder/비가역 cancel, 에스컬레이션, 충돌 미해결. **일괄 승인**: 하나의 게이트가 토폴로지+cancel+재배선 패키지를 한 번에 |
 
