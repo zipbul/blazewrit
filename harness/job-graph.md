@@ -117,10 +117,45 @@ repos (                                  -- 주권 단위(옛 projects). cwd가 
 
 프롬프트 = 얇은 뉘앙스 하나("네 슬라이스 그래프 유연히 관리 — add/split/merge/reorder, dep 선언/철회, 타레포 요청") + 이번 wake의 구체 이유 한 줄. 9-분류 나열 안 함(필터 완전성 스펙일 뿐). 기계 혼자: dep released→ready, ready 스케줄링, 인간 cancel 즉시 집행, coalesce. 에이전트 깨우는 필터 6 + 타이머: ①분해 ②자기완료 편입 ③의존 예외 ④인바운드 A2A 결정 ⑤인간 권한(정리만) ⑥이상·품질 + 정체/주기 타이머.
 
-## 구현 순서
+## 인수인계: 현재 코드 → 목표 (이 층은 그린필드 신규, 실행층은 재사용)
 
-1. **P1** 최소 스키마(products/repos/tasks/task_seals/jobs/deps/dep_members/external_gates) + 상태기계 + 봉합규칙 1·2·3·6·7 + cycle·ready 순수함수 (TDD; 단일 잡·단일 dep = 현행 보존). A2A 주소 `/agents/:repoId/a2a`. 제품 라우터 = 기존 중앙 triage 확장(비주권). executor cwd = `repos.cwd` 해석.
+**설계 8테이블(products/repos/tasks/task_seals/jobs/deps/dep_members/external_gates)은 코드에 0개 존재.** 현재 있는 것과의 매핑:
+
+| 현재 (schema.ts) | 목표 | 관계 |
+|---|---|---|
+| `projects` | **`repos`**(개명) + 신규 **`products`** | projects → repos 개명, product_id·cwd·parent_repo_id 추가 |
+| `work_items`(레포별 작업, 1:1 flow) | 신규 **`tasks`**(레포 걸침) + **`jobs`**(레포별) | work_items → jobs로 흡수, 그 위에 tasks 신설 |
+| `flows`(실행 1회) | **잔존** — 잡 실행층(잡 1:1 flow) | 개명 안 함. `flows.job_id` 추가로 잡에 연결 |
+| `step_runs`·producer⇄reviewer·runFlow | **그대로 재사용** | 잡 = 이 스텝 기계로 실행. 안 건드림 |
+| `decisions`(HITL) | 인간 개입·wake 이유 채널로 연결 | |
+
+**배선점(파일/함수):**
+- `apps/be/src/api/rest.ts` `dispatchTask` — 오늘 "의도 1 → work_item 1 → runFlow 1". 목표: "태스크 생성 → 잡 분해 → reconcile이 ready 잡을 dispatch". N=1이면 오늘 경로와 동일해야.
+- `apps/be/src/orchestrator/orchestrator.ts` `runFlow` — 잡 하나를 실행. 시그니처 유지, 잡 컨텍스트만 주입.
+- A2A `/agents/:projectId/a2a` → `/agents/:repoId/a2a`. `serveCard`/`dispatchViaA2A`는 `repos` 조회.
+- `apps/be/src/orchestrator/infra/agent-step-executor.ts` `cwd: string` + `settingSources:['project']` — dispatch 시 `repos.cwd`로 레포별 해석해 구성(현재는 프로세스당 고정 = 유일 실코드 갭).
+
+## 마이그레이션 순서 (커밋 단위, 매 커밋 N=1 green 유지)
+
+1. `products`/`repos`(=projects 백필) + `tasks`/`jobs`/`task_seals`/`deps`/`dep_members`/`external_gates` **추가만**. 기존 write 경로 불변.
+2. `repos` 백필(projects 1:1), `products` 백필(레포 없는 제품은 임시 1제품). 읽기 검증만.
+3. `jobs` 백필: work_item 1 → job 1 미러(`jobs.legacy_work_item_id`). 기존 `/api/work-items` 그대로.
+4. `flows.job_id` nullable 추가. 새 flow 생성 시 work_item_id·job_id 둘 다.
+5. `/api/work-items`를 jobs+tasks+flows projection으로(DTO shape 유지 → FE green).
+6. `dispatchTask`가 먼저 `tasks` 생성 → N=1 job → 기존 dispatch로. 동작 현행 동일.
+7. 잡 분해기(assembleJobs, N=1만 반환하는 feature flag) + 문법 검증.
+8. reconcile 컨트롤러(ready 잡 하나 → 기존 dispatch). 결과 동일.
+9. 다중 잡/dep 개방 → 크로스-레포.
+10. A2A 협상·external_gates.
+11. 이름 정리(A2A `:repoId`), work_items 읽기 제거.
+(도메인 Task ≠ A2A 프로토콜 `TaskDto` — DTO는 `DomainTaskDto`로 분리.)
+
+## 구현 순서 (기능 단위)
+
+1. **P1** 최소 스키마(위 8테이블) + 상태기계 전이 + 봉합규칙 1·2·3·6·7 + cycle·ready 순수함수. **TDD 수용기준: (a) 단일 잡·단일 dep 그래프가 오늘의 dispatch→runFlow와 동일 결과, (b) 사이클 간선 insert 거절, (c) terminal 태스크 잡 insert 거절(규칙9), (d) 슬라이스 seal이 자기 레포 잡만 freeze.** A2A `/agents/:repoId/a2a`. 제품 라우터 = 중앙 triage 확장(비주권). executor cwd = `repos.cwd`.
 2. **P2** reconcile 컨트롤러 (ready·lease·원자claim·재시작 reconcile·규칙 4·5)
 3. **P3** A2A 협상(멱등, 규칙 8) + external_gates 발화
 4. **P4** 에이전트 wake 배선(이유 전달) + 분해·발견 판단 write
 5. **P5** task_events + 시각화(2층 뷰) + 자율모드 토글 + 개입 UI
+
+> **인계 메모:** 이 문서는 **검증된 설계이지 검증된 코드가 아니다**(코드 0줄). 모델·컷·규칙은 4자 적대검증 통과, 마이그레이션·배선은 위 표 기준. 정확한 reconcile 알고리즘·dep 평가 순수함수 시그니처는 P1 TDD에서 확정(지금 박으면 과설계). step-taxonomy.md(스텝 실행층)와 짝.
