@@ -1,5 +1,5 @@
 import type { StepContext } from '../orchestrator/types';
-import { withMindset } from './mindset';
+import { REVIEWER_GUARD, withMindset } from './mindset';
 import { REVIEWER_PROMPT, STEP_AGENTS } from './step-agents';
 
 /**
@@ -9,7 +9,7 @@ import { REVIEWER_PROMPT, STEP_AGENTS } from './step-agents';
  * not this file, decides what steps exist).
  */
 export function stepAgentSystemPrompt(ctx: StepContext, role: 'producer' | 'reviewer'): string | undefined {
-  if (role === 'reviewer') return withMindset(REVIEWER_PROMPT);
+  if (role === 'reviewer') return withMindset(`${REVIEWER_PROMPT}\n${REVIEWER_GUARD}`);
   const identity = STEP_AGENTS[ctx.step]?.prompt;
   return identity ? withMindset(identity) : undefined;
 }
