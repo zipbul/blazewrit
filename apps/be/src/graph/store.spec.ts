@@ -1,7 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { SQL } from 'bun';
 import { ensureSchema } from '../infra/schema';
-import { SliceSealedError, TerminalTaskError, WriteAclError, bumpJobGeneration, insertJob, sealTaskSlice, sealTaskSliceAndDerive, unsealTaskSlice } from './store';
+import {
+  JobNotFoundError,
+  NotRerunnableError,
+  SliceSealedError,
+  TerminalTaskError,
+  WriteAclError,
+  bumpJobGeneration,
+  insertJob,
+  sealTaskSlice,
+  sealTaskSliceAndDerive,
+  unsealTaskSlice,
+} from './store';
 import type { JobStatus, TaskStatus } from './types';
 
 // Integration test: exercises the graph write path (harness/job-graph.md rules 1/2/3/9) against a live Postgres.
@@ -60,7 +71,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     const { taskId, repoP } = await makeTwoRepoTask();
     await sealDirect(taskId, repoP);
     const attempt = async () => {
-      await insertJob(sql, repoP, { id: id('job'), taskId, repoId: repoP, title: 'x', status: 'pending' });
+      await insertJob(sql, repoP, { id: id('job'), taskId, repoId: repoP, title: 'x' });
     };
     await expect(attempt()).rejects.toThrow(SliceSealedError);
   });
@@ -68,7 +79,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
   test('C2: a different (unsealed) repo can still insert a job after repo P sealed', async () => {
     const { taskId, repoP, repoQ } = await makeTwoRepoTask();
     await sealDirect(taskId, repoP);
-    await insertJob(sql, repoQ, { id: id('job'), taskId, repoId: repoQ, title: 'x', status: 'pending' });
+    await insertJob(sql, repoQ, { id: id('job'), taskId, repoId: repoQ, title: 'x' });
     const rows = (await sql`select id from jobs where task_id = ${taskId} and repo_id = ${repoQ}`) as Array<{ id: string }>;
     expect(rows.length).toBe(1);
   });
@@ -82,11 +93,27 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     expect(rows[0]).toMatchObject({ status: 'pending', generation: 2 });
   });
 
+  test('F5: gen++ on a missing job id throws JobNotFoundError', async () => {
+    const attempt = async () => {
+      await bumpJobGeneration(sql, 'some-repo', id('missing-job'));
+    };
+    await expect(attempt()).rejects.toThrow(JobNotFoundError);
+  });
+
+  test('F6: gen++ on a running job throws NotRerunnableError', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const jobId = await seedJob(taskId, repoP, 'running', 1);
+    const attempt = async () => {
+      await bumpJobGeneration(sql, repoP, jobId);
+    };
+    await expect(attempt()).rejects.toThrow(NotRerunnableError);
+  });
+
   test('C4: deleting its own seal reopens INSERT for that repo', async () => {
     const { taskId, repoP } = await makeTwoRepoTask();
     await sealDirect(taskId, repoP);
     await unsealTaskSlice(sql, repoP, { taskId, repoId: repoP });
-    await insertJob(sql, repoP, { id: id('job'), taskId, repoId: repoP, title: 'x', status: 'pending' });
+    await insertJob(sql, repoP, { id: id('job'), taskId, repoId: repoP, title: 'x' });
     const rows = (await sql`select id from jobs where task_id = ${taskId} and repo_id = ${repoP}`) as Array<{ id: string }>;
     expect(rows.length).toBe(1);
   });
@@ -94,7 +121,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
   test('C5: an actor cannot insert a job into a repo other than its own (rule 1)', async () => {
     const { taskId, repoQ } = await makeTwoRepoTask();
     const attempt = async () => {
-      await insertJob(sql, 'some-other-actor', { id: id('job'), taskId, repoId: repoQ, title: 'x', status: 'pending' });
+      await insertJob(sql, 'some-other-actor', { id: id('job'), taskId, repoId: repoQ, title: 'x' });
     };
     await expect(attempt()).rejects.toThrow(WriteAclError);
   });
@@ -113,11 +140,19 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     await expect(unsealAttempt()).rejects.toThrow(WriteAclError);
   });
 
+  test('C7: insertJob always creates the row as pending generation 1', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const jobId = id('job');
+    await insertJob(sql, repoP, { id: jobId, taskId, repoId: repoP, title: 'x' });
+    const rows = (await sql`select status, generation from jobs where id = ${jobId}`) as Array<{ status: string; generation: number }>;
+    expect(rows[0]).toMatchObject({ status: 'pending', generation: 1 });
+  });
+
   test('E1: once a task is done, no repo can insert a new job into it', async () => {
     const { taskId, repoQ } = await makeTwoRepoTask();
     await setTaskStatus(taskId, 'done');
     const attempt = async () => {
-      await insertJob(sql, repoQ, { id: id('job'), taskId, repoId: repoQ, title: 'x', status: 'pending' });
+      await insertJob(sql, repoQ, { id: id('job'), taskId, repoId: repoQ, title: 'x' });
     };
     await expect(attempt()).rejects.toThrow(TerminalTaskError);
   });
@@ -146,7 +181,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     const { taskId: failedTaskId, repoQ: repoOnFailed } = await makeTwoRepoTask();
     await setTaskStatus(failedTaskId, 'failed');
     const insertOnFailed = async () => {
-      await insertJob(sql, repoOnFailed, { id: id('job'), taskId: failedTaskId, repoId: repoOnFailed, title: 'x', status: 'pending' });
+      await insertJob(sql, repoOnFailed, { id: id('job'), taskId: failedTaskId, repoId: repoOnFailed, title: 'x' });
     };
     await expect(insertOnFailed()).rejects.toThrow(TerminalTaskError);
 
@@ -163,7 +198,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     const { taskId, repoP } = await makeTwoRepoTask();
     await seedJob(taskId, repoP, 'done', 1);
     // Order 1: a second, still-pending job lands BEFORE the seal+derive runs.
-    await insertJob(sql, repoP, { id: id('job'), taskId, repoId: repoP, title: 'y', status: 'pending' });
+    await insertJob(sql, repoP, { id: id('job'), taskId, repoId: repoP, title: 'y' });
     await sealTaskSliceAndDerive(sql, repoP, { taskId, repoId: repoP });
     const rows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;
     expect(rows[0]!.status).toBe('open');
@@ -176,7 +211,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     await sealTaskSliceAndDerive(sql, repoP, { taskId, repoId: repoP });
     // A late insert attempt must be rejected, not silently accepted into an already-done task.
     const lateInsert = async () => {
-      await insertJob(sql, repoP, { id: id('job'), taskId, repoId: repoP, title: 'y', status: 'pending' });
+      await insertJob(sql, repoP, { id: id('job'), taskId, repoId: repoP, title: 'y' });
     };
     await expect(lateInsert()).rejects.toThrow(TerminalTaskError);
     const rows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;

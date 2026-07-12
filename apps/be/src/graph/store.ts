@@ -12,14 +12,21 @@ export class SliceSealedError extends Error {}
 /** Rule 9: the task is terminal (done/failed/cancelled) — no further graph writes are allowed. */
 export class TerminalTaskError extends Error {}
 
+/** bumpJobGeneration target: no job row exists with the given id. */
+export class JobNotFoundError extends Error {}
+
+/**
+ * bumpJobGeneration target: the job isn't terminal, so there's nothing to rewind (F-group
+ * transition guard — mirrors transitions.bumpGeneration's rejection at the write boundary).
+ */
+export class NotRerunnableError extends Error {}
+
 export interface NewJobInput {
   id: string;
   taskId: string;
   repoId: string;
   title: string;
   description?: string;
-  status: JobStatus;
-  generation?: number;
 }
 
 /** Identifies one repo's slice of one task (a task_seals row). */
@@ -33,6 +40,12 @@ export interface SealTarget {
  * insert a job row. `actorRepoId` is the write-ACL subject — it must equal `job.repoId`
  * (a repo can only write its own jobs, else WriteAclError). Rejected with TerminalTaskError if
  * the task is terminal, or SliceSealedError if `job.repoId` has already sealed this task.
+ *
+ * Always inserts as status='pending', generation=1 — NewJobInput carries no status/generation
+ * input on purpose. Per the graph-management wiring decision (job-graph.md, rule 3 of that
+ * section), done/failed only ever come from flow-execution results and ready only from
+ * reconcile; letting an insert dictate a status would smuggle a state transition through the
+ * shape-only write path.
  */
 export async function insertJob(sql: SQL, actorRepoId: string, job: NewJobInput): Promise<void> {
   if (actorRepoId !== job.repoId) {
@@ -52,7 +65,7 @@ export async function insertJob(sql: SQL, actorRepoId: string, job: NewJobInput)
 
     await tx`
       insert into jobs (id, task_id, repo_id, title, description, status, generation)
-      values (${job.id}, ${job.taskId}, ${job.repoId}, ${job.title}, ${job.description ?? null}, ${job.status}, ${job.generation ?? 1})
+      values (${job.id}, ${job.taskId}, ${job.repoId}, ${job.title}, ${job.description ?? null}, 'pending', 1)
     `;
   });
 }
@@ -73,7 +86,7 @@ export async function bumpJobGeneration(sql: SQL, actorRepoId: string, jobId: st
       task_id: string;
     }>;
     const job = jobRows[0];
-    if (!job) throw new Error(`job ${jobId} not found`);
+    if (!job) throw new JobNotFoundError(`job ${jobId} not found`);
     if (actorRepoId !== job.repo_id) {
       throw new WriteAclError(`actor ${actorRepoId} cannot write job ${jobId} owned by repo ${job.repo_id}`);
     }
@@ -85,7 +98,7 @@ export async function bumpJobGeneration(sql: SQL, actorRepoId: string, jobId: st
     }
 
     const result = bumpGeneration({ status: job.status, generation: job.generation });
-    if (!result.ok) throw new Error(result.reason);
+    if (!result.ok) throw new NotRerunnableError(result.reason);
 
     await tx`update jobs set status = ${result.job.status}, generation = ${result.job.generation} where id = ${jobId}`;
   });
