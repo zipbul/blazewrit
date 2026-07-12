@@ -1,0 +1,172 @@
+import type { SQL } from 'bun';
+import { deriveTaskStatus } from './derive';
+import { bumpGeneration } from './transitions';
+import type { JobStatus, TaskStatus } from './types';
+
+/** Rule 1: actorRepoId doesn't own the job/seal row being written. */
+export class WriteAclError extends Error {}
+
+/** Rule 2: the acting repo has already sealed this task — its own INSERT is frozen. */
+export class SliceSealedError extends Error {}
+
+/** Rule 9: the task is terminal (done/failed/cancelled) — no further graph writes are allowed. */
+export class TerminalTaskError extends Error {}
+
+export interface NewJobInput {
+  id: string;
+  taskId: string;
+  repoId: string;
+  title: string;
+  description?: string;
+  status: JobStatus;
+  generation?: number;
+}
+
+/** Identifies one repo's slice of one task (a task_seals row). */
+export interface SealTarget {
+  taskId: string;
+  repoId: string;
+}
+
+/**
+ * Rule 1 (write ACL) + rule 2 (slice insert-freeze) + rule 9 (terminal task immutable):
+ * insert a job row. `actorRepoId` is the write-ACL subject — it must equal `job.repoId`
+ * (a repo can only write its own jobs, else WriteAclError). Rejected with TerminalTaskError if
+ * the task is terminal, or SliceSealedError if `job.repoId` has already sealed this task.
+ */
+export async function insertJob(sql: SQL, actorRepoId: string, job: NewJobInput): Promise<void> {
+  if (actorRepoId !== job.repoId) {
+    throw new WriteAclError(`actor ${actorRepoId} cannot write jobs into repo ${job.repoId}`);
+  }
+  await sql.begin(async (tx) => {
+    const taskRows = (await tx`select status from tasks where id = ${job.taskId} for update`) as Array<{ status: TaskStatus }>;
+    const task = taskRows[0];
+    if (task && task.status !== 'open') {
+      throw new TerminalTaskError(`task ${job.taskId} is terminal (${task.status})`);
+    }
+
+    const sealRows = (await tx`select 1 from task_seals where task_id = ${job.taskId} and repo_id = ${job.repoId}`) as unknown[];
+    if (sealRows.length > 0) {
+      throw new SliceSealedError(`repo ${job.repoId} has already sealed its slice of task ${job.taskId}`);
+    }
+
+    await tx`
+      insert into jobs (id, task_id, repo_id, title, description, status, generation)
+      values (${job.id}, ${job.taskId}, ${job.repoId}, ${job.title}, ${job.description ?? null}, ${job.status}, ${job.generation ?? 1})
+    `;
+  });
+}
+
+/**
+ * Rule 9 (terminal task immutable) + the F-group transition guard, enforced again at the write
+ * boundary: gen++ an existing terminal job in place (same row, generation+1, status→pending).
+ * `actorRepoId` must equal the job's repo_id (rule 1, else WriteAclError) — sealing the task does
+ * NOT block this (rule 2: re-run is not an insert). Rejected with TerminalTaskError once the
+ * job's task is terminal.
+ */
+export async function bumpJobGeneration(sql: SQL, actorRepoId: string, jobId: string): Promise<void> {
+  await sql.begin(async (tx) => {
+    const jobRows = (await tx`select status, generation, repo_id, task_id from jobs where id = ${jobId} for update`) as Array<{
+      status: JobStatus;
+      generation: number;
+      repo_id: string;
+      task_id: string;
+    }>;
+    const job = jobRows[0];
+    if (!job) throw new Error(`job ${jobId} not found`);
+    if (actorRepoId !== job.repo_id) {
+      throw new WriteAclError(`actor ${actorRepoId} cannot write job ${jobId} owned by repo ${job.repo_id}`);
+    }
+
+    const taskRows = (await tx`select status from tasks where id = ${job.task_id} for update`) as Array<{ status: TaskStatus }>;
+    const task = taskRows[0];
+    if (task && task.status !== 'open') {
+      throw new TerminalTaskError(`task ${job.task_id} is terminal (${task.status})`);
+    }
+
+    const result = bumpGeneration({ status: job.status, generation: job.generation });
+    if (!result.ok) throw new Error(result.reason);
+
+    await tx`update jobs set status = ${result.job.status}, generation = ${result.job.generation} where id = ${jobId}`;
+  });
+}
+
+/**
+ * Rule 2: a repo freezes its own slice of a task (inserts its task_seals row). `actorRepoId`
+ * must equal `target.repoId` (else WriteAclError) — a repo may only seal itself. Rejected with
+ * TerminalTaskError once the task is terminal (rule 9).
+ */
+export async function sealTaskSlice(sql: SQL, actorRepoId: string, target: SealTarget): Promise<void> {
+  if (actorRepoId !== target.repoId) {
+    throw new WriteAclError(`actor ${actorRepoId} cannot seal repo ${target.repoId}'s slice`);
+  }
+  await sql.begin(async (tx) => {
+    const taskRows = (await tx`select status from tasks where id = ${target.taskId} for update`) as Array<{ status: TaskStatus }>;
+    const task = taskRows[0];
+    if (task && task.status !== 'open') {
+      throw new TerminalTaskError(`task ${target.taskId} is terminal (${task.status})`);
+    }
+
+    await tx`
+      insert into task_seals (task_id, repo_id) values (${target.taskId}, ${target.repoId})
+      on conflict (task_id, repo_id) do nothing
+    `;
+  });
+}
+
+/**
+ * Rule 2: a repo reopens its own slice by deleting its task_seals row. Same ACL (`actorRepoId`
+ * must equal `target.repoId`, else WriteAclError) and terminal-task guard (TerminalTaskError,
+ * rule 9) as sealTaskSlice.
+ */
+export async function unsealTaskSlice(sql: SQL, actorRepoId: string, target: SealTarget): Promise<void> {
+  if (actorRepoId !== target.repoId) {
+    throw new WriteAclError(`actor ${actorRepoId} cannot unseal repo ${target.repoId}'s slice`);
+  }
+  await sql.begin(async (tx) => {
+    const taskRows = (await tx`select status from tasks where id = ${target.taskId} for update`) as Array<{ status: TaskStatus }>;
+    const task = taskRows[0];
+    if (task && task.status !== 'open') {
+      throw new TerminalTaskError(`task ${target.taskId} is terminal (${task.status})`);
+    }
+
+    await tx`delete from task_seals where task_id = ${target.taskId} and repo_id = ${target.repoId}`;
+  });
+}
+
+/**
+ * Rule 3 (done atomicity): seal `target`'s slice AND recompute task.status from the current
+ * participating-repo/seal/job facts in the same transaction, returning the resulting status.
+ * This is the only path that can flip a task to done/failed — its atomicity is what D7 verifies
+ * (interleaving a job insert around this call must never leave "done" with an open job attached).
+ */
+export async function sealTaskSliceAndDerive(sql: SQL, actorRepoId: string, target: SealTarget): Promise<TaskStatus> {
+  if (actorRepoId !== target.repoId) {
+    throw new WriteAclError(`actor ${actorRepoId} cannot seal repo ${target.repoId}'s slice`);
+  }
+  return sql.begin(async (tx) => {
+    const taskRows = (await tx`select status from tasks where id = ${target.taskId} for update`) as Array<{ status: TaskStatus }>;
+    const task = taskRows[0];
+    if (task && task.status !== 'open') {
+      throw new TerminalTaskError(`task ${target.taskId} is terminal (${task.status})`);
+    }
+
+    await tx`
+      insert into task_seals (task_id, repo_id) values (${target.taskId}, ${target.repoId})
+      on conflict (task_id, repo_id) do nothing
+    `;
+
+    const participatingRows = (await tx`select distinct repo_id from jobs where task_id = ${target.taskId}`) as Array<{ repo_id: string }>;
+    const sealedRows = (await tx`select repo_id from task_seals where task_id = ${target.taskId}`) as Array<{ repo_id: string }>;
+    const jobRows = (await tx`select status from jobs where task_id = ${target.taskId}`) as Array<{ status: JobStatus }>;
+
+    const derived = deriveTaskStatus({
+      participatingRepoIds: participatingRows.map((r) => r.repo_id),
+      sealedRepoIds: sealedRows.map((r) => r.repo_id),
+      jobStatuses: jobRows.map((r) => r.status),
+    });
+
+    await tx`update tasks set status = ${derived} where id = ${target.taskId}`;
+    return derived;
+  });
+}
