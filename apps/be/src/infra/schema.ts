@@ -178,4 +178,21 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     status text not null default 'pending' check (status in ('pending', 'fired')),
     created_at timestamptz not null default now()
   )`;
+
+  // Backfill (harness/job-graph.md migration step 2): mirror projects → repos 1:1, with a
+  // single placeholder product for repos that don't belong to one yet. Read-verification
+  // only — the legacy write paths (projects/work_items) are untouched by this backfill.
+  //
+  // (a) cwd falls back to '.' (the current process cwd) when repo_path is unset. That is an
+  // honest description of today's reality — the executor runs pinned to one process-wide cwd
+  // — not a real per-repo cwd. repos.cwd only becomes the source of truth once dispatch
+  // wiring (P1 remainder) resolves cwd per repo_id.
+  // (b) This backfill only runs at boot, so a project registered while the server is already
+  // running has no repos mirror until the next boot. Continuous mirroring (dual-write) is a
+  // later migration step, not this one.
+  await sql`insert into products (id, name) values ('legacy', 'legacy') on conflict (id) do nothing`;
+  await sql`insert into repos (id, product_id, name, cwd)
+    select p.id, 'legacy', p.name, coalesce(nullif(p.repo_path, ''), '.')
+    from projects p
+    on conflict (id) do nothing`;
 }
