@@ -151,6 +151,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           newId,
           request,
           workItemId,
+          // Job-graph mirror (harness/job-graph.md migration step 4): the job id mirrors the
+          // work_item id one-to-one (commit 3's backfill convention), so this rides along even
+          // though no live job row is created here yet — it may be dangling until the next boot's
+          // work_items→jobs backfill self-heals it. Once commit 6 makes dispatchTask create the
+          // job up front, this becomes a real live reference instead of an eventually-consistent one.
+          jobId: workItemId,
           composeRest,
           onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
           requestDecision: async (d) => {

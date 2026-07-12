@@ -90,3 +90,8 @@ test('runs a non-feature flow (research) to completion using its own step sequen
   const result = await runFlow(WORKFLOWS['research'], { store, executor: executor(), newId, request: 'compare auth libs' });
   expect(result.status).toBe('completed');
 });
+
+test('threads jobId onto the created flow record', async () => {
+  const result = await runFlow(WORKFLOWS['feature'], { store, executor: executor(), newId, request: 'add login', jobId: 'job-42' });
+  expect((await store.getFlow(result.flowId))?.jobId).toBe('job-42');
+});

@@ -8,8 +8,8 @@ export class PgOrchestratorStore implements OrchestratorStore {
 
   async createFlow(flow: FlowRecord): Promise<void> {
     await this.sql`
-      insert into flows (id, work_item_id, flow_type, status, current_step, assemble_session_id)
-      values (${flow.id}, ${flow.workItemId ?? null}, ${flow.flowType}, ${flow.status}, ${flow.currentStep}, ${flow.assembleSessionId ?? null})
+      insert into flows (id, work_item_id, job_id, flow_type, status, current_step, assemble_session_id)
+      values (${flow.id}, ${flow.workItemId ?? null}, ${flow.jobId ?? null}, ${flow.flowType}, ${flow.status}, ${flow.currentStep}, ${flow.assembleSessionId ?? null})
     `;
   }
 
@@ -39,7 +39,7 @@ export class PgOrchestratorStore implements OrchestratorStore {
   }
 
   async getFlow(flowId: string): Promise<FlowRecord | undefined> {
-    const rows = await this.sql`select id, work_item_id, flow_type, status, current_step from flows where id = ${flowId}`;
+    const rows = await this.sql`select id, work_item_id, job_id, flow_type, status, current_step from flows where id = ${flowId}`;
     const row = rows[0];
     if (!row) return undefined;
     return {
@@ -48,6 +48,7 @@ export class PgOrchestratorStore implements OrchestratorStore {
       status: row.status,
       currentStep: row.current_step,
       workItemId: row.work_item_id ?? undefined,
+      jobId: row.job_id ?? undefined,
     };
   }
 

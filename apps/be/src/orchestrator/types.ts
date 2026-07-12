@@ -50,6 +50,8 @@ export interface FlowRecord {
   currentStep: string;
   /** Link to the originating work item, set at creation so the UI can render the flow live. */
   workItemId?: string;
+  /** Link to the job-graph job this flow executes (harness/job-graph.md migration step 4). */
+  jobId?: string;
   /** SDK session of the assemble call that composed this flow (re-askable for debugging). */
   assembleSessionId?: string;
 }

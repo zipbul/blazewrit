@@ -57,4 +57,10 @@ suite('PgOrchestratorStore (live Postgres)', () => {
   test('returns undefined for an unknown flow', async () => {
     expect(await store.getFlow('nope-' + flowId())).toBeUndefined();
   });
+
+  test('persists and reads back jobId', async () => {
+    const id = flowId();
+    await store.createFlow({ id, flowType: 'feature', status: 'active', currentStep: 'ground', jobId: `${id}-job` });
+    expect(await store.getFlow(id)).toMatchObject({ jobId: `${id}-job` });
+  });
 });

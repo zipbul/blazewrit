@@ -31,6 +31,9 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     created_at timestamptz not null default now()
   )`;
   await sql`alter table flows add column if not exists assemble_session_id text`;
+  // Correlated to jobs(id) like work_item_id, but no FK: harness/job-graph.md migration step 4 —
+  // dual-write only, jobs rows aren't guaranteed to exist for every job_id yet (see rest.ts).
+  await sql`alter table flows add column if not exists job_id text`;
   await sql`create table if not exists step_runs (
     id text primary key,
     flow_id text not null references flows(id),

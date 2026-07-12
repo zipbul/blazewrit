@@ -10,6 +10,8 @@ export interface RunFlowDeps {
   request: string;
   /** Link the created flow to its work item at creation time (for live UI rendering). */
   workItemId?: string;
+  /** Link the created flow to its job-graph job at creation time (harness/job-graph.md migration step 4). */
+  jobId?: string;
   /** Sink for live agent-output events, keyed by step-run id (wired to per-step SSE). */
   onAgentEvent?: (stepRunId: string, event: AgentEvent) => void;
   /** When true, pause after Decide for a human approval (HITL). */
@@ -52,6 +54,7 @@ export async function runFlow(workflow: WorkflowDef, deps: RunFlowDeps): Promise
     status: 'active',
     currentStep: workflow.steps[0]!.name,
     workItemId: deps.workItemId,
+    jobId: deps.jobId,
     assembleSessionId: deps.assembleSessionId,
   });
 

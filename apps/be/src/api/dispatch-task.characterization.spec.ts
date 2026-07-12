@@ -356,6 +356,17 @@ describe('dispatchTask — reviewer never passes', () => {
   });
 });
 
+describe('dispatchTask — job-graph mirror (harness/job-graph.md migration step 4)', () => {
+  it('records flows.job_id as the work item id', async () => {
+    const text = `${MARK} case17 job-graph mirror`;
+    const res = await sendA2A(app, projectId, text, { metadata: { flowType: 'chore' } });
+    const { id: workItemId } = ((await res.json()) as { result: { id: string } }).result;
+
+    const flow = await waitFor(() => getFlowByWorkItem(workItemId));
+    expect(flow!.job_id).toBe(workItemId);
+  });
+});
+
 describe('dispatchTask — unregistered project', () => {
   it('404s with a JSON-RPC TASK_NOT_FOUND error', async () => {
     const res = await sendA2A(app, `${MARK}-no-such-project`, `${MARK} case16`);
