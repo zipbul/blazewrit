@@ -113,4 +113,69 @@ export async function ensureSchema(sql: SQL): Promise<void> {
   await sql`insert into projects (id, name, status)
     select distinct project_id, project_id, 'active' from work_items
     on conflict (id) do nothing`;
+
+  // Job graph layer (harness/job-graph.md) — additive; legacy write paths untouched.
+  await sql`create table if not exists products (
+    id text primary key,
+    name text not null,
+    created_at timestamptz not null default now()
+  )`;
+  await sql`create table if not exists repos (
+    id text primary key,
+    product_id text not null references products(id),
+    name text not null,
+    git_url text,
+    cwd text not null,
+    parent_repo_id text references repos(id),
+    card jsonb not null default '{}',
+    created_at timestamptz not null default now()
+  )`;
+  await sql`create table if not exists tasks (
+    id text primary key,
+    title text not null,
+    description text,
+    status text not null check (status in ('open', 'done', 'failed', 'cancelled')),
+    created_at timestamptz not null default now()
+  )`;
+  await sql`create table if not exists task_seals (
+    task_id text not null references tasks(id),
+    repo_id text not null references repos(id),
+    sealed_at timestamptz not null default now(),
+    primary key (task_id, repo_id)
+  )`;
+  await sql`create table if not exists jobs (
+    id text primary key,
+    task_id text not null references tasks(id),
+    repo_id text not null references repos(id),
+    title text not null,
+    description text,
+    status text not null check (status in
+      ('pending', 'ready', 'running', 'blocked', 'done', 'failed', 'cancelled')),
+    generation int not null default 1,
+    created_at timestamptz not null default now()
+  )`;
+  await sql`create table if not exists deps (
+    id text primary key,
+    waiter_job text not null references jobs(id),
+    predicate text not null default 'all' check (predicate in ('all', 'any')),
+    status text not null default 'active' check (status in ('active', 'released', 'stale'))
+  )`;
+  await sql`create table if not exists dep_members (
+    dep_id text not null references deps(id),
+    target_type text not null check (target_type in ('job', 'task', 'external')),
+    target_id text not null,
+    expected_gen int,
+    outcome text not null default 'pending'
+      check (outcome in ('pending', 'satisfied', 'failed', 'cancelled')),
+    acceptable text[] not null default '{satisfied}',
+    primary key (dep_id, target_type, target_id)
+  )`;
+  await sql`create table if not exists external_gates (
+    id text primary key,
+    task_id text not null references tasks(id),
+    kind text not null,
+    description text,
+    status text not null default 'pending' check (status in ('pending', 'fired')),
+    created_at timestamptz not null default now()
+  )`;
 }
