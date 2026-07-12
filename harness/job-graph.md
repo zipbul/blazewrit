@@ -135,6 +135,23 @@ repos (                                  -- 주권 단위(옛 projects). cwd가 
 - A2A `/agents/:projectId/a2a` → `/agents/:repoId/a2a`. `serveCard`/`dispatchViaA2A`는 `repos` 조회.
 - `apps/be/src/orchestrator/infra/agent-step-executor.ts` `cwd: string` + `settingSources:['project']` — dispatch 시 `repos.cwd`로 레포별 해석해 구성(현재는 프로세스당 고정 = 유일 실코드 갭).
 
+## 그래프 관리 배선 (2026-07-12 확정 — 규칙 1·8의 구현 방식, 모델 불변)
+
+1. 에이전트의 태스크·잡·dep 관리는 하네스가 세션에 주입하는 MCP 툴로만 한다
+   (job_add / dep_declare / dep_retract / task_seal / a2a_request …).
+   DB 직접 접근 금지 — 툴 핸들러가 곧 규칙 1의 "앱 write 경로".
+2. 툴 호출의 주체 레포 판정은 에이전트 입력이 아니다. 툴 시그니처에
+   repo_id 파라미터를 두지 않는다 — 하네스가 세션을 어느 레포의
+   에이전트로 띄웠는지(세션→레포 귀속)에서 핸들러가 읽는다.
+   에이전트는 소속을 선언할 수단이 없으므로 스푸핑도 불가능하다.
+3. 상태 전이 툴은 만들지 않는다 (job_set_done 류 금지). 툴은 그래프의
+   모양(잡 추가, dep 선언/철회, seal)만 바꾼다 — done/failed는 flow 실행
+   결과에서, ready 전이는 reconcile에서만 나온다.
+4. 그래프 툴셋은 레포 에이전트 wake 세션에만 주입한다. 스텝 실행 세션은
+   받지 않는다. 스텝의 발견이 그래프에 반영되는 유일한 경로:
+   proposals 텍스트 방출 → 하네스 구조화 → 레포 에이전트 wake →
+   그 에이전트가 판단 후 자기 툴로 write. 직행 경로는 없다.
+
 ## 마이그레이션 순서 (커밋 단위, 매 커밋 N=1 green 유지)
 
 1. `products`/`repos`(=projects 백필) + `tasks`/`jobs`/`task_seals`/`deps`/`dep_members`/`external_gates` **추가만**. 기존 write 경로 불변.
