@@ -22,6 +22,7 @@ import { JSON_RPC_ERRORS, A2A_ERRORS, FLOW_TYPES, type FlowType } from '@bw/dto'
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
 import { FlowHub, StepStreamHub, publishing } from './streams';
 import { createProposals } from '../meta/proposals';
+import { insertJob } from '../graph/store';
 import type { StepExecutor } from '../orchestrator/types';
 
 /** Origins allowed to call the API — NEVER '*': any web page the user visits must not read the chat log. */
@@ -131,6 +132,29 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       try {
         await sql`insert into work_items (id, project_id, type, state, title, context_id) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request}, ${ctx})`;
         flowHub.publish({ type: 'routed', workItemId, project: projectId });
+
+        // Job-graph dual-write (harness/job-graph.md migration step 6, moved ahead of step 5's
+        // read-projection cutover): mirrors this dispatch into tasks/jobs live, at creation time,
+        // instead of waiting for the next boot's work_items→jobs backfill (schema.ts) to self-heal
+        // it — a project/task created after boot would otherwise stay invisible to the graph until
+        // a restart. Best-effort: any failure here must never abort the legacy dispatch below (the
+        // acceptance bar is "동작 현행 동일" — e.g. a re-dispatch into an already-terminal task ctx
+        // is rejected by insertJob's rule-9 check, but the legacy work_items/runFlow path still
+        // proceeds exactly as it does today).
+        try {
+          // repos mirror: a project registered while the server was already running (this
+          // dispatch's own project may be exactly that) has no repos row from boot's backfill yet.
+          await sql`insert into repos (id, product_id, name, cwd) values (${projectId}, 'legacy', ${projectId}, '.') on conflict (id) do nothing`;
+          // task upsert: the first dispatch under this ctx creates the task; a later dispatch
+          // sharing the same ctx (a cross-repo realization of one intent) just adds a job under
+          // the task that's already there — this is where "tasks span repos" becomes live, not
+          // just boot-backfilled.
+          await sql`insert into tasks (id, title, status) values (${ctx}, ${request}, 'open') on conflict (id) do nothing`;
+          await insertJob(sql, projectId, { id: workItemId, taskId: ctx, repoId: projectId, title: request });
+        } catch (err) {
+          flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: ${String(err)}` });
+        }
+
         // TWO-PHASE AGENT-ASSEMBLED flow: with an assembler injected, seed ground-only and compose
         // the rest AFTER ground runs — the agent picks steps from ground's real output, not just the
         // seed. With none, run the curated workflow for this flow type (no network at boot).
@@ -152,10 +176,9 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           request,
           workItemId,
           // Job-graph mirror (harness/job-graph.md migration step 4): the job id mirrors the
-          // work_item id one-to-one (commit 3's backfill convention), so this rides along even
-          // though no live job row is created here yet — it may be dangling until the next boot's
-          // work_items→jobs backfill self-heals it. Once commit 6 makes dispatchTask create the
-          // job up front, this becomes a real live reference instead of an eventually-consistent one.
+          // work_item id one-to-one (commit 3's backfill convention). Since migration step 6
+          // (above), the dual-write block already creates this job row up front, so this is now
+          // a real live reference rather than an eventually-consistent one.
           jobId: workItemId,
           composeRest,
           onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
@@ -173,9 +196,15 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           },
         });
         await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId}`;
+        // Job-graph mirror: a raw status update, not the state-machine (canTransitionJob /
+        // bumpJobGeneration) — routing this through the proper transition machinery is P2
+        // reconcile's job. This is best-effort bookkeeping so the mirror doesn't silently drift
+        // while dispatch predates reconcile; a failure here must not affect the legacy path above.
+        await sql`update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'} where id = ${workItemId}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
       } catch (err) {
         await sql`update work_items set state = 'blocked' where id = ${workItemId}`.catch(() => undefined);
+        await sql`update jobs set status = 'failed' where id = ${workItemId}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     })();

@@ -105,6 +105,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Dispatch now dual-writes into the job-graph mirror (migration step 6) — clean those up too,
+  // in FK order (jobs reference tasks/repos before either can be deleted).
+  await sql`delete from jobs where id like ${MARK + '%'}`;
+  await sql`delete from tasks where id like ${MARK + '%'}`;
+  await sql`delete from repos where id like ${MARK + '%'}`;
   await sql`delete from step_runs where flow_id like ${MARK + '%'}`;
   await sql`delete from flows where id like ${MARK + '%'}`;
   await sql`delete from learnings where id like ${MARK + '%'} or flow_id like ${MARK + '%'}`;
@@ -364,6 +369,78 @@ describe('dispatchTask — job-graph mirror (harness/job-graph.md migration step
 
     const flow = await waitFor(() => getFlowByWorkItem(workItemId));
     expect(flow!.job_id).toBe(workItemId);
+  });
+});
+
+describe('dispatchTask — job-graph dual-write (harness/job-graph.md migration step 6)', () => {
+  it('creates a tasks(ctx, open) row and a jobs row that reaches done for a completed chore dispatch', async () => {
+    const text = `${MARK} case18 chore graph dual-write`;
+    const res = await sendA2A(app, projectId, text, { metadata: { flowType: 'chore' } });
+    const { id: workItemId } = ((await res.json()) as { result: { id: string } }).result;
+
+    await waitFor(async () => {
+      const row = await getWorkItem(workItemId);
+      return row?.state === 'done' ? row : undefined;
+    });
+
+    // No explicit contextId was carried, so the task id defaults to the work item's own id.
+    const taskRows = (await sql`select * from tasks where id = ${workItemId}`) as Array<Record<string, unknown>>;
+    expect(taskRows[0]?.status).toBe('open');
+
+    const jobRows = await waitFor(async () => {
+      const rows = (await sql`select * from jobs where id = ${workItemId}`) as Array<Record<string, unknown>>;
+      return rows[0]?.status === 'done' ? rows : undefined;
+    });
+    expect(jobRows[0]).toMatchObject({ task_id: workItemId, repo_id: projectId, status: 'done' });
+  });
+
+  it('marks the mirrored job failed when a feature dispatch is rejected at the decide gate', async () => {
+    const text = `${MARK} case19 feature reject graph dual-write`;
+    const res = await sendA2A(app, projectId, text, { metadata: { flowType: 'feature' } });
+    const { id: workItemId } = ((await res.json()) as { result: { id: string } }).result;
+
+    const flow = await waitFor(() => getFlowByWorkItem(workItemId));
+    const decision = await waitFor(async () => {
+      const rows = (await sql`
+        select * from decisions where flow_id = ${flow.id as string} and status = 'open'
+      `) as Array<Record<string, unknown>>;
+      return rows[0];
+    });
+
+    await post(app, `/api/decisions/${decision.id as string}/answer`, { answer: 'reject' });
+
+    const jobRows = await waitFor(async () => {
+      const rows = (await sql`select * from jobs where id = ${workItemId}`) as Array<Record<string, unknown>>;
+      return rows[0]?.status === 'failed' ? rows : undefined;
+    });
+    expect(jobRows[0]?.status).toBe('failed');
+  });
+
+  it('collapses two same-contextId dispatches to different projects into one task with two jobs', async () => {
+    const project2 = `${MARK}-proj2`;
+    await sql`insert into projects (id, name, status) values (${project2}, ${project2}, 'active')`;
+    const ctx = `${MARK}-ctx-cross-repo`;
+
+    const res1 = await sendA2A(app, projectId, `${MARK} case20 cross-repo A`, { metadata: { flowType: 'chore' }, contextId: ctx });
+    const { id: workItemId1 } = ((await res1.json()) as { result: { id: string } }).result;
+    const res2 = await sendA2A(app, project2, `${MARK} case20 cross-repo B`, { metadata: { flowType: 'chore' }, contextId: ctx });
+    const { id: workItemId2 } = ((await res2.json()) as { result: { id: string } }).result;
+
+    await waitFor(async () => {
+      const row = await getWorkItem(workItemId1);
+      return row?.state === 'done' ? row : undefined;
+    });
+    await waitFor(async () => {
+      const row = await getWorkItem(workItemId2);
+      return row?.state === 'done' ? row : undefined;
+    });
+
+    const taskRows = (await sql`select * from tasks where id = ${ctx}`) as Array<Record<string, unknown>>;
+    expect(taskRows).toHaveLength(1);
+
+    const jobRows = (await sql`select * from jobs where task_id = ${ctx}`) as Array<Record<string, unknown>>;
+    expect(jobRows).toHaveLength(2);
+    expect(jobRows.map((j) => j.repo_id as string).sort()).toEqual([projectId, project2].sort());
   });
 });
 
