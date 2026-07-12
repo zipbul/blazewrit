@@ -170,7 +170,7 @@ repos (                                  -- 주권 단위(옛 projects). cwd가 
 ## 구현 순서 (기능 단위)
 
 1. **P1** 최소 스키마(위 8테이블) + 상태기계 전이 + 봉합규칙 1·2·3·6·7 + cycle·ready 순수함수. **TDD 수용기준: (a) 단일 잡·단일 dep 그래프가 오늘의 dispatch→runFlow와 동일 결과, (b) 사이클 간선 insert 거절, (c) terminal 태스크 잡 insert 거절(규칙9), (d) 슬라이스 seal이 자기 레포 잡만 freeze.** A2A `/agents/:repoId/a2a`. 제품 라우터 = 중앙 triage 확장(비주권). executor cwd = `repos.cwd`.
-2. **P2** reconcile 컨트롤러 (ready·lease·원자claim·재시작 reconcile·규칙 4·5)
+2. **P2** reconcile 컨트롤러 (ready·lease·원자claim·재시작 reconcile·규칙 4·5). cancelled 혼재 태스크(전부 terminal ∧ failed 0 ∧ 전부 done 아님)는 자동 종결하지 않고 open 유지 — 규칙 4 정체 wake가 에이전트 판단(명시취소/gen++/신규잡)으로 처리 (2026-07-12 확정, derive 구현과 일치. 자동 done은 전부-cancelled 태스크를 성공으로 둔갑시킴)
 3. **P3** A2A 협상(멱등, 규칙 8) + external_gates 발화
 4. **P4** 에이전트 wake 배선(이유 전달) + 분해·발견 판단 write
 5. **P5** task_events + 시각화(2층 뷰) + 자율모드 토글 + 개입 UI
