@@ -1,0 +1,135 @@
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { SQL } from 'bun';
+import { ensureSchema } from './schema';
+
+// Integration test: exercises the work_items → tasks/jobs mirror (harness/job-graph.md
+// migration step 3) against a live Postgres. Read-verification only — /api/work-items keeps
+// reading work_items directly; nothing consumes this mirror yet.
+const sql = new SQL(process.env.BW_PG_URL ?? 'postgres://postgres:blazewrit@localhost:3446/blazewrit');
+const PREFIX = `jobs-backfill-${process.pid}-${Date.now()}`;
+let n = 0;
+const id = (label: string) => `${PREFIX}-${label}-${n++}`;
+
+beforeAll(async () => {
+  await ensureSchema(sql);
+});
+
+afterAll(async () => {
+  // FK-reverse order. 'legacy' product is shared state (other suites/boots rely on it) — never delete it.
+  await sql`delete from jobs where id like ${PREFIX + '%'}`;
+  await sql`delete from tasks where id like ${PREFIX + '%'}`;
+  await sql`delete from repos where id like ${PREFIX + '%'}`;
+  await sql`delete from projects where id like ${PREFIX + '%'}`;
+  await sql`delete from work_items where id like ${PREFIX + '%'}`;
+  await sql.end();
+});
+
+/** Inserts a project directly so the migration-step-2 repos mirror exists by the time
+ * ensureSchema runs the step-3 tasks/jobs mirror (which needs jobs.repo_id → repos(id)). */
+async function makeProject(projectId: string) {
+  await sql`insert into projects (id, name, status) values (${projectId}, ${projectId}, 'active')`;
+}
+
+describe('schema backfill: work_items → tasks/jobs (harness/job-graph.md step 3)', () => {
+  test('mirrors an in_flow work_item into a running job under an open task', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'in_flow', 'do the thing', ${contextId})`;
+    await ensureSchema(sql);
+
+    const jobs = (await sql`
+      select id, task_id, repo_id, status, generation, legacy_work_item_id from jobs where id = ${workItemId}
+    `) as Array<{
+      id: string;
+      task_id: string;
+      repo_id: string;
+      status: string;
+      generation: number;
+      legacy_work_item_id: string;
+    }>;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.task_id).toBe(contextId);
+    expect(jobs[0]!.repo_id).toBe(projectId);
+    expect(jobs[0]!.status).toBe('running');
+    expect(jobs[0]!.generation).toBe(1);
+    expect(jobs[0]!.legacy_work_item_id).toBe(workItemId);
+
+    const tasks = (await sql`select id, status from tasks where id = ${contextId}`) as Array<{
+      id: string;
+      status: string;
+    }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.status).toBe('open');
+  });
+
+  test('mirrors a done work_item into a done job, and the task mirror still stays open', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'done', 'finished thing', ${contextId})`;
+    await ensureSchema(sql);
+
+    const jobs = (await sql`select status from jobs where id = ${workItemId}`) as Array<{ status: string }>;
+    expect(jobs[0]!.status).toBe('done');
+    const tasks = (await sql`select status from tasks where id = ${contextId}`) as Array<{ status: string }>;
+    expect(tasks[0]!.status).toBe('open');
+  });
+
+  test('mirrors a blocked work_item into a failed job', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'blocked', 'stuck thing', ${contextId})`;
+    await ensureSchema(sql);
+
+    const jobs = (await sql`select status from jobs where id = ${workItemId}`) as Array<{ status: string }>;
+    expect(jobs[0]!.status).toBe('failed');
+  });
+
+  test('collapses work_items sharing a context_id across two projects into one task with two jobs', async () => {
+    const projectA = id('project');
+    const projectB = id('project');
+    await makeProject(projectA);
+    await makeProject(projectB);
+    const contextId = id('context');
+    const workItemA = id('wi');
+    const workItemB = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemA}, ${projectA}, 'flow', 'in_flow', 'side A', ${contextId})`;
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemB}, ${projectB}, 'flow', 'in_flow', 'side B', ${contextId})`;
+    await ensureSchema(sql);
+
+    const tasks = (await sql`select id from tasks where id = ${contextId}`) as Array<{ id: string }>;
+    expect(tasks).toHaveLength(1);
+
+    const jobs = (await sql`
+      select id, repo_id from jobs where task_id = ${contextId} order by repo_id
+    `) as Array<{ id: string; repo_id: string }>;
+    expect(jobs).toHaveLength(2);
+    expect(jobs.map((j) => j.repo_id).sort()).toEqual([projectA, projectB].sort());
+  });
+
+  test('does not duplicate the tasks/jobs mirror across repeated ensureSchema runs', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'in_flow', 'do the thing', ${contextId})`;
+    await ensureSchema(sql);
+    await ensureSchema(sql);
+
+    const tasks = (await sql`select id from tasks where id = ${contextId}`) as Array<{ id: string }>;
+    expect(tasks).toHaveLength(1);
+    const jobs = (await sql`select id from jobs where id = ${workItemId}`) as Array<{ id: string }>;
+    expect(jobs).toHaveLength(1);
+  });
+});

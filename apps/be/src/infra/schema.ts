@@ -195,4 +195,37 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     select p.id, 'legacy', p.name, coalesce(nullif(p.repo_path, ''), '.')
     from projects p
     on conflict (id) do nothing`;
+
+  // Backfill (harness/job-graph.md migration step 3): mirror work_items → tasks/jobs. A task's
+  // id is the context_id anchor (coalesce(context_id, id)) — work_items that share one
+  // context_id (one intent's cross-project realizations) collapse into a single task with one
+  // job per work_item, which is the first place "tasks span repos" becomes true in data, not
+  // just in the design doc. Read-verification only — /api/work-items keeps reading work_items
+  // directly; this mirror isn't consumed anywhere yet.
+  //
+  // Mirror tasks stay 'open' regardless of the underlying work_item state: this legacy data
+  // predates task_seals, so no repo has ever sealed its slice, and marking the mirror 'done'
+  // would trip rule 9's terminal latch (harness/job-graph.md rule 9) and block future jobs
+  // from landing under the same context.
+  await sql`insert into tasks (id, title, status)
+    select coalesce(w.context_id, w.id), coalesce(min(w.title), coalesce(w.context_id, w.id)), 'open'
+    from work_items w
+    group by coalesce(w.context_id, w.id)
+    on conflict (id) do nothing`;
+
+  // legacy_work_item_id anchors the job mirror back to its source row (harness/job-graph.md
+  // migration step 3, "jobs.legacy_work_item_id"). repo_id = project_id, which the repos
+  // backfill above guarantees exists by the time this insert runs.
+  await sql`alter table jobs add column if not exists legacy_work_item_id text`;
+  await sql`insert into jobs (id, task_id, repo_id, title, status, generation, legacy_work_item_id)
+    select w.id, coalesce(w.context_id, w.id), w.project_id, coalesce(w.title, w.id),
+      case w.state
+        when 'in_flow' then 'running'
+        when 'done' then 'done'
+        when 'blocked' then 'failed'
+        else 'pending'
+      end,
+      1, w.id
+    from work_items w
+    on conflict (id) do nothing`;
 }
