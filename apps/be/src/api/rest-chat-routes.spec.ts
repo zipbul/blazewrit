@@ -119,8 +119,12 @@ describe('confirmation turns are server-side (no FE-fabricated bubbles)', () => 
     const res = await post(app, '/api/clarify', { request: `${MARK} 모호`, question: `${MARK} 어느쪽?`, options: [], scope: SCOPE });
     expect(res.status).toBe(200);
     const { decisionId } = (await res.json()) as { decisionId: string };
-    const dec = (await sql`select meta from decisions where id = ${decisionId}`) as Array<{ meta: string }>;
-    expect((JSON.parse(dec[0]!.meta) as { scope: string }).scope).toBe(SCOPE);
+    const dec = (await sql`select meta from decisions where id = ${decisionId}`) as Array<{ meta: unknown }>;
+    // meta is stored as a genuine jsonb object (bun binds a plain-object param correctly — see
+    // meta/proposals.ts and graph/wake.ts's raiseWake for the jsonb-double-encoding story this
+    // sidesteps), so the driver returns it already parsed; the string branch is defensive only.
+    const meta = typeof dec[0]!.meta === 'string' ? JSON.parse(dec[0]!.meta as string) : dec[0]!.meta;
+    expect((meta as { scope: string }).scope).toBe(SCOPE);
     const rows = await turns(SCOPE);
     expect(rows.some((r) => r.role === 'agent' && String(r.text).includes(`${MARK} 어느쪽?`))).toBe(true);
   });

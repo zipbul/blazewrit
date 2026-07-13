@@ -121,8 +121,12 @@ describe('POST /api/clarify', () => {
     const rows = (await sql`select * from decisions where id = ${decisionId}`) as Array<Record<string, unknown>>;
     expect(rows).toHaveLength(1);
     expect(rows[0]!.request_type).toBe('free_text');
-    expect(JSON.parse(rows[0]!.options as string)).toEqual(['a', 'b']);
-    const meta = JSON.parse(rows[0]!.meta as string) as Record<string, unknown>;
+    // options/meta are stored as genuine jsonb (bun binds a plain array/object param correctly —
+    // see meta/proposals.ts and graph/wake.ts's raiseWake for the jsonb-double-encoding story this
+    // sidesteps), so the driver returns them already parsed; the string branch is defensive only.
+    const options = typeof rows[0]!.options === 'string' ? JSON.parse(rows[0]!.options as string) : rows[0]!.options;
+    expect(options).toEqual(['a', 'b']);
+    const meta = (typeof rows[0]!.meta === 'string' ? JSON.parse(rows[0]!.meta as string) : rows[0]!.meta) as Record<string, unknown>;
     expect(meta.kind).toBe('clarification');
     expect(meta.request).toBe(`${MARK} 원요청`);
     expect(meta.scope).toBe('central'); // default scope when the caller omits it

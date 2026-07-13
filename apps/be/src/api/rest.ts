@@ -147,16 +147,20 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     const opts = parseJson(row.options, []) as string[];
     const meta = parseJson(row.meta, {}) as Record<string, unknown>;
     const isMeta = META_TYPES.has(dbType);
+    // Wake records (harness/job-graph.md P2, graph/wake.ts) are surfaced in the same drawer inbox
+    // but block nothing — no flow is suspended waiting on an answer, unlike a real decide-step
+    // gate or a meta approval.
+    const isWake = dbType === 'agent_wake';
     return {
       id: row.id as string,
       flowId: (row.flow_id as string) ?? '',
-      requestingAgent: isMeta ? '메타' : 'decide',
+      requestingAgent: isMeta ? '메타' : isWake ? '하네스' : 'decide',
       status: row.status as string,
       requestType: isMeta ? 'approval' : dbType,
       question: row.question as string,
       options: opts.map((o) => ({ label: o, value: o })),
       context: meta,
-      blocking: !isMeta,
+      blocking: !isMeta && !isWake,
       createdAt: new Date(row.created_at as string).toISOString(),
       ...(row.answered_at ? { answeredAt: new Date(row.answered_at as string).toISOString() } : {}),
       ...(row.answer ? { answer: row.answer as string } : {}),
