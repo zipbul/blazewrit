@@ -24,6 +24,7 @@ import { FlowHub, StepStreamHub, publishing } from './streams';
 import { createProposals } from '../meta/proposals';
 import { insertJob } from '../graph/store';
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
+import { reconcileTask } from '../graph/reconcile';
 import type { StepExecutor } from '../orchestrator/types';
 
 /** Origins allowed to call the API — NEVER '*': any web page the user visits must not read the chat log. */
@@ -63,6 +64,20 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const selfBaseUrl = deps.selfBaseUrl ?? 'http://localhost:4500';
   // HITL: decisionId -> resolver that resumes the suspended flow.
   const pendingDecisions = new Map<string, (answer: string) => void>();
+  // Job-graph reconcile handoff (harness/job-graph.md migration step 8): jobId -> the
+  // dispatchTask call's own executeJobFlow closure. Two dispatches sharing a contextId land
+  // under the SAME task, so reconcileTask(sql, ctx, ...) run from EITHER one can see (and claim)
+  // the OTHER's job too — whichever dispatch's reconcile pass wins that race must still run the
+  // claimed job's OWN flow (its flowType/request/dbFacts), not the caller's. This registry is
+  // that indirection: each dispatchTask registers its closure under its own workItemId before
+  // ever calling reconcileTask, so runRegisteredJob (below) always resolves a claimed job id back
+  // to the executor that actually knows how to run it, regardless of which pass claimed it.
+  const jobExecutors = new Map<string, () => Promise<void>>();
+  const runRegisteredJob = async (job: { id: string }): Promise<void> => {
+    const exec = jobExecutors.get(job.id);
+    jobExecutors.delete(job.id);
+    await exec?.();
+  };
   const { proposeNewProject, proposeConnection, openClarification } = createProposals({
     sql,
     newId,
@@ -128,48 +143,17 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     const flowType = carriedFlowType ?? new StubFlowClassifier().classify(request);
     const workItemId = newId();
     const ctx = contextId ?? workItemId; // correlate cross-project realizations of one intent
-    // Background execution. Guarded so a failed task never crashes the server process.
-    void (async () => {
+
+    // Runs this job's flow to completion (harness/job-graph.md migration step 8): extracted out
+    // of the dispatch IIFE so it can be handed to reconcileTask as its dispatch callback instead
+    // of only ever running inline. Self-contained — catches its OWN errors and marks both
+    // work_items and jobs terminal on failure — because reconcileTask's own dispatch try/catch
+    // only marks the jobs-table row 'failed' on a thrown error; if this function let an exception
+    // escape instead of handling it here, the legacy work_items row would be left stuck at
+    // 'in_flow' forever when run through reconcile. Direct-call and reconcile-call must behave
+    // identically either way, so all terminal bookkeeping lives here, not in the caller.
+    const executeJobFlow = async (): Promise<void> => {
       try {
-        await sql`insert into work_items (id, project_id, type, state, title, context_id) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request}, ${ctx})`;
-        flowHub.publish({ type: 'routed', workItemId, project: projectId });
-
-        // Job-graph dual-write (harness/job-graph.md migration step 6, moved ahead of step 5's
-        // read-projection cutover): mirrors this dispatch into tasks/jobs live, at creation time,
-        // instead of waiting for the next boot's work_items→jobs backfill (schema.ts) to self-heal
-        // it — a project/task created after boot would otherwise stay invisible to the graph until
-        // a restart. Best-effort: any failure here must never abort the legacy dispatch below (the
-        // acceptance bar is "동작 현행 동일" — e.g. a re-dispatch into an already-terminal task ctx
-        // is rejected by insertJob's rule-9 check, but the legacy work_items/runFlow path still
-        // proceeds exactly as it does today).
-        try {
-          // repos mirror: a project registered while the server was already running (this
-          // dispatch's own project may be exactly that) has no repos row from boot's backfill yet.
-          await sql`insert into repos (id, product_id, name, cwd) values (${projectId}, 'legacy', ${projectId}, '.') on conflict (id) do nothing`;
-          // task upsert: the first dispatch under this ctx creates the task; a later dispatch
-          // sharing the same ctx (a cross-repo realization of one intent) just adds a job under
-          // the task that's already there — this is where "tasks span repos" becomes live, not
-          // just boot-backfilled.
-          await sql`insert into tasks (id, title, status) values (${ctx}, ${request}, 'open') on conflict (id) do nothing`;
-          // Decomposition (migration step 7): dispatchTask no longer inserts a hard-coded single
-          // job — it goes through the assembler + grammar check, so N>1 decomposition (migration
-          // step 9) only has to change assembleJobs, not this call site. `[], []` stands in for
-          // "this task's current jobs/deps" — always empty for now because N=1 means every task
-          // has exactly one job at this point in dispatch; migration 9 replaces it with the
-          // task's real loaded graph once a second decomposition could actually collide with one.
-          const assembled = assembleJobs({ taskId: ctx, repoId: projectId, workItemId, request });
-          const validation = validateAssembly([], [], assembled);
-          if (!validation.ok) {
-            flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: invalid assembly: ${validation.reason}` });
-          } else {
-            for (const job of assembled.jobs) {
-              await insertJob(sql, projectId, job);
-            }
-          }
-        } catch (err) {
-          flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: ${String(err)}` });
-        }
-
         // TWO-PHASE AGENT-ASSEMBLED flow: with an assembler injected, seed ground-only and compose
         // the rest AFTER ground runs — the agent picks steps from ground's real output, not just the
         // seed. With none, run the curated workflow for this flow type (no network at boot).
@@ -218,6 +202,76 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         await sql`update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'} where id = ${workItemId}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
       } catch (err) {
+        await sql`update work_items set state = 'blocked' where id = ${workItemId}`.catch(() => undefined);
+        await sql`update jobs set status = 'failed' where id = ${workItemId}`.catch(() => undefined);
+        flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
+      }
+    };
+    // Registered synchronously, before any await below — so if another dispatch under the SAME
+    // ctx wins the reconcile claim race on THIS job (see jobExecutors above), it can still find
+    // and run this exact closure the instant the row it's looking up could possibly exist.
+    jobExecutors.set(workItemId, executeJobFlow);
+
+    // Background execution. Guarded so a failed task never crashes the server process.
+    void (async () => {
+      try {
+        await sql`insert into work_items (id, project_id, type, state, title, context_id) values (${workItemId}, ${projectId}, ${workItemType(flowType)}, ${'in_flow'}, ${request}, ${ctx})`;
+        flowHub.publish({ type: 'routed', workItemId, project: projectId });
+
+        // Job-graph dual-write (harness/job-graph.md migration step 6, moved ahead of step 5's
+        // read-projection cutover): mirrors this dispatch into tasks/jobs live, at creation time,
+        // instead of waiting for the next boot's work_items→jobs backfill (schema.ts) to self-heal
+        // it — a project/task created after boot would otherwise stay invisible to the graph until
+        // a restart. Best-effort: any failure here must never abort the legacy dispatch below (the
+        // acceptance bar is "동작 현행 동일" — e.g. a re-dispatch into an already-terminal task ctx
+        // is rejected by insertJob's rule-9 check, but the legacy work_items/runFlow path still
+        // proceeds exactly as it does today).
+        let graphWriteOk = false;
+        try {
+          // repos mirror: a project registered while the server was already running (this
+          // dispatch's own project may be exactly that) has no repos row from boot's backfill yet.
+          await sql`insert into repos (id, product_id, name, cwd) values (${projectId}, 'legacy', ${projectId}, '.') on conflict (id) do nothing`;
+          // task upsert: the first dispatch under this ctx creates the task; a later dispatch
+          // sharing the same ctx (a cross-repo realization of one intent) just adds a job under
+          // the task that's already there — this is where "tasks span repos" becomes live, not
+          // just boot-backfilled.
+          await sql`insert into tasks (id, title, status) values (${ctx}, ${request}, 'open') on conflict (id) do nothing`;
+          // Decomposition (migration step 7): dispatchTask no longer inserts a hard-coded single
+          // job — it goes through the assembler + grammar check, so N>1 decomposition (migration
+          // step 9) only has to change assembleJobs, not this call site. `[], []` stands in for
+          // "this task's current jobs/deps" — always empty for now because N=1 means every task
+          // has exactly one job at this point in dispatch; migration 9 replaces it with the
+          // task's real loaded graph once a second decomposition could actually collide with one.
+          const assembled = assembleJobs({ taskId: ctx, repoId: projectId, workItemId, request });
+          const validation = validateAssembly([], [], assembled);
+          if (!validation.ok) {
+            flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: invalid assembly: ${validation.reason}` });
+          } else {
+            for (const job of assembled.jobs) {
+              await insertJob(sql, projectId, job);
+            }
+            graphWriteOk = true;
+          }
+        } catch (err) {
+          flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: ${String(err)}` });
+        }
+
+        // Reconcile (harness/job-graph.md migration step 8): dispatchTask no longer decides
+        // ready→running inline — it hands the job off to the reconcile controller, which is the
+        // only place that transition happens now. Only reachable when the graph write above
+        // actually landed a jobs row for workItemId; if it didn't (best-effort catch or an
+        // invalid assembly), there is nothing under `ctx` for reconcile to find, so this dispatch
+        // falls back to running its flow directly — same "legacy path survives a dead graph"
+        // guarantee migration step 6 already established, just phrased against reconcile instead
+        // of insertJob.
+        if (graphWriteOk) {
+          await reconcileTask(sql, ctx, runRegisteredJob);
+        } else {
+          jobExecutors.delete(workItemId); // never reconciled — run it directly instead
+          await executeJobFlow();
+        }
+      } catch (err) {
+        jobExecutors.delete(workItemId);
         await sql`update work_items set state = 'blocked' where id = ${workItemId}`.catch(() => undefined);
         await sql`update jobs set status = 'failed' where id = ${workItemId}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
