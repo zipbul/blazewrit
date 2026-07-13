@@ -42,6 +42,13 @@ async function setLeaseExpiresAt(jobId: string, when: Date): Promise<void> {
   await sql`update jobs set lease_expires_at = ${when} where id = ${jobId}`;
 }
 
+async function openWakeCount(kind: string, taskId: string): Promise<number> {
+  const rows = (await sql`
+    select id from decisions where request_type = 'agent_wake' and status = 'open' and meta->>'kind' = ${kind} and meta->>'taskId' = ${taskId}
+  `) as unknown[];
+  return rows.length;
+}
+
 async function waitFor<T>(fn: () => Promise<T | undefined | null | false>, timeoutMs = 10000, interval = 50): Promise<T> {
   const start = Date.now();
   let last: T | undefined | null | false;
@@ -58,6 +65,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Each test's stop() only clears the FUTURE periodic timer, never an already-in-flight tick —
+  // and now that tick() also does the C1/C2/D1 wake scans (global, not scoped to this file's own
+  // fixtures), a straggler auto-initial tick from an earlier test can still be mid-flight when
+  // this runs. Give it a moment to settle before closing the connection out from under it.
+  await new Promise((r) => setTimeout(r, 500));
+  await sql`delete from decisions where request_type = 'agent_wake' and meta->>'taskId' like ${PREFIX + '%'}`;
+  // FK-reverse order (dep_members/deps reference jobs; jobs/task_seals reference tasks/repos).
+  await sql`delete from dep_members where dep_id like ${PREFIX + '%'}`;
+  await sql`delete from deps where id like ${PREFIX + '%'}`;
+  await sql`delete from task_seals where task_id like ${PREFIX + '%'}`;
   await sql`delete from jobs where id like ${PREFIX + '%'}`;
   await sql`delete from tasks where id like ${PREFIX + '%'}`;
   await sql`delete from repos where id like ${PREFIX + '%'}`;
@@ -129,7 +146,7 @@ describe('startGraphController — restart + periodic reconcile (harness/job-gra
       // await) before returning — inFlight is already true the instant control comes back here,
       // so this call is guaranteed to short-circuit regardless of DB state or scheduling.
       const concurrent = await controller.tick();
-      expect(concurrent).toEqual({ expired: [], reconciled: [] });
+      expect(concurrent).toEqual({ expired: [], reconciled: [], wakes: [] });
 
       await waitFor(async () => ((await jobStatus(jobId)) !== 'pending' ? true : undefined));
       expect(dispatch.mock.calls.some(([job]) => job.id === jobId)).toBe(true);
@@ -151,7 +168,7 @@ describe('startGraphController — restart + periodic reconcile (harness/job-gra
 });
 
 describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 spec A3-A5)', () => {
-  test('A3: a running job whose lease already expired is failed by the scan', async () => {
+  test('A3: a running job whose lease already expired is failed by the scan and raises a lease_expired wake', async () => {
     const { repoId, taskId } = await makeChain();
     const jobId = await seedJob(taskId, repoId, 'running');
     await setLeaseExpiresAt(jobId, new Date(Date.now() - 60_000));
@@ -160,6 +177,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
     const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
     try {
       await waitFor(async () => ((await jobStatus(jobId)) === 'failed' ? true : undefined));
+      expect(await openWakeCount('lease_expired', taskId)).toBe(1);
     } finally {
       controller.stop();
     }
@@ -190,6 +208,72 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
     try {
       await new Promise((r) => setTimeout(r, 100));
       expect(await jobStatus(jobId)).toBe('done');
+    } finally {
+      controller.stop();
+    }
+  });
+});
+
+describe('startGraphController — wake records (harness/job-graph.md P2 round 2 spec C/D)', () => {
+  test('C1: a job blocked past the stall threshold raises a stalled wake, without releasing its dep or unblocking it (C3)', async () => {
+    const { repoId, taskId } = await makeChain();
+    // The dep target is deliberately not terminal (not done), so the dep stays unmet — same
+    // fixture shape as reconcile.spec.ts's own "unmet dep" case.
+    const targetJobId = await seedJob(taskId, repoId, 'running');
+    const waiterJobId = await seedJob(taskId, repoId, 'blocked');
+    await sql`update jobs set status_changed_at = ${new Date(Date.now() - 60_000)} where id = ${waiterJobId}`;
+    const depId = id('dep');
+    await sql`insert into deps (id, waiter_job, status) values (${depId}, ${waiterJobId}, 'active')`;
+    await sql`insert into dep_members (dep_id, target_type, target_id) values (${depId}, 'job', ${targetJobId})`;
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999, stallThresholdMs: 1_000 });
+    try {
+      await waitFor(async () => ((await openWakeCount('stalled', taskId)) > 0 ? true : undefined));
+      expect(await jobStatus(waiterJobId)).toBe('blocked'); // C3: never auto-unblocked
+      const depRows = (await sql`select status from deps where id = ${depId}`) as Array<{ status: string }>;
+      expect(depRows[0]!.status).toBe('active'); // C3: dep never auto-released
+
+      // A second, later pass must not spam a duplicate wake (E2).
+      await controller.tick();
+      expect(await openWakeCount('stalled', taskId)).toBe(1);
+    } finally {
+      controller.stop();
+    }
+  });
+
+  test('C2: an open task with all jobs terminal and all repos sealed, but a done/cancelled mix, raises an unresolvable_task wake', async () => {
+    const { repoId, taskId } = await makeChain();
+    await seedJob(taskId, repoId, 'done');
+    await seedJob(taskId, repoId, 'cancelled');
+    await sql`insert into task_seals (task_id, repo_id) values (${taskId}, ${repoId})`;
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
+    try {
+      await waitFor(async () => ((await openWakeCount('unresolvable_task', taskId)) > 0 ? true : undefined));
+      const taskRows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;
+      expect(taskRows[0]!.status).toBe('open'); // never auto-resolved to done/failed/cancelled
+    } finally {
+      controller.stop();
+    }
+  });
+
+  test('D1: a dep whose expected generation no longer matches the target job raises a stale_dep wake, and the dep stays stale (D2)', async () => {
+    const { repoId, taskId } = await makeChain();
+    const targetJobId = await seedJob(taskId, repoId, 'pending'); // generation defaults to 1
+    await sql`update jobs set generation = 2 where id = ${targetJobId}`; // actual gen moved on; expected below stays 1
+    const waiterJobId = await seedJob(taskId, repoId, 'pending');
+    const depId = id('dep');
+    await sql`insert into deps (id, waiter_job, status) values (${depId}, ${waiterJobId}, 'active')`;
+    await sql`insert into dep_members (dep_id, target_type, target_id, expected_gen) values (${depId}, 'job', ${targetJobId}, 1)`;
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
+    try {
+      await waitFor(async () => ((await openWakeCount('stale_dep', taskId)) > 0 ? true : undefined));
+      const depRows = (await sql`select status from deps where id = ${depId}`) as Array<{ status: string }>;
+      expect(depRows[0]!.status).toBe('stale'); // D2: no auto-resolution
     } finally {
       controller.stop();
     }

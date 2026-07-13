@@ -1,6 +1,10 @@
 import type { SQL } from 'bun';
 import { reconcileTask, type ReconcileJob } from './reconcile';
 import { DEFAULT_LEASE_TTL_MS } from './lease';
+import { raiseWake, type WakeInput } from './wake';
+import { deriveTaskStatus } from './derive';
+import { isTerminalJobStatus } from './transitions';
+import type { JobStatus } from './types';
 
 export interface GraphControllerOpts {
   /** How often the periodic sweep runs. Conservative default — a live dispatch's own inline
@@ -8,6 +12,12 @@ export interface GraphControllerOpts {
   tickMs?: number;
   /** Passed through to every reconcileTask call this pass makes. */
   leaseTtlMs?: number;
+  /** How long a job may sit 'blocked' before it's considered stalled (rule 4, spec C1). */
+  stallThresholdMs?: number;
+  /** Fired for every wake this pass actually raised (not suppressed by dedup, spec E2). */
+  onWake?: (w: WakeInput) => void;
+  /** Id source for raised wake records. */
+  newId?: () => string;
 }
 
 export interface TickResult {
@@ -15,6 +25,8 @@ export interface TickResult {
   expired: string[];
   /** Job ids claimed and handed to `dispatch` by this pass's reconcileTask calls. */
   reconciled: string[];
+  /** Wake records actually raised this pass (dedup-suppressed repeats are not included). */
+  wakes: WakeInput[];
 }
 
 export interface GraphController {
@@ -25,16 +37,23 @@ export interface GraphController {
 }
 
 const DEFAULT_TICK_MS = 60_000;
+const DEFAULT_STALL_THRESHOLD_MS = 15 * 60 * 1000;
 
 /**
  * Always-on reconcile controller (harness/job-graph.md P2: "reconcile 컨트롤러 (ready·lease·
- * 원자claim·재시작 reconcile·규칙 4·5)" — ready/claim landed in migration step 8; this is the
- * restart + periodic + lease-expiry half). Each pass:
- *  1. Fails any 'running' job whose lease has already lapsed (A3) — nothing has been renewing its
- *     heartbeat (lease.ts's withLeaseHeartbeat), so nothing is still executing it.
- *  2. Re-runs reconcileTask for every OPEN task that still has a pending/blocked job — this is
- *     what makes dep-released readiness AND restart recovery (B1) self-heal without waiting for
- *     the next dispatch to touch that specific task.
+ * 원자claim·재시작 reconcile·규칙 4·5)" — ready/claim landed in migration step 8, lease/restart in
+ * round 1; this round adds rules 4/5's wake records — C/D/E). Each pass, in order:
+ *  1. Fails any 'running' job whose lease has already lapsed (A3) + raises a lease_expired wake.
+ *  2. Re-runs reconcileTask for every OPEN task that still has a pending/blocked job (B1/B3) — this
+ *     is what makes dep-released readiness AND restart recovery self-heal, and is what can newly
+ *     mark a dep 'stale' (evaluateDep, rule 5) for step 5 below to find.
+ *  3. Rule 4 (C1): a 'blocked' job whose status_changed_at is older than stallThresholdMs raises a
+ *     stalled wake. No auto-release (C3) — this step only reads deps/dep_members, never writes them.
+ *  4. Rule 4 (C2): an open task whose participating repos are all sealed and all its jobs are
+ *     terminal, but deriveTaskStatus still says 'open' (a done/cancelled mix with no failure —
+ *     ccbdd9b's decision), raises an unresolvable_task wake.
+ *  5. Rule 5 (D1): every dep left 'stale' after step 2's reconcile passes raises a stale_dep wake.
+ *     No auto-resolution (D2) — the dep's status is never touched here.
  *
  * Single-flight (B4): a tick already in progress makes a concurrent call a no-op — one process,
  * no distributed lock needed. `dispatch` is supplied by the caller (rest.ts wires it to the same
@@ -44,25 +63,39 @@ const DEFAULT_TICK_MS = 60_000;
 export function startGraphController(sql: SQL, dispatch: (job: ReconcileJob) => Promise<void>, opts: GraphControllerOpts = {}): GraphController {
   const tickMs = opts.tickMs ?? DEFAULT_TICK_MS;
   const leaseTtlMs = opts.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+  const stallThresholdMs = opts.stallThresholdMs ?? DEFAULT_STALL_THRESHOLD_MS;
+  const newId = opts.newId ?? (() => crypto.randomUUID());
   let inFlight = false;
 
   const tick = async (): Promise<TickResult> => {
-    if (inFlight) return { expired: [], reconciled: [] }; // B4
+    if (inFlight) return { expired: [], reconciled: [], wakes: [] }; // B4
     inFlight = true;
     try {
+      const wakes: WakeInput[] = [];
+      const wake = async (w: WakeInput): Promise<void> => {
+        const result = await raiseWake(sql, w, newId);
+        if (result.raised) {
+          wakes.push(w);
+          opts.onWake?.(w);
+        }
+      };
+
       // A3: conditional UPDATE (status = 'running' still in the WHERE) so a job that legitimately
       // finished between this SELECT and the UPDATE below is never clobbered.
       const candidates = (await sql`
-        select id from jobs where status = 'running' and lease_expires_at is not null and lease_expires_at < now()
-      `) as Array<{ id: string }>;
+        select id, task_id from jobs where status = 'running' and lease_expires_at is not null and lease_expires_at < now()
+      `) as Array<{ id: string; task_id: string }>;
       const expired: string[] = [];
-      for (const { id: jobId } of candidates) {
+      for (const { id: jobId, task_id: taskId } of candidates) {
         const rows = (await sql`
           update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null
           where id = ${jobId} and status = 'running' and lease_expires_at < now()
           returning id
         `) as Array<{ id: string }>;
-        if (rows[0]) expired.push(rows[0].id);
+        if (rows[0]) {
+          expired.push(rows[0].id);
+          await wake({ kind: 'lease_expired', taskId, jobId, reason: `잡 실행 lease가 만료되어 실패 처리했습니다 (jobId=${jobId}).` });
+        }
       }
 
       // B1/B3: every open task with a pending/blocked job gets a fresh pass.
@@ -76,7 +109,69 @@ export function startGraphController(sql: SQL, dispatch: (job: ReconcileJob) => 
         reconciled.push(...result.claimed);
       }
 
-      return { expired, reconciled };
+      // C1: blocked jobs stalled past the threshold — reason describes what it's still waiting on.
+      const stalledJobs = (await sql`
+        select id, task_id, title from jobs
+        where status = 'blocked' and status_changed_at < now() - (${stallThresholdMs} * interval '1 millisecond')
+      `) as Array<{ id: string; task_id: string; title: string }>;
+      for (const job of stalledJobs) {
+        const depRows = (await sql`
+          select dm.target_type, dm.target_id from deps d
+          join dep_members dm on dm.dep_id = d.id
+          where d.waiter_job = ${job.id} and d.status <> 'released'
+        `) as Array<{ target_type: string; target_id: string }>;
+        const depDesc = depRows.length ? depRows.map((d) => `${d.target_type}:${d.target_id}`).join(', ') : '(등록된 dep 없음)';
+        await wake({
+          kind: 'stalled',
+          taskId: job.task_id,
+          jobId: job.id,
+          reason: `잡 "${job.title}"이(가) ${Math.round(stallThresholdMs / 60_000)}분 넘게 정체되어 있습니다 — 대기 중: ${depDesc}`,
+        });
+      }
+
+      // C2: open tasks where every participating repo has sealed and every job is terminal, but
+      // deriveTaskStatus still reads 'open' — a done/cancelled mix with no failure (ccbdd9b).
+      const openTasks = (await sql`select id, title from tasks where status = 'open'`) as Array<{ id: string; title: string }>;
+      for (const task of openTasks) {
+        const jobRows = (await sql`select status, repo_id from jobs where task_id = ${task.id}`) as Array<{ status: JobStatus; repo_id: string }>;
+        if (jobRows.length === 0 || !jobRows.every((j) => isTerminalJobStatus(j.status))) continue;
+        const participatingRepoIds = [...new Set(jobRows.map((j) => j.repo_id))];
+        const sealedRows = (await sql`select repo_id from task_seals where task_id = ${task.id}`) as Array<{ repo_id: string }>;
+        const sealedRepoIds = sealedRows.map((r) => r.repo_id);
+        if (!participatingRepoIds.every((r) => sealedRepoIds.includes(r))) continue;
+        const derived = deriveTaskStatus({ participatingRepoIds, sealedRepoIds, jobStatuses: jobRows.map((j) => j.status) });
+        if (derived === 'open') {
+          await wake({
+            kind: 'unresolvable_task',
+            taskId: task.id,
+            reason: `태스크 "${task.title}"이(가) done/cancelled가 섞인 채 해소되지 않았습니다 — 사람 판단이 필요합니다.`,
+          });
+        }
+      }
+
+      // D1: deps left 'stale' by this pass's reconcile calls (rule 5) — no auto-resolution (D2).
+      const staleDeps = (await sql`select id, waiter_job from deps where status = 'stale'`) as Array<{ id: string; waiter_job: string }>;
+      for (const dep of staleDeps) {
+        const waiterRows = (await sql`select task_id from jobs where id = ${dep.waiter_job}`) as Array<{ task_id: string }>;
+        const taskId = waiterRows[0]?.task_id;
+        if (!taskId) continue;
+        const memberRows = (await sql`
+          select dm.target_type, dm.target_id, dm.expected_gen, j.generation as actual_gen
+          from dep_members dm left join jobs j on j.id = dm.target_id and dm.target_type = 'job'
+          where dm.dep_id = ${dep.id}
+        `) as Array<{ target_type: string; target_id: string; expected_gen: number | null; actual_gen: number | null }>;
+        const memberDesc = memberRows
+          .map((m) => `${m.target_type}:${m.target_id}(기대 gen=${m.expected_gen ?? '-'}, 실제 gen=${m.actual_gen ?? '-'})`)
+          .join(', ');
+        await wake({
+          kind: 'stale_dep',
+          taskId,
+          depId: dep.id,
+          reason: `잡(${dep.waiter_job})의 dep가 stale 상태입니다 — ${memberDesc || '대상 정보 없음'}`,
+        });
+      }
+
+      return { expired, reconciled, wakes };
     } finally {
       inFlight = false;
     }

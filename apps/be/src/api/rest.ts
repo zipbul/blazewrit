@@ -26,6 +26,7 @@ import { insertJob } from '../graph/store';
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
 import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
 import { withLeaseHeartbeat, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
+import { raiseWake } from '../graph/wake';
 import type { StepExecutor } from '../orchestrator/types';
 
 /** Origins allowed to call the API — NEVER '*': any web page the user visits must not read the chat log. */
@@ -95,9 +96,15 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       // pass (graph/controller.ts) claimed it before any dispatchTask call in THIS process ever
       // registered one. Running it with nothing to execute would strand it at 'running' forever,
       // so revert the claim instead — the next reconcile pass can re-offer it immediately rather
-      // than waiting out a full lease TTL. P2 round 2 replaces this silent revert with a proper
-      // wake record (kind='orphaned_ready') instead of guessing at recovery.
+      // than waiting out a full lease TTL.
       await sql`update jobs set status = 'pending', status_changed_at = now(), lease_expires_at = null where id = ${job.id} and status = 'running'`;
+      // The revert above is the recovery; this is just surfacing it to a human (P2 round 2) — its
+      // own failure must never undo or block the revert.
+      await raiseWake(
+        sql,
+        { kind: 'orphaned_ready', taskId: job.taskId, jobId: job.id, reason: `잡 "${job.title}"이(가) 재시작 이후 실행 주체를 찾지 못해 대기 상태로 되돌렸습니다.` },
+        newId,
+      ).catch(() => undefined);
       return;
     }
     jobExecutors.delete(job.id);

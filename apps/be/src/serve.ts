@@ -58,6 +58,10 @@ createRestApi(sql, {
 console.log(`blazewrit REST API on 127.0.0.1:${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'}, triage=agent-sdk, assembler=${real ? 'agent-sdk' : 'curated'})`);
 
 // F1: always-on reconcile controller (harness/job-graph.md P2) — restart recovery + periodic
-// sweep + lease-expiry crash detection. onReconcileDispatch runs synchronously during
-// createRestApi's own setup above, so reconcileDispatch is always populated by this point.
-startGraphController(sql, reconcileDispatch!, { tickMs: Number(process.env.BW_RECONCILE_TICK_MS ?? 60_000) });
+// sweep + lease-expiry crash detection + rule 4/5 wake records. onReconcileDispatch runs
+// synchronously during createRestApi's own setup above, so reconcileDispatch is always populated
+// by this point.
+startGraphController(sql, reconcileDispatch!, {
+  tickMs: Number(process.env.BW_RECONCILE_TICK_MS ?? 60_000),
+  stallThresholdMs: Number(process.env.BW_STALL_MS ?? 900_000),
+});
