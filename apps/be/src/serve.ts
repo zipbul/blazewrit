@@ -15,17 +15,20 @@ const port = Number(process.env.API_PORT ?? 4500);
 await ensureSchema(sql);
 await ensureTriageReadModel(sql); // central triage read surface: curated views + read-only role + grants
 
-// BW_REAL=1 → run real Claude Agent SDK agents (cwd = project repo); else paced stub.
+// BW_REAL=1 → run real Claude Agent SDK agents (cwd = the dispatched job's own repo); else paced stub.
 const real = process.env.BW_REAL === '1';
-const executor = real
-  ? new AgentStepExecutor({
-      cwd: process.env.BW_REPO ?? '/tmp/blazewrit-projects/demo',
-      permissionMode: 'bypassPermissions',
-      maxTurns: 40,
-      promptFor: buildStepPrompt,
-      // Step agents: one-line identity per step (step-taxonomy.md).
-      systemPromptFor: stepAgentSystemPrompt,
-    })
+// BW_REPO is the fallback for a repo with no cwd configured yet (rest.ts's resolveRepoCwd reads
+// '.' in that case) — kept here, not in rest.ts, so the API layer stays free of env-var policy.
+const executorFor = real
+  ? (cwd: string) =>
+      new AgentStepExecutor({
+        cwd: cwd === '.' ? (process.env.BW_REPO ?? '/tmp/blazewrit-projects/demo') : cwd,
+        permissionMode: 'bypassPermissions',
+        maxTurns: 40,
+        promptFor: buildStepPrompt,
+        // Step agents: one-line identity per step (step-taxonomy.md).
+        systemPromptFor: stepAgentSystemPrompt,
+      })
   : undefined;
 
 // Central triage runs a real Claude Agent SDK call with a read-only DB tool — always available.
@@ -36,5 +39,5 @@ const triage = new TriageAgent({ sql });
 const assembler = real ? { queryFn: query as never } : undefined;
 
 // Loopback only: the API is unauthenticated, so it must never be reachable from the network.
-createRestApi(sql, { executor, triage, assembler, selfBaseUrl: `http://localhost:${port}` }).listen({ hostname: '127.0.0.1', port });
+createRestApi(sql, { executorFor, triage, assembler, selfBaseUrl: `http://localhost:${port}` }).listen({ hostname: '127.0.0.1', port });
 console.log(`blazewrit REST API on 127.0.0.1:${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'}, triage=agent-sdk, assembler=${real ? 'agent-sdk' : 'curated'})`);

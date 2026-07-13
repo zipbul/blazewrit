@@ -44,6 +44,8 @@ function corsHeaders(origin: string | null): Record<string, string> {
 export interface RestDeps {
   /** Step executor for /api/run; defaults to the paced stub (no LLM). Pass AgentStepExecutor for real runs. */
   executor?: StepExecutor;
+  /** Builds a step executor bound to one repo's cwd (real mode). Wins over `executor` when set. */
+  executorFor?: (cwd: string) => StepExecutor;
   newId?: () => string;
   /** Origin used for the central→project A2A call (real HTTP message/send to our own endpoint). */
   selfBaseUrl?: string;
@@ -132,6 +134,23 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     flowType === 'bugfix' ? 'bug' : flowType === 'feature' ? 'feature' : 'task';
 
   /**
+   * repos.cwd is the executor-binding source of truth for a dispatch (harness/job-graph.md
+   * "주권 단위 = 레포" + its 배선점 note: "실행기 cwd가 현재 프로세스당 고정 → dispatch 시
+   * repos.cwd로 레포별 cwd 해석 배선 필요" — this is that wiring). Resolved fresh per dispatch
+   * instead of once per process, so each repo's jobs run pinned to their own checkout. A missing
+   * row or a query failure both read as '.' — "no per-repo cwd configured yet, fall back to the
+   * process default" — the same signal serve.ts's real executorFor already treats specially.
+   */
+  const resolveRepoCwd = async (repoId: string): Promise<string> => {
+    try {
+      const rows = (await sql`select cwd from repos where id = ${repoId}`) as Array<{ cwd: string }>;
+      return rows[0]?.cwd ?? '.';
+    } catch {
+      return '.';
+    }
+  };
+
+  /**
    * Project-side task handler (reached via the A2A message/send endpoint): triage the
    * inbound intent into a flow, then run it in the background. This is the single triage
    * call site — both human-origin (central router) and project-origin traffic land here.
@@ -168,9 +187,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
               return { steps: a.workflow.steps, sessionId: a.sessionId };
             }
           : undefined;
+        // Real mode (deps.executorFor set) builds this job's own executor bound to its repo's
+        // cwd; everything else (tests, the paced stub) keeps using the one shared executor.
+        const executor = deps.executorFor ? deps.executorFor(await resolveRepoCwd(projectId)) : (deps.executor ?? new PacedStepExecutor());
         const result = await runFlow(seedWorkflow, {
           store: publishing(store, flowHub, stepHub),
-          executor: deps.executor ?? new PacedStepExecutor(),
+          executor,
           newId,
           request,
           workItemId,
