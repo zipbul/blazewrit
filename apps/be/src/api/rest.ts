@@ -23,6 +23,7 @@ import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mapper
 import { FlowHub, StepStreamHub, publishing } from './streams';
 import { createProposals } from '../meta/proposals';
 import { insertJob } from '../graph/store';
+import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
 import type { StepExecutor } from '../orchestrator/types';
 
 /** Origins allowed to call the API — NEVER '*': any web page the user visits must not read the chat log. */
@@ -150,7 +151,21 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           // the task that's already there — this is where "tasks span repos" becomes live, not
           // just boot-backfilled.
           await sql`insert into tasks (id, title, status) values (${ctx}, ${request}, 'open') on conflict (id) do nothing`;
-          await insertJob(sql, projectId, { id: workItemId, taskId: ctx, repoId: projectId, title: request });
+          // Decomposition (migration step 7): dispatchTask no longer inserts a hard-coded single
+          // job — it goes through the assembler + grammar check, so N>1 decomposition (migration
+          // step 9) only has to change assembleJobs, not this call site. `[], []` stands in for
+          // "this task's current jobs/deps" — always empty for now because N=1 means every task
+          // has exactly one job at this point in dispatch; migration 9 replaces it with the
+          // task's real loaded graph once a second decomposition could actually collide with one.
+          const assembled = assembleJobs({ taskId: ctx, repoId: projectId, workItemId, request });
+          const validation = validateAssembly([], [], assembled);
+          if (!validation.ok) {
+            flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: invalid assembly: ${validation.reason}` });
+          } else {
+            for (const job of assembled.jobs) {
+              await insertJob(sql, projectId, job);
+            }
+          }
         } catch (err) {
           flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: ${String(err)}` });
         }
