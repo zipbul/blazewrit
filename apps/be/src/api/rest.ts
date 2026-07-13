@@ -414,30 +414,54 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         createdAt: new Date(l.created_at as string).toISOString(),
       }));
     })
+    // Projection (harness/job-graph.md migration step 5, moved after step 6 — dispatchTask's
+    // dual-write already guarantees a jobs row exists at creation time, so this cutover never
+    // has to read a not-yet-mirrored work_item). DTO shape is byte-for-byte the WorkItemDto FE
+    // contract; only the source tables changed, from work_items to jobs+flows.
+    //
+    // flows join: a live-dispatched flow carries BOTH job_id and work_item_id set to the same
+    // id (pg-store.ts createFlow, jobId === workItemId by dispatchTask's convention), so the OR
+    // matches that single row twice-over, not two rows. A legacy (pre-migration-4) flow has only
+    // work_item_id set — the OR's second arm is what still finds it. Either way: one flow per job.
+    //
+    // state reverse-map: jobs.status is richer than the old work_items.state (which only ever
+    // took in_flow/done/blocked), so 'done' stays 'done', 'failed'/'cancelled' collapse to
+    // 'blocked' (mirrors dispatchTask's own failure mapping), everything else (pending/ready/
+    // running/blocked) reads as 'in_flow' — the busy state the FE already knows how to render.
+    //
+    // Known divergence from the pre-swap projection: a legacy work_item with a null title showed
+    // as '(untitled)' before; schema.ts's jobs backfill mirrors title as coalesce(w.title, w.id),
+    // so the same row now shows its own id as the title. A job with no flow row at all (never
+    // observed live, only theoretically possible for a hand-inserted/backfilled orphan) falls
+    // back to type 'task', same fallback the old workItemType() used for unrecognized flow types.
     .get('/api/work-items', async () => {
       const rows = (await sql`
-        select w.id, w.project_id, w.type, w.state, w.title, w.context_id, w.created_at, f.id as active_flow_id
-        from work_items w
-        left join flows f on f.work_item_id = w.id
-        order by w.created_at desc
+        select j.id, j.repo_id, j.title, j.status, j.task_id, j.created_at, f.id as flow_id, f.flow_type
+        from jobs j
+        left join flows f on (f.job_id = j.id or f.work_item_id = j.id)
+        order by j.created_at desc
       `) as Array<Record<string, unknown>>;
-      return rows.map((w) => {
-        const created = new Date(w.created_at as string).toISOString();
+      const jobStateToWorkItemState = (status: string): string =>
+        status === 'done' ? 'done' : status === 'failed' || status === 'cancelled' ? 'blocked' : 'in_flow';
+      return rows.map((j) => {
+        const created = new Date(j.created_at as string).toISOString();
+        const state = jobStateToWorkItemState(j.status as string);
+        const flowType = j.flow_type as ReturnType<StubFlowClassifier['classify']> | null;
         return {
-          id: w.id as string,
-          projectId: w.project_id as string,
-          title: (w.title as string) ?? '(untitled)',
+          id: j.id as string,
+          projectId: j.repo_id as string,
+          title: j.title as string,
           description: '',
-          type: w.type as string,
+          type: flowType ? workItemType(flowType) : 'task',
           labels: [] as string[],
-          state: w.state as string,
+          state,
           priority: 0,
           source: 'user',
-          activeFlowId: (w.active_flow_id as string) ?? undefined,
-          contextId: (w.context_id as string) ?? undefined,
+          activeFlowId: (j.flow_id as string) ?? undefined,
+          contextId: (j.task_id as string) ?? undefined,
           createdAt: created,
           updatedAt: created,
-          ...(w.state === 'done' ? { completedAt: created } : {}),
+          ...(state === 'done' ? { completedAt: created } : {}),
         };
       });
     })

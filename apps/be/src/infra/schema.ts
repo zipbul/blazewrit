@@ -220,7 +220,7 @@ export async function ensureSchema(sql: SQL): Promise<void> {
   // migration step 3, "jobs.legacy_work_item_id"). repo_id = project_id, which the repos
   // backfill above guarantees exists by the time this insert runs.
   await sql`alter table jobs add column if not exists legacy_work_item_id text`;
-  await sql`insert into jobs (id, task_id, repo_id, title, status, generation, legacy_work_item_id)
+  await sql`insert into jobs (id, task_id, repo_id, title, status, generation, legacy_work_item_id, created_at)
     select w.id, coalesce(w.context_id, w.id), w.project_id, coalesce(w.title, w.id),
       case w.state
         when 'in_flow' then 'running'
@@ -228,7 +228,15 @@ export async function ensureSchema(sql: SQL): Promise<void> {
         when 'blocked' then 'failed'
         else 'pending'
       end,
-      1, w.id
+      1, w.id, w.created_at
     from work_items w
     on conflict (id) do nothing`;
+  // Self-heal (harness/job-graph.md migration step 5): rows mirrored by an earlier boot (before
+  // created_at was added to the insert above) got created_at = that boot's `now()` default
+  // instead of the source work_item's real created_at. /api/work-items now sorts and displays
+  // jobs.created_at directly, so a stale mirror timestamp would visibly reorder/misdate legacy
+  // rows. Idempotent — a no-op once every mirrored row matches its source.
+  await sql`update jobs set created_at = w.created_at
+    from work_items w
+    where jobs.legacy_work_item_id = w.id and jobs.created_at <> w.created_at`;
 }
