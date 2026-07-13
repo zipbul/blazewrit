@@ -157,6 +157,14 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     generation int not null default 1,
     created_at timestamptz not null default now()
   )`;
+  // P2 physical operations columns (harness/job-graph.md "물리(작음, 유지): 실행 lease/heartbeat
+  // (워커 crash 감지)" — these are NOT model primitives, the frozen 8-table schema's exception is
+  // explicitly for exactly this). lease_expires_at: set at claim (ready→running), renewed on every
+  // step transition (heartbeat), cleared on any terminal write — a running job whose lease lapses
+  // got no heartbeat, so nothing is still executing it. status_changed_at: every status-changing
+  // write touches this; round 2's stall detection (rule 4) reads it as "time since last transition".
+  await sql`alter table jobs add column if not exists lease_expires_at timestamptz`;
+  await sql`alter table jobs add column if not exists status_changed_at timestamptz not null default now()`;
   await sql`create table if not exists deps (
     id text primary key,
     waiter_job text not null references jobs(id),

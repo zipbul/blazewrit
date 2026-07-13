@@ -8,6 +8,8 @@ import { buildStepPrompt } from './harness/prompts';
 import { stepAgentSystemPrompt } from './harness/step-agent-wiring';
 import { ensureTriageReadModel } from './triage/db/views.sql';
 import { TriageAgent } from './triage/triage-agent';
+import { startGraphController } from './graph/controller';
+import type { ReconcileJob } from './graph/reconcile';
 
 const sql = new SQL(process.env.BW_PG_URL ?? 'postgres://postgres:blazewrit@localhost:3446/blazewrit');
 const port = Number(process.env.API_PORT ?? 4500);
@@ -38,6 +40,24 @@ const triage = new TriageAgent({ sql });
 // SDK call). Gated by BW_REAL so paced/demo mode keeps the curated workflow (no API cost).
 const assembler = real ? { queryFn: query as never } : undefined;
 
+// F: captured via the onReconcileDispatch hook so the always-on controller (below) can reuse the
+// exact same registry-aware dispatch dispatchTask's own inline reconcile call uses, without
+// createRestApi returning anything but a bare Elysia app.
+let reconcileDispatch: ((job: ReconcileJob) => Promise<void>) | undefined;
+
 // Loopback only: the API is unauthenticated, so it must never be reachable from the network.
-createRestApi(sql, { executorFor, triage, assembler, selfBaseUrl: `http://localhost:${port}` }).listen({ hostname: '127.0.0.1', port });
+createRestApi(sql, {
+  executorFor,
+  triage,
+  assembler,
+  selfBaseUrl: `http://localhost:${port}`,
+  onReconcileDispatch: (dispatch) => {
+    reconcileDispatch = dispatch;
+  },
+}).listen({ hostname: '127.0.0.1', port });
 console.log(`blazewrit REST API on 127.0.0.1:${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'}, triage=agent-sdk, assembler=${real ? 'agent-sdk' : 'curated'})`);
+
+// F1: always-on reconcile controller (harness/job-graph.md P2) — restart recovery + periodic
+// sweep + lease-expiry crash detection. onReconcileDispatch runs synchronously during
+// createRestApi's own setup above, so reconcileDispatch is always populated by this point.
+startGraphController(sql, reconcileDispatch!, { tickMs: Number(process.env.BW_RECONCILE_TICK_MS ?? 60_000) });

@@ -1,7 +1,14 @@
 import type { SQL } from 'bun';
 import { computeReady, evaluateDep, isStaleMember, jobTargetOutcome, taskTargetOutcome, type DepMemberEval } from './deps';
 import { canTransitionJob } from './transitions';
+import { DEFAULT_LEASE_TTL_MS } from './lease';
 import type { DepOutcome, DepPredicate, DepStatus, DepTargetType, JobStatus, TaskStatus } from './types';
+
+export interface ReconcileOpts {
+  /** Lease TTL granted at claim (ready→running) — same window a step-transition heartbeat
+   * (lease.ts's withLeaseHeartbeat) renews by. Defaults to lease.ts's DEFAULT_LEASE_TTL_MS. */
+  leaseTtlMs?: number;
+}
 
 /** The shape `dispatch` needs to actually run the job — everything reconcile itself already has. */
 export interface ReconcileJob {
@@ -101,7 +108,13 @@ async function jobIsReady(sql: SQL, jobId: string): Promise<boolean> {
  * "물리" section calls for. `dispatch` throwing fails just that job (status='failed') and never
  * stops the rest of the pass — P2's lease/retry machinery is future work, not this commit's job.
  */
-export async function reconcileTask(sql: SQL, taskId: string, dispatch: (job: ReconcileJob) => Promise<void>): Promise<ReconcileResult> {
+export async function reconcileTask(
+  sql: SQL,
+  taskId: string,
+  dispatch: (job: ReconcileJob) => Promise<void>,
+  opts: ReconcileOpts = {},
+): Promise<ReconcileResult> {
+  const leaseTtlMs = opts.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
   const claimed: string[] = [];
   const jobs = (await sql`select id, repo_id, title, status from jobs where task_id = ${taskId} order by created_at`) as JobRow[];
 
@@ -111,17 +124,23 @@ export async function reconcileTask(sql: SQL, taskId: string, dispatch: (job: Re
     const ready = await jobIsReady(sql, job.id);
     if (!ready) {
       if (job.status !== 'blocked' && canTransitionJob(job.status, 'blocked')) {
-        await sql`update jobs set status = 'blocked' where id = ${job.id}`;
+        await sql`update jobs set status = 'blocked', status_changed_at = now() where id = ${job.id}`;
       }
       continue;
     }
 
+    // A1: the claim's ready→running step is where a lease is first granted — same transaction as
+    // the CAS itself, so a job can never observably be 'running' without one.
     const runningRows = (await sql.begin(async (tx) => {
       const toReady = (await tx`update jobs set status = 'ready' where id = ${job.id} and status in ('pending', 'blocked') returning id`) as Array<{
         id: string;
       }>;
       if (toReady.length === 0) return [] as Array<{ id: string }>;
-      return (await tx`update jobs set status = 'running' where id = ${job.id} and status = 'ready' returning id`) as Array<{ id: string }>;
+      return (await tx`
+        update jobs set status = 'running', status_changed_at = now(),
+          lease_expires_at = now() + (${leaseTtlMs} * interval '1 millisecond')
+        where id = ${job.id} and status = 'ready' returning id
+      `) as Array<{ id: string }>;
     })) as Array<{ id: string }>;
     if (runningRows.length === 0) continue; // lost the claim race to another reconcile pass
 
@@ -129,7 +148,7 @@ export async function reconcileTask(sql: SQL, taskId: string, dispatch: (job: Re
     try {
       await dispatch({ id: job.id, repoId: job.repo_id, taskId, title: job.title });
     } catch {
-      await sql`update jobs set status = 'failed' where id = ${job.id}`.catch(() => undefined);
+      await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${job.id}`.catch(() => undefined);
     }
   }
 

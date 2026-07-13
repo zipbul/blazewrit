@@ -33,6 +33,11 @@ async function jobStatus(jobId: string): Promise<string> {
   return rows[0]!.status;
 }
 
+async function jobLeaseExpiresAt(jobId: string): Promise<Date | null> {
+  const rows = (await sql`select lease_expires_at from jobs where id = ${jobId}`) as Array<{ lease_expires_at: Date | null }>;
+  return rows[0]!.lease_expires_at;
+}
+
 beforeAll(async () => {
   await ensureSchema(sql);
 });
@@ -106,5 +111,37 @@ describe('reconcileTask (harness/job-graph.md migration step 8)', () => {
     expect(result.claimed.slice().sort()).toEqual([failingJobId, okJobId].sort());
     expect(await jobStatus(failingJobId)).toBe('failed');
     expect(await jobStatus(okJobId)).toBe('running');
+  });
+});
+
+describe('reconcileTask — lease (harness/job-graph.md P2 spec A1)', () => {
+  test('claiming a job (ready→running) sets lease_expires_at to roughly now + the configured TTL', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'pending');
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+    const leaseTtlMs = 60_000;
+    const before = Date.now();
+
+    await reconcileTask(sql, taskId, dispatch, { leaseTtlMs });
+
+    const leaseExpiresAt = await jobLeaseExpiresAt(jobId);
+    expect(leaseExpiresAt).not.toBeNull();
+    const deltaMs = leaseExpiresAt!.getTime() - before;
+    // Generous window around the TTL — this only guards against gross wiring mistakes (e.g. the
+    // wrong unit or no TTL applied at all), not clock precision.
+    expect(deltaMs).toBeGreaterThan(leaseTtlMs - 5_000);
+    expect(deltaMs).toBeLessThan(leaseTtlMs + 5_000);
+  });
+
+  test('reconcileTask defaults the lease TTL when opts is omitted', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'pending');
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    await reconcileTask(sql, taskId, dispatch);
+
+    const leaseExpiresAt = await jobLeaseExpiresAt(jobId);
+    expect(leaseExpiresAt).not.toBeNull();
+    expect(leaseExpiresAt!.getTime()).toBeGreaterThan(Date.now());
   });
 });

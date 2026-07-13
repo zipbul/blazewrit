@@ -24,7 +24,8 @@ import { FlowHub, StepStreamHub, publishing } from './streams';
 import { createProposals } from '../meta/proposals';
 import { insertJob } from '../graph/store';
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
-import { reconcileTask } from '../graph/reconcile';
+import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
+import { withLeaseHeartbeat, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
 import type { StepExecutor } from '../orchestrator/types';
 
 /** Origins allowed to call the API — NEVER '*': any web page the user visits must not read the chat log. */
@@ -55,6 +56,16 @@ export interface RestDeps {
   summarizer?: Summarizer;
   /** Flow assembler agent (QueryFn); when absent, assembly degrades to the grammar skeleton. */
   assembler?: AssembleDeps;
+  /** Reconcile claim lease TTL (harness/job-graph.md P2). Defaults to lease.ts's DEFAULT_LEASE_TTL_MS. */
+  leaseTtlMs?: number;
+  /**
+   * Called once, synchronously, during setup with the registry-aware reconcile dispatch callback
+   * (the same one dispatchTask's own inline reconcile call uses) — the caller's hook for wiring up
+   * graph/controller.ts's startGraphController without createRestApi needing to import or know
+   * about the controller itself. Keeps createRestApi's public surface (still a bare Elysia app)
+   * unchanged.
+   */
+  onReconcileDispatch?: (dispatch: (job: ReconcileJob) => Promise<void>) => void;
 }
 
 /** REST + SSE surface the Angular UI consumes (DECISIONS §13), backed by Postgres. */
@@ -75,11 +86,27 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   // ever calling reconcileTask, so runRegisteredJob (below) always resolves a claimed job id back
   // to the executor that actually knows how to run it, regardless of which pass claimed it.
   const jobExecutors = new Map<string, () => Promise<void>>();
-  const runRegisteredJob = async (job: { id: string }): Promise<void> => {
+  const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+  const runRegisteredJob = async (job: ReconcileJob): Promise<void> => {
     const exec = jobExecutors.get(job.id);
+    if (!exec) {
+      // Orphan (harness/job-graph.md P2 spec B2): no registered closure for this job — the
+      // process that dispatched it restarted, or the always-on controller's own periodic/restart
+      // pass (graph/controller.ts) claimed it before any dispatchTask call in THIS process ever
+      // registered one. Running it with nothing to execute would strand it at 'running' forever,
+      // so revert the claim instead — the next reconcile pass can re-offer it immediately rather
+      // than waiting out a full lease TTL. P2 round 2 replaces this silent revert with a proper
+      // wake record (kind='orphaned_ready') instead of guessing at recovery.
+      await sql`update jobs set status = 'pending', status_changed_at = now(), lease_expires_at = null where id = ${job.id} and status = 'running'`;
+      return;
+    }
     jobExecutors.delete(job.id);
-    await exec?.();
+    await exec();
   };
+  // F: the caller's hook for wiring graph/controller.ts's startGraphController to this API
+  // instance's own registry-aware dispatch, without createRestApi returning anything but a bare
+  // Elysia app (see RestDeps.onReconcileDispatch).
+  deps.onReconcileDispatch?.(runRegisteredJob);
   const { proposeNewProject, proposeConnection, openClarification } = createProposals({
     sql,
     newId,
@@ -190,8 +217,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         // Real mode (deps.executorFor set) builds this job's own executor bound to its repo's
         // cwd; everything else (tests, the paced stub) keeps using the one shared executor.
         const executor = deps.executorFor ? deps.executorFor(await resolveRepoCwd(projectId)) : (deps.executor ?? new PacedStepExecutor());
+        // Heartbeat (harness/job-graph.md P2 spec A2): one more wrapper OUTSIDE publishing()'s SSE
+        // layer — every step transition also renews this job's claim lease. A stalled/crashed flow
+        // simply stops calling setCurrentStep, so its lease lapses on its own; orchestrator.ts
+        // itself never learns the graph exists.
         const result = await runFlow(seedWorkflow, {
-          store: publishing(store, flowHub, stepHub),
+          store: withLeaseHeartbeat(publishing(store, flowHub, stepHub), sql, workItemId, leaseTtlMs),
           executor,
           newId,
           request,
@@ -221,11 +252,14 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         // bumpJobGeneration) — routing this through the proper transition machinery is P2
         // reconcile's job. This is best-effort bookkeeping so the mirror doesn't silently drift
         // while dispatch predates reconcile; a failure here must not affect the legacy path above.
-        await sql`update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'} where id = ${workItemId}`.catch(() => undefined);
+        await sql`
+          update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'}, status_changed_at = now(), lease_expires_at = null
+          where id = ${workItemId}
+        `.catch(() => undefined);
         flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
       } catch (err) {
         await sql`update work_items set state = 'blocked' where id = ${workItemId}`.catch(() => undefined);
-        await sql`update jobs set status = 'failed' where id = ${workItemId}`.catch(() => undefined);
+        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     };
@@ -287,7 +321,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         // guarantee migration step 6 already established, just phrased against reconcile instead
         // of insertJob.
         if (graphWriteOk) {
-          await reconcileTask(sql, ctx, runRegisteredJob);
+          await reconcileTask(sql, ctx, runRegisteredJob, { leaseTtlMs });
         } else {
           jobExecutors.delete(workItemId); // never reconciled — run it directly instead
           await executeJobFlow();
@@ -295,7 +329,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       } catch (err) {
         jobExecutors.delete(workItemId);
         await sql`update work_items set state = 'blocked' where id = ${workItemId}`.catch(() => undefined);
-        await sql`update jobs set status = 'failed' where id = ${workItemId}`.catch(() => undefined);
+        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     })();
