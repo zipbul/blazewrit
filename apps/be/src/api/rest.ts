@@ -24,6 +24,7 @@ import { FlowHub, StepStreamHub, publishing } from './streams';
 import { createProposals } from '../meta/proposals';
 import { insertJob } from '../graph/store';
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
+import { loadTaskGraph } from '../graph/load-task-graph';
 import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
 import { withLeaseHeartbeat, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
 import { raiseWake } from '../graph/wake';
@@ -305,12 +306,16 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           await sql`insert into tasks (id, title, status) values (${ctx}, ${request}, 'open') on conflict (id) do nothing`;
           // Decomposition (migration step 7): dispatchTask no longer inserts a hard-coded single
           // job — it goes through the assembler + grammar check, so N>1 decomposition (migration
-          // step 9) only has to change assembleJobs, not this call site. `[], []` stands in for
-          // "this task's current jobs/deps" — always empty for now because N=1 means every task
-          // has exactly one job at this point in dispatch; migration 9 replaces it with the
-          // task's real loaded graph once a second decomposition could actually collide with one.
+          // step 9) only has to change assembleJobs, not this call site.
           const assembled = assembleJobs({ taskId: ctx, repoId: projectId, workItemId, request });
-          const validation = validateAssembly([], [], assembled);
+          // Migration 9: validated against the task's REAL current jobs/edges (loadTaskGraph),
+          // replacing the earlier `[], []` stand-in — a second decomposition landing under a task
+          // that already has jobs/deps (cross-repo dispatch, or a future N>1 assembler) is now
+          // checked against what's actually there, not an empty placeholder. Inert for today's
+          // N=1 assembleJobs (it never proposes a dep), so no observable behavior change; it only
+          // matters once an assembler can propose edges that might collide with existing ones.
+          const loaded = await loadTaskGraph(sql, ctx);
+          const validation = validateAssembly(loaded.jobs, loaded.edges, assembled);
           if (!validation.ok) {
             flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: invalid assembly: ${validation.reason}` });
           } else {
