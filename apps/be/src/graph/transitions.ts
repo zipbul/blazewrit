@@ -18,6 +18,14 @@ const WHITELIST: Record<JobStatus, JobStatus[]> = {
 /**
  * Job status-machine whitelist: pending→ready|blocked|cancelled, blocked→ready|cancelled,
  * ready→running|cancelled, running→done|failed|cancelled, terminal→(none).
+ *
+ * running→pending is DELIBERATELY absent (3자 리뷰 수정 B2-3, minor 묶음): rest.ts's
+ * runRegisteredJob does exactly this transition, raw, to revert an orphaned claim (a job the
+ * always-on controller claimed but no execution closure was ever registered for in THIS process).
+ * That is a contract-EXTERNAL recovery write, not a normal job-lifecycle step — it does not go
+ * through canTransitionJob, and it must not be added to this whitelist just to make it "official":
+ * doing so would make running→pending look like something ANY caller may do mid-flow, which is not
+ * true (a job legitimately running its own flow must never be silently rewound to pending under it).
  */
 export function canTransitionJob(from: JobStatus, to: JobStatus): boolean {
   return WHITELIST[from].includes(to);

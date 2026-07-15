@@ -57,6 +57,14 @@ export function validateAssembly(
     if (!ownJobIds.has(dep.waiterJobId)) {
       return { ok: false, reason: `dep waiter ${dep.waiterJobId} is not among the assembled graph's own jobs` };
     }
+    // Rejects an edge with no real target (3자 리뷰 수정 B2-3): deps.ts's evaluateDep is asymmetric
+    // on a memberless dep (predicate='all' vacuously releases immediately, 'any' never releases) —
+    // an edge whose own targetId is empty/missing is the same "nothing to actually wait on" case at
+    // this layer (AssembledDep doesn't group several targets under one predicate yet, so a dep row
+    // with SOME members but zero of them isn't expressible here — see handoff report).
+    if (!dep.targetId) {
+      return { ok: false, reason: `dep ${dep.waiterJobId} -> ${dep.targetType}:(empty) has no target to wait on` };
+    }
   }
 
   const allJobs: CycleJob[] = [...existingJobs, ...g.jobs.map((j) => ({ id: j.id, taskId: j.taskId }))];

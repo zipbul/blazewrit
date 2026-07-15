@@ -187,4 +187,62 @@ describe('GET /api/work-items — DTO projection contract (harness/job-graph.md 
     expect(item.state).toBe('blocked');
     expect(item.completedAt).toBeUndefined();
   });
+
+  /**
+   * 3자 리뷰 수정 B2-1 (Codex major #21): dispatchTask's graph-mirror insertJob call rejects when
+   * the dispatch's contextId names an already-terminal task (rule 9 latch) — the fallback path
+   * (`jobExecutors.delete(...); await executeJobFlow()`) still runs the flow and writes work_items
+   * directly, but NEVER creates a jobs row for it (insertJob threw before ever reaching the write).
+   * Since /api/work-items reads ONLY from jobs, this work item was invisible — the user's work
+   * silently vanished from the FE despite actually running to completion.
+   */
+  it('a work_item whose graph-mirror insert was rejected by an already-terminal ctx (direct-run fallback) still appears', async () => {
+    const ctx = `${MARK}-terminal-ctx`;
+    await sql`insert into tasks (id, title, status) values (${ctx}, ${ctx}, 'done')`;
+
+    const text = `${MARK} case-legacy-fallback chore`;
+    const res = await sendA2A(app, projectId, text, { metadata: { flowType: 'chore' }, contextId: ctx });
+    const { id: workItemId } = ((await res.json()) as { result: { id: string } }).result;
+
+    const wi = await waitFor(async () => {
+      const rows = (await sql`select state from work_items where id = ${workItemId}`) as Array<{ state: string }>;
+      return rows[0]?.state === 'done' ? rows[0] : undefined;
+    });
+    expect(wi.state).toBe('done');
+    // Sanity: confirms the bug's precondition actually held — no jobs mirror was ever created.
+    const jobRows = (await sql`select 1 from jobs where id = ${workItemId} or legacy_work_item_id = ${workItemId}`) as unknown[];
+    expect(jobRows.length).toBe(0);
+
+    const item = await findWorkItem(app, workItemId);
+    expect(item).toBeDefined();
+    expectCommonShape(item!, { id: workItemId, projectId, title: text });
+    expect(item!.type).toBe('task'); // chore -> workItemType fallback 'task', same mapping as the jobs path
+    expect(item!.state).toBe('done');
+    expect(item!.contextId).toBe(ctx);
+    expect(typeof item!.completedAt).toBe('string');
+  });
+
+  /**
+   * 3자 리뷰 수정 B2-3 (minor 묶음): the jobs↔flows join is `on (f.job_id = j.id or f.work_item_id
+   * = j.id)` — a 1:N join if more than one flow row ever matches a job (e.g. a retry/duplicate
+   * flow row). Each extra match duplicated the SAME job in the response array.
+   */
+  it('a job with two matching flow rows projects exactly one entry, not two', async () => {
+    const text = `${MARK} case-dup-flow chore`;
+    const res = await sendA2A(app, projectId, text, { metadata: { flowType: 'chore' } });
+    const { id: workItemId } = ((await res.json()) as { result: { id: string } }).result;
+
+    await waitFor(async () => {
+      const found = await findWorkItem(app, workItemId);
+      return found?.state === 'done' ? found : undefined;
+    });
+
+    // A second flow row ending up matched to the SAME job (retry, or any future re-run wiring).
+    await sql`insert into flows (id, work_item_id, job_id, flow_type, status, current_step)
+      values (${`${workItemId}-retry`}, ${workItemId}, ${workItemId}, 'chore', 'completed', 'reflect')`;
+
+    const rows = await getWorkItemsResponse(app);
+    const matches = rows.filter((r) => r.id === workItemId);
+    expect(matches).toHaveLength(1);
+  });
 });

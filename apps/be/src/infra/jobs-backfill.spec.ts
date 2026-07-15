@@ -117,6 +117,69 @@ describe('schema backfill: work_items → tasks/jobs (harness/job-graph.md step 
     expect(jobs.map((j) => j.repo_id).sort()).toEqual([projectA, projectB].sort());
   });
 
+  /**
+   * 3자 리뷰 수정 B2-2 (Codex major #22): the mirror insert is `on conflict (id) do nothing` — it
+   * only ever WRITES a mirrored job on the boot that first sees the source work_item. If that
+   * work_item was still 'in_flow' at that boot (mirrored as 'running') and only reaches done/
+   * blocked AFTER this process started (a live dispatch's own completion dual-write doesn't touch
+   * BACKFILLED rows — it only ever updates the row for the workItemId it itself is running), the
+   * mirror is stuck 'running' forever, even though the source has long since finished.
+   */
+  test('self-heals a stale running mirror once the source work_item reaches done (rollout-window race)', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'in_flow', 'do the thing', ${contextId})`;
+    await ensureSchema(sql); // first boot: mirrors as 'running'
+
+    const firstPass = (await sql`select status from jobs where id = ${workItemId}`) as Array<{ status: string }>;
+    expect(firstPass[0]!.status).toBe('running');
+
+    // The source finishes AFTER the mirror was created — nothing else ever revisits this row.
+    await sql`update work_items set state = 'done' where id = ${workItemId}`;
+    await ensureSchema(sql); // second boot: self-heal should catch up
+
+    const secondPass = (await sql`select status from jobs where id = ${workItemId}`) as Array<{ status: string }>;
+    expect(secondPass[0]!.status).toBe('done');
+  });
+
+  test('self-heals a stale running mirror to failed once the source work_item is blocked', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'in_flow', 'do the thing', ${contextId})`;
+    await ensureSchema(sql);
+
+    await sql`update work_items set state = 'blocked' where id = ${workItemId}`;
+    await ensureSchema(sql);
+
+    const jobs = (await sql`select status from jobs where id = ${workItemId}`) as Array<{ status: string }>;
+    expect(jobs[0]!.status).toBe('failed');
+  });
+
+  test('does not re-touch an already-terminal mirror on repeated ensureSchema runs (idempotent)', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'done', 'finished thing', ${contextId})`;
+    await ensureSchema(sql);
+    const before = (await sql`select status_changed_at from jobs where id = ${workItemId}`) as Array<{ status_changed_at: Date }>;
+
+    await ensureSchema(sql);
+    const after = (await sql`select status, status_changed_at from jobs where id = ${workItemId}`) as Array<{
+      status: string;
+      status_changed_at: Date;
+    }>;
+    expect(after[0]!.status).toBe('done');
+    expect(after[0]!.status_changed_at.getTime()).toBe(before[0]!.status_changed_at.getTime());
+  });
+
   test('does not duplicate the tasks/jobs mirror across repeated ensureSchema runs', async () => {
     const projectId = id('project');
     await makeProject(projectId);

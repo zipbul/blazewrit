@@ -177,6 +177,12 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
     const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
     try {
       await waitFor(async () => ((await jobStatus(jobId)) === 'failed' ? true : undefined));
+      // 3자 리뷰 수정 B2-4 (#30): the wake() insert is the NEXT statement after the status UPDATE
+      // in the SAME tick(), but it's a SEPARATE Postgres round-trip from this test's own status
+      // poll — under shared-DB load the two can be observed out of order (status flips to
+      // 'failed' before the wake row's own insert has actually landed). Wait for the wake to
+      // exist too, THEN assert its count, instead of asserting immediately on the status flip.
+      await waitFor(async () => ((await openWakeCount('lease_expired', taskId)) > 0 ? true : undefined));
       expect(await openWakeCount('lease_expired', taskId)).toBe(1);
     } finally {
       controller.stop();

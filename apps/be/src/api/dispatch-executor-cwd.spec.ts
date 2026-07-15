@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, mock } from 'bun:test';
 import { SQL } from 'bun';
-import { createRestApi } from './rest';
+import { createRestApi, resolveRepoCwd } from './rest';
 import { ensureSchema } from '../infra/schema';
 import type { StepExecutor } from '../orchestrator/types';
 
@@ -163,5 +163,28 @@ describe('dispatchTask — executor cwd resolution (executorFor wins, bound to r
     // reads that existing row, not a missing one — see the handoff report for why "no repos row
     // at all" isn't reachable via the live dispatch path.
     expect(seenCwds).toEqual(['.']);
+  });
+});
+
+/**
+ * 3자 리뷰 수정 B2-3 (minor 묶음): resolveRepoCwd used to catch EVERY error — including a genuine
+ * SQL failure, not just "no repos row yet" — and silently fall back to '.'. That made a query
+ * failure indistinguishable from an honest "not configured yet" signal, letting a job silently run
+ * pinned to the wrong (process-default) directory instead of surfacing the failure. Only "no row"
+ * is a real '.' signal now; a thrown query error propagates. No live Postgres needed here — a
+ * trivial fake `sql` is enough to exercise resolveRepoCwd's own error-handling contract in isolation.
+ */
+describe('resolveRepoCwd — error handling (수정 B2-3)', () => {
+  it('returns "." when no repos row exists for the id (real "not configured yet" signal)', async () => {
+    const fakeSql = (async () => []) as unknown as SQL;
+    const cwd = await resolveRepoCwd(fakeSql, 'some-repo');
+    expect(cwd).toBe('.');
+  });
+
+  it('propagates a genuine SQL query failure instead of silently returning "."', async () => {
+    const fakeSql = (async () => {
+      throw new Error('connection reset');
+    }) as unknown as SQL;
+    await expect(resolveRepoCwd(fakeSql, 'some-repo')).rejects.toThrow('connection reset');
   });
 });

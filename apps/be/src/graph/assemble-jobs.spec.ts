@@ -37,6 +37,25 @@ test('validateAssembly rejects a dep that would close a wait-cycle against the e
   expect(result.ok).toBe(false);
 });
 
+/**
+ * 3자 리뷰 수정 B2-3 (minor 묶음, judgment call — see handoff report): deps.ts's evaluateDep is
+ * asymmetric on a memberless dep — predicate='all' with 0 members vacuously releases immediately
+ * (members.every on []), predicate='any' with 0 members never releases (members.some on []).
+ * AssembledDep has no grouping/predicate field today (each entry IS already exactly one edge —
+ * assembleJobs never groups several targets under one dep+predicate), so this specific asymmetry
+ * can't be reproduced at THIS layer yet. What IS reproducible here: an edge whose own targetId is
+ * empty/missing — points at nothing, functionally the same "no real member" case — is rejected
+ * before ever reaching a write.
+ */
+test('validateAssembly rejects a dep whose targetId is empty (no real member to wait on)', () => {
+  const g: AssembledGraph = {
+    jobs: [{ id: 'J1', taskId: 'T', repoId: 'R', title: 'x' }],
+    deps: [{ waiterJobId: 'J1', targetType: 'job', targetId: '' }],
+  };
+  const result = validateAssembly([], [], g);
+  expect(result).toEqual({ ok: false, reason: 'dep J1 -> job:(empty) has no target to wait on' });
+});
+
 test('validateAssembly accepts a graph whose deps introduce no cycle', () => {
   const g: AssembledGraph = {
     jobs: [

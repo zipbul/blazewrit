@@ -70,6 +70,26 @@ export interface RestDeps {
   onReconcileDispatch?: (dispatch: (job: ReconcileJob) => Promise<void>) => void;
 }
 
+/**
+ * repos.cwd is the executor-binding source of truth for a dispatch (harness/job-graph.md "주권
+ * 단위 = 레포" + its 배선점 note: "실행기 cwd가 현재 프로세스당 고정 → dispatch 시 repos.cwd로
+ * 레포별 cwd 해석 배선 필요" — this is that wiring). Resolved fresh per dispatch instead of once
+ * per process, so each repo's jobs run pinned to their own checkout.
+ *
+ * Module-level (not a createRestApi closure) so it's unit-testable with a bare fake `sql`, no live
+ * Postgres required (수정 B2-3, minor 묶음). Only "no repos row for this id yet" reads as '.' —
+ * an honest "not configured yet" signal, the same one serve.ts's real executorFor already treats
+ * specially. A genuine query failure is NOT swallowed into that same '.' anymore (it used to be) —
+ * that made a broken DB connection indistinguishable from "not configured", silently running a
+ * job's flow pinned to the wrong (process-default) directory instead of surfacing the failure;
+ * executeJobFlow's own top-level try/catch already handles a thrown error correctly (marks the
+ * job/work_item failed), so there's no need to pre-swallow it here.
+ */
+export async function resolveRepoCwd(sql: SQL, repoId: string): Promise<string> {
+  const rows = (await sql`select cwd from repos where id = ${repoId}`) as Array<{ cwd: string }>;
+  return rows[0]?.cwd ?? '.';
+}
+
 /** REST + SSE surface the Angular UI consumes (DECISIONS §13), backed by Postgres. */
 export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const flowHub = new FlowHub();
@@ -199,22 +219,6 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const workItemType = (flowType: ReturnType<StubFlowClassifier['classify']>): string =>
     flowType === 'bugfix' ? 'bug' : flowType === 'feature' ? 'feature' : 'task';
 
-  /**
-   * repos.cwd is the executor-binding source of truth for a dispatch (harness/job-graph.md
-   * "주권 단위 = 레포" + its 배선점 note: "실행기 cwd가 현재 프로세스당 고정 → dispatch 시
-   * repos.cwd로 레포별 cwd 해석 배선 필요" — this is that wiring). Resolved fresh per dispatch
-   * instead of once per process, so each repo's jobs run pinned to their own checkout. A missing
-   * row or a query failure both read as '.' — "no per-repo cwd configured yet, fall back to the
-   * process default" — the same signal serve.ts's real executorFor already treats specially.
-   */
-  const resolveRepoCwd = async (repoId: string): Promise<string> => {
-    try {
-      const rows = (await sql`select cwd from repos where id = ${repoId}`) as Array<{ cwd: string }>;
-      return rows[0]?.cwd ?? '.';
-    } catch {
-      return '.';
-    }
-  };
 
   /**
    * Project-side task handler (reached via the A2A message/send endpoint): triage the
@@ -255,7 +259,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           : undefined;
         // Real mode (deps.executorFor set) builds this job's own executor bound to its repo's
         // cwd; everything else (tests, the paced stub) keeps using the one shared executor.
-        const executor = deps.executorFor ? deps.executorFor(await resolveRepoCwd(projectId)) : (deps.executor ?? new PacedStepExecutor());
+        const executor = deps.executorFor ? deps.executorFor(await resolveRepoCwd(sql, projectId)) : (deps.executor ?? new PacedStepExecutor());
         // Heartbeat (harness/job-graph.md P2 spec A2): one more wrapper OUTSIDE publishing()'s SSE
         // layer — every step transition also renews this job's claim lease. A stalled/crashed flow
         // simply stops calling setCurrentStep, so its lease lapses on its own; orchestrator.ts
@@ -611,15 +615,27 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     // observed live, only theoretically possible for a hand-inserted/backfilled orphan) falls
     // back to type 'task', same fallback the old workItemType() used for unrecognized flow types.
     .get('/api/work-items', async () => {
+      // distinct on (j.id) (3자 리뷰 수정 B2-3, minor 묶음): the OR join below is 1:N the moment
+      // more than one flow row ever matches the same job (e.g. a retry/duplicate flow row) —
+      // without this, each extra match duplicated that job in the response. Picks the
+      // most-recently-created matching flow per job; the outer query re-sorts the deduped set by
+      // the job's own created_at for display order (distinct on requires ordering by its own key first).
       const rows = (await sql`
-        select j.id, j.repo_id, j.title, j.status, j.task_id, j.created_at, f.id as flow_id, f.flow_type
-        from jobs j
-        left join flows f on (f.job_id = j.id or f.work_item_id = j.id)
-        order by j.created_at desc
+        select * from (
+          select distinct on (j.id) j.id, j.repo_id, j.title, j.status, j.task_id, j.created_at, f.id as flow_id, f.flow_type
+          from jobs j
+          left join flows f on (f.job_id = j.id or f.work_item_id = j.id)
+          order by j.id, f.created_at desc nulls last
+        ) deduped
+        order by created_at desc
       `) as Array<Record<string, unknown>>;
+      // cancelled -> 'blocked' (not a distinct FE state): kept as-is (3자 리뷰 수정 B2-3, minor
+      // 묶음, judgment call) — the WorkItemDto contract only ever had in_flow/done/blocked, and a
+      // cancelled job is unambiguously "not done", same bucket a failed one already renders in.
+      // Distinguishing cancelled from failed in the FE would need a new DTO state, out of scope here.
       const jobStateToWorkItemState = (status: string): string =>
         status === 'done' ? 'done' : status === 'failed' || status === 'cancelled' ? 'blocked' : 'in_flow';
-      return rows.map((j) => {
+      const fromJobs = rows.map((j) => {
         const created = new Date(j.created_at as string).toISOString();
         const state = jobStateToWorkItemState(j.status as string);
         const flowType = j.flow_type as ReturnType<StubFlowClassifier['classify']> | null;
@@ -640,6 +656,47 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           ...(state === 'done' ? { completedAt: created } : {}),
         };
       });
+
+      // 3자 리뷰 수정 B2-1 (Codex major #21): dispatchTask's graph-mirror insertJob can reject
+      // (e.g. rule 9 — the dispatch's contextId names an already-terminal task) while the LEGACY
+      // work_items/flows write still proceeds via the direct-run fallback (see dispatchTask). That
+      // work item then has NO jobs row at all, so the query above can never find it — it would
+      // silently vanish from the FE despite having actually run. Mapped with the exact PRE-migration-5
+      // DTO shape (dcb9ac4~1) — that was the last shape describing a work_items row on its own,
+      // with no jobs-table concept to borrow from.
+      // Same distinct-on dedup as the jobs query above — a legacy work_item with more than one
+      // matching flow row (e.g. a pre-graph retry) must not duplicate in the response either.
+      const legacyOnly = (await sql`
+        select * from (
+          select distinct on (w.id) w.id, w.project_id, w.type, w.state, w.title, w.context_id, w.created_at, f.id as active_flow_id
+          from work_items w
+          left join flows f on f.work_item_id = w.id
+          where not exists (select 1 from jobs j where j.id = w.id or j.legacy_work_item_id = w.id)
+          order by w.id, f.created_at desc nulls last
+        ) deduped
+        order by created_at desc
+      `) as Array<Record<string, unknown>>;
+      const fromLegacy = legacyOnly.map((w) => {
+        const created = new Date(w.created_at as string).toISOString();
+        return {
+          id: w.id as string,
+          projectId: w.project_id as string,
+          title: (w.title as string) ?? '(untitled)',
+          description: '',
+          type: w.type as string,
+          labels: [] as string[],
+          state: w.state as string,
+          priority: 0,
+          source: 'user',
+          activeFlowId: (w.active_flow_id as string) ?? undefined,
+          contextId: (w.context_id as string) ?? undefined,
+          createdAt: created,
+          updatedAt: created,
+          ...(w.state === 'done' ? { completedAt: created } : {}),
+        };
+      });
+
+      return [...fromJobs, ...fromLegacy].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
     })
     .get('/api/flows', async () => {
       const rows = (await sql`select * from flows order by created_at`) as FlowRow[];

@@ -247,4 +247,22 @@ export async function ensureSchema(sql: SQL): Promise<void> {
   await sql`update jobs set created_at = w.created_at
     from work_items w
     where jobs.legacy_work_item_id = w.id and jobs.created_at <> w.created_at`;
+
+  // Self-heal (3자 리뷰 수정 B2-2, Codex major #22): the mirror INSERT above is `on conflict (id)
+  // do nothing` — it only ever WRITES a job on the boot that first sees a given work_item, mapping
+  // whatever state that work_item held AT THAT MOMENT. A work_item still 'in_flow' at that boot
+  // (mirrored 'running') that only reaches done/blocked LATER (a rollout-window race — the work
+  // predates this backfill layer, so no live dispatch completion write ever revisits this specific
+  // row again) would otherwise stay mirrored 'running' forever. Scoped to legacy_work_item_id
+  // rows only (a live dispatch's own job has that column NULL, so it's untouched here — this is
+  // backfill self-correction, not a second completion-write path) and only fires when the
+  // mirror's status is still non-terminal, so it's idempotent and never clobbers a job a live
+  // reconcile/dispatch path has already moved on from.
+  await sql`update jobs set
+      status = case w.state when 'done' then 'done' when 'blocked' then 'failed' else jobs.status end,
+      status_changed_at = now(), lease_expires_at = null
+    from work_items w
+    where jobs.legacy_work_item_id = w.id
+      and w.state in ('done', 'blocked')
+      and jobs.status not in ('done', 'failed', 'cancelled')`;
 }
