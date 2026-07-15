@@ -26,6 +26,14 @@ export async function renewLease(sql: SQL, jobId: string, ttlMs: number): Promis
  * simply stops calling it, so its lease lapses on its own). orchestrator.ts stays entirely
  * graph-ignorant — this wraps the store ONE layer outside the existing `publishing()` SSE
  * wrapper, at the dispatch call site (rest.ts), not inside runFlow itself.
+ *
+ * Also intercepts setStatus (3자 리뷰 수정 A라운드 A2): a HITL pause (`'suspended'`) is a job
+ * waiting on a HUMAN, not a crashed worker — a lease exists to detect the latter, so it's cleared
+ * on suspend (the controller's lease-expiry scan already skips a null lease) rather than left to
+ * silently lapse and get the job wrongly marked failed mid-decision. Resuming (`'active'`)
+ * reloads it exactly as claim/heartbeat do. Every other status (`'completed'`/`'abandoned'`)
+ * passes through untouched — executeJobFlow's own completion dual-write already clears the lease
+ * for those.
  */
 export function withLeaseHeartbeat(store: OrchestratorStore, sql: SQL, jobId: string, ttlMs: number): OrchestratorStore {
   return {
@@ -33,6 +41,14 @@ export function withLeaseHeartbeat(store: OrchestratorStore, sql: SQL, jobId: st
     setCurrentStep: async (flowId, step) => {
       await store.setCurrentStep(flowId, step);
       await renewLease(sql, jobId, ttlMs);
+    },
+    setStatus: async (flowId, status) => {
+      await store.setStatus(flowId, status);
+      if (status === 'suspended') {
+        await sql`update jobs set lease_expires_at = null where id = ${jobId} and status = 'running'`;
+      } else if (status === 'active') {
+        await renewLease(sql, jobId, ttlMs);
+      }
     },
   };
 }

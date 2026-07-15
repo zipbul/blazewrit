@@ -148,7 +148,11 @@ export async function reconcileTask(
     try {
       await dispatch({ id: job.id, repoId: job.repo_id, taskId, title: job.title });
     } catch {
-      await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${job.id}`.catch(() => undefined);
+      // CAS-guarded (3자 리뷰 수정 A라운드 A1): the job may have already moved on (lease-expiry
+      // scan, gen++) by the time this catch runs — an unconditional write would clobber that.
+      await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${job.id} and status = 'running'`.catch(
+        () => undefined,
+      );
     }
   }
 

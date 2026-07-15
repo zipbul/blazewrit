@@ -218,14 +218,20 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
     const dispatch = makeDispatch(calls);
     const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
     try {
-      await drainUntil(controller, async () => callIds(calls).includes(a));
+      // The predicate also waits for B/C to settle out of their initial 'pending' seed — the SAME
+      // reconcile pass that dispatches A may not yet have reached evaluating B/C when A first
+      // appears in `calls` (see file-level comment on tick() timing / drainUntil's contract).
+      await drainUntil(
+        controller,
+        async () => callIds(calls).includes(a) && (await jobStatus(b)) !== 'pending' && (await jobStatus(c)) !== 'pending',
+      );
       expect(callIds(calls).filter((x) => myIds.has(x))).toEqual([a]); // B/C must not cascade
       expect(await jobStatus(a)).toBe('running');
       expect(await jobStatus(b)).toBe('blocked');
       expect(await jobStatus(c)).toBe('blocked');
 
       await completeJob(a);
-      await drainUntil(controller, async () => callIds(calls).includes(b));
+      await drainUntil(controller, async () => callIds(calls).includes(b) && (await jobStatus(c)) !== 'pending');
       expect(callIds(calls).filter((x) => myIds.has(x))).toEqual([a, b]);
       expect(await jobStatus(b)).toBe('running');
       expect(await jobStatus(c)).toBe('blocked');
@@ -284,7 +290,12 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
       expect(callIds(calls).filter((x) => myIds.has(x))).toEqual([a]);
 
       await completeJob(a);
-      await drainUntil(controller, async () => callIds(calls).filter((x) => x === b || x === c).length === 2);
+      // Also waits for D to settle out of 'pending' -- the same pass that dispatches B/C may not
+      // yet have reached D's own evaluation (file-level comment on tick() timing).
+      await drainUntil(
+        controller,
+        async () => callIds(calls).filter((x) => x === b || x === c).length === 2 && (await jobStatus(d)) !== 'pending',
+      );
       expect(new Set(callIds(calls).filter((x) => myIds.has(x)))).toEqual(new Set([a, b, c]));
       expect(await jobStatus(d)).toBe('blocked');
 
@@ -318,8 +329,12 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
     const dispatch = makeDispatch(calls);
     const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
     try {
-      // B and C (no deps of their own) both get claimed; D stays blocked (neither done yet).
-      await drainUntil(controller, async () => callIds(calls).filter((x) => x === b || x === c).length === 2);
+      // B and C (no deps of their own) both get claimed; D stays blocked (neither done yet). Also
+      // waits for D to settle out of 'pending' -- see file-level comment on tick() timing.
+      await drainUntil(
+        controller,
+        async () => callIds(calls).filter((x) => x === b || x === c).length === 2 && (await jobStatus(d)) !== 'pending',
+      );
       expect(await jobStatus(d)).toBe('blocked');
 
       await completeJob(b); // only B finishes; C is left running
@@ -347,7 +362,8 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
     const dispatch = makeDispatch(calls);
     const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
     try {
-      await drainUntil(controller, async () => callIds(calls).includes(a));
+      // Also waits for B to settle out of 'pending' -- see file-level comment on tick() timing.
+      await drainUntil(controller, async () => callIds(calls).includes(a) && (await jobStatus(b)) !== 'pending');
       const aCall = calls.find((c) => c.id === a)!;
       expect(aCall.repoId).toBe(repo1);
       expect(await jobStatus(b)).toBe('blocked');
@@ -381,7 +397,12 @@ describe('S6-S8: task-target dep, acceptable extension, failure + stall', () => 
     const dispatch = makeDispatch(calls);
     const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
     try {
-      await drainUntil(controller, async () => callIds(calls).filter((v) => v === e || v === f).length === 2);
+      // Also waits for X (a DIFFERENT task, t1) to settle out of 'pending' -- a single tick pass
+      // iterates every candidate task, so X's own evaluation may lag E/F's (file-level comment).
+      await drainUntil(
+        controller,
+        async () => callIds(calls).filter((v) => v === e || v === f).length === 2 && (await jobStatus(x)) !== 'pending',
+      );
       expect(await jobStatus(x)).toBe('blocked'); // T2 not resolved yet
 
       await completeJob(e);
@@ -423,7 +444,8 @@ describe('S6-S8: task-target dep, acceptable extension, failure + stall', () => 
     const dispatch = makeDispatch(calls);
     const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
     try {
-      await drainUntil(controller, async () => callIds(calls).includes(b));
+      // Also waits for bPrime to settle out of 'pending' -- see file-level comment on tick() timing.
+      await drainUntil(controller, async () => callIds(calls).includes(b) && (await jobStatus(bPrime)) !== 'pending');
       expect(await jobStatus(b)).toBe('running'); // cancelled accepted -> released
       expect(await jobStatus(bPrime)).toBe('blocked'); // default acceptable rejects 'cancelled'
       expect(callIds(calls).filter((x) => x === bPrime)).toEqual([]);

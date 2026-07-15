@@ -9,7 +9,18 @@ export class FlowHub {
   }
   publish(event: object): void {
     const line = `data: ${JSON.stringify(event)}\n\n`;
-    for (const fn of this.subs) fn(line);
+    // A3 (3자 리뷰 수정 A라운드): a subscriber's own failure (e.g. enqueueing to an already-closed
+    // SSE controller) must never propagate back into the write path calling publish() — that path
+    // is often mid-completion-dual-write in rest.ts, and an escaping exception there flips a
+    // SUCCESSFUL flow into its catch block, clobbering done→failed for a reason that has nothing
+    // to do with the flow itself.
+    for (const fn of this.subs) {
+      try {
+        fn(line);
+      } catch {
+        // isolated — see comment above
+      }
+    }
   }
 }
 
@@ -40,12 +51,25 @@ export class StepStreamHub {
     const buf = this.buffers.get(stepRunId) ?? [];
     buf.push(dto);
     this.buffers.set(stepRunId, buf);
-    for (const sub of this.subs.get(stepRunId) ?? []) sub.onEvent(dto);
+    // A3: same subscriber-isolation as FlowHub.publish — see its comment.
+    for (const sub of this.subs.get(stepRunId) ?? []) {
+      try {
+        sub.onEvent(dto);
+      } catch {
+        // isolated
+      }
+    }
   }
 
   finish(stepRunId: string): void {
     this.finished.add(stepRunId);
-    for (const sub of this.subs.get(stepRunId) ?? []) sub.onDone();
+    for (const sub of this.subs.get(stepRunId) ?? []) {
+      try {
+        sub.onDone();
+      } catch {
+        // isolated
+      }
+    }
   }
 
   subscribe(stepRunId: string, onEvent: StepSub['onEvent'], onDone: StepSub['onDone']): () => void {

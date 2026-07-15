@@ -259,19 +259,23 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
             flowHub.publish({ type: 'learning', flowId: l.flowId });
           },
         });
-        await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId}`;
+        // CAS-guarded (3자 리뷰 수정 A라운드 A1): a lease-expiry scan or a gen++ may have already
+        // moved this row on to a DIFFERENT terminal/regenerated state by the time this (possibly
+        // slow) flow finally finishes — an unconditional write here would clobber that newer,
+        // more authoritative state with a stale "yes I completed" that has nothing to do with it.
+        await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId} and state = 'in_flow'`;
         // Job-graph mirror: a raw status update, not the state-machine (canTransitionJob /
         // bumpJobGeneration) — routing this through the proper transition machinery is P2
         // reconcile's job. This is best-effort bookkeeping so the mirror doesn't silently drift
         // while dispatch predates reconcile; a failure here must not affect the legacy path above.
         await sql`
           update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'}, status_changed_at = now(), lease_expires_at = null
-          where id = ${workItemId}
+          where id = ${workItemId} and status = 'running'
         `.catch(() => undefined);
         flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
       } catch (err) {
-        await sql`update work_items set state = 'blocked' where id = ${workItemId}`.catch(() => undefined);
-        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId}`.catch(() => undefined);
+        await sql`update work_items set state = 'blocked' where id = ${workItemId} and state = 'in_flow'`.catch(() => undefined);
+        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running'`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     };
@@ -344,8 +348,9 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         }
       } catch (err) {
         jobExecutors.delete(workItemId);
-        await sql`update work_items set state = 'blocked' where id = ${workItemId}`.catch(() => undefined);
-        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId}`.catch(() => undefined);
+        // CAS-guarded (A1) — same rationale as executeJobFlow's own catch above.
+        await sql`update work_items set state = 'blocked' where id = ${workItemId} and state = 'in_flow'`.catch(() => undefined);
+        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running'`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     })();
