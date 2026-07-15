@@ -589,7 +589,7 @@ describe('S11: terminal latch E2E', () => {
 });
 
 describe('S12: real graph loading feeds validateAssembly (migration 9 wiring)', () => {
-  test("loadTaskGraph returns the task's current jobs and dep-member edges", async () => {
+  test("loadTaskGraph returns this task's jobs and dep-member edges among the (now global) result", async () => {
     const productId = await makeProduct();
     const repoId = await makeRepo(productId);
     const taskId = await makeTask();
@@ -598,9 +598,14 @@ describe('S12: real graph loading feeds validateAssembly (migration 9 wiring)', 
     await waitsOnJob(b, a);
 
     try {
-      const loaded = await loadTaskGraph(sql, taskId);
-      expect(new Set(loaded.jobs.map((j) => j.id))).toEqual(new Set([a, b]));
-      expect(loaded.edges).toEqual([{ waiterJobId: b, targetType: 'job', targetId: a }]);
+      // Global by design (B1-3) — the shared dev DB has many other jobs/edges from other tests
+      // running concurrently, so assert this fixture's own ids are PRESENT, not that they're ALL
+      // that's there (see file-level comment on cross-file isolation).
+      const loaded = await loadTaskGraph(sql);
+      const jobIds = new Set(loaded.jobs.map((j) => j.id));
+      expect(jobIds.has(a)).toBe(true);
+      expect(jobIds.has(b)).toBe(true);
+      expect(loaded.edges).toContainEqual({ waiterJobId: b, targetType: 'job', targetId: a });
     } finally {
       await cleanupGraph([taskId], [repoId], [productId]);
     }
@@ -615,7 +620,7 @@ describe('S12: real graph loading feeds validateAssembly (migration 9 wiring)', 
     await waitsOnJob(b, a); // existing: B waits A
 
     try {
-      const loaded = await loadTaskGraph(sql, taskId);
+      const loaded = await loadTaskGraph(sql);
       // A new assembly re-declaring A as a job that now waits on B would close A<->B.
       const assembled = { jobs: [{ id: a, taskId, repoId, title: 'A' }], deps: [{ waiterJobId: a, targetType: 'job' as const, targetId: b }] };
       const result = validateAssembly(loaded.jobs, loaded.edges, assembled);
@@ -634,13 +639,71 @@ describe('S12: real graph loading feeds validateAssembly (migration 9 wiring)', 
     await waitsOnJob(b, a);
 
     try {
-      const loaded = await loadTaskGraph(sql, taskId);
+      const loaded = await loadTaskGraph(sql);
       const c = id('job-c-unwritten'); // a new job this assembly introduces (not yet inserted)
       const assembled = { jobs: [{ id: c, taskId, repoId, title: 'C' }], deps: [{ waiterJobId: c, targetType: 'job' as const, targetId: a }] };
       const result = validateAssembly(loaded.jobs, loaded.edges, assembled);
       expect(result.ok).toBe(true);
     } finally {
       await cleanupGraph([taskId], [repoId], [productId]);
+    }
+  });
+
+  /**
+   * 3자 리뷰 수정 B1-3 (Fable#6): a task-scoped loadTaskGraph(sql, taskId) (pre-fix) can only ever see edges
+   * whose WAITER lives under that task — rule 7's "job->task expansion crosses task boundaries"
+   * (harness/job-graph.md rule 7) means an existing edge declared BY task A that merely TARGETS
+   * task B is invisible when loading from task B's own perspective, so assembling a new job under
+   * B that waits back on task A sails through validateAssembly even though it closes a cycle.
+   */
+  test('cross-task cycle: an existing task A -> task B edge is invisible to a task-B-scoped load, so a new B job waiting back on A is wrongly accepted', async () => {
+    const productId = await makeProduct();
+    const repoId = await makeRepo(productId);
+    const taskA = await makeTask('taskA');
+    const taskB = await makeTask('taskB');
+    const j1 = await makeJob(taskA, repoId, 'J1'); // task A's own job
+    const bJob = await makeJob(taskB, repoId, 'Bjob'); // task B already has at least one job
+    await waitsOnTask(j1, taskB); // existing edge: J1 (task A) waits on task B
+
+    try {
+      // Scoped to task B (where the NEW job is being assembled) — today's call-site shape.
+      const loaded = await loadTaskGraph(sql);
+      const j2 = id('job-j2-unwritten'); // new job this assembly wants to add under task B
+      const assembled = {
+        jobs: [{ id: j2, taskId: taskB, repoId, title: 'J2' }],
+        deps: [{ waiterJobId: j2, targetType: 'task' as const, targetId: taskA }], // J2 waits on task A
+      };
+      const result = validateAssembly(loaded.jobs, loaded.edges, assembled);
+      // J1 (task A) -> task B (all of B's jobs, including the new J2) -> task A (all of A's jobs,
+      // including J1) closes a cycle. A GLOBAL load must reject this.
+      expect(result.ok).toBe(false);
+      expect(bJob).toBeDefined(); // task B already had a job before this assembly (fixture sanity)
+    } finally {
+      await cleanupGraph([taskA, taskB], [repoId], [productId]);
+    }
+  });
+
+  test('cross-task: a harmless cross-task edge with no cycle is still accepted under a global load', async () => {
+    const productId = await makeProduct();
+    const repoId = await makeRepo(productId);
+    const taskA = await makeTask('taskA');
+    const taskB = await makeTask('taskB');
+    const taskC = await makeTask('taskC');
+    const j1 = await makeJob(taskA, repoId, 'J1');
+    await makeJob(taskB, repoId, 'Bjob');
+    await waitsOnTask(j1, taskB); // existing edge: J1 (task A) waits on task B — unrelated to C
+
+    try {
+      const loaded = await loadTaskGraph(sql);
+      const j2 = id('job-j2-unwritten');
+      const assembled = {
+        jobs: [{ id: j2, taskId: taskB, repoId, title: 'J2' }],
+        deps: [{ waiterJobId: j2, targetType: 'task' as const, targetId: taskC }], // waits on C, no cycle
+      };
+      const result = validateAssembly(loaded.jobs, loaded.edges, assembled);
+      expect(result.ok).toBe(true);
+    } finally {
+      await cleanupGraph([taskA, taskB, taskC], [repoId], [productId]);
     }
   });
 });

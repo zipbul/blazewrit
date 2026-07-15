@@ -148,10 +148,29 @@ export async function unsealTaskSlice(sql: SQL, actorRepoId: string, target: Sea
 }
 
 /**
+ * Rule 3's actual derivation body, shared by every write path that can flip a task's status:
+ * loads the current participating-repo/seal/job facts for `taskId` and runs them through
+ * deriveTaskStatus. Callers own the surrounding transaction/locking and the decision of whether
+ * (and when) to write the result — this only reads.
+ */
+async function loadAndDeriveTaskStatus(tx: SQL, taskId: string): Promise<TaskStatus> {
+  const participatingRows = (await tx`select distinct repo_id from jobs where task_id = ${taskId}`) as Array<{ repo_id: string }>;
+  const sealedRows = (await tx`select repo_id from task_seals where task_id = ${taskId}`) as Array<{ repo_id: string }>;
+  const jobRows = (await tx`select status from jobs where task_id = ${taskId}`) as Array<{ status: JobStatus }>;
+
+  return deriveTaskStatus({
+    participatingRepoIds: participatingRows.map((r) => r.repo_id),
+    sealedRepoIds: sealedRows.map((r) => r.repo_id),
+    jobStatuses: jobRows.map((r) => r.status),
+  });
+}
+
+/**
  * Rule 3 (done atomicity): seal `target`'s slice AND recompute task.status from the current
  * participating-repo/seal/job facts in the same transaction, returning the resulting status.
- * This is the only path that can flip a task to done/failed — its atomicity is what D7 verifies
- * (interleaving a job insert around this call must never leave "done" with an open job attached).
+ * This is the only path that can flip a task to done/failed AT SEAL TIME — its atomicity is what
+ * D7 verifies (interleaving a job insert around this call must never leave "done" with an open
+ * job attached). It is NOT the only path overall — see rederiveTask below for the other one.
  */
 export async function sealTaskSliceAndDerive(sql: SQL, actorRepoId: string, target: SealTarget): Promise<TaskStatus> {
   if (actorRepoId !== target.repoId) {
@@ -169,17 +188,33 @@ export async function sealTaskSliceAndDerive(sql: SQL, actorRepoId: string, targ
       on conflict (task_id, repo_id) do nothing
     `;
 
-    const participatingRows = (await tx`select distinct repo_id from jobs where task_id = ${target.taskId}`) as Array<{ repo_id: string }>;
-    const sealedRows = (await tx`select repo_id from task_seals where task_id = ${target.taskId}`) as Array<{ repo_id: string }>;
-    const jobRows = (await tx`select status from jobs where task_id = ${target.taskId}`) as Array<{ status: JobStatus }>;
-
-    const derived = deriveTaskStatus({
-      participatingRepoIds: participatingRows.map((r) => r.repo_id),
-      sealedRepoIds: sealedRows.map((r) => r.repo_id),
-      jobStatuses: jobRows.map((r) => r.status),
-    });
-
+    const derived = await loadAndDeriveTaskStatus(tx, target.taskId);
     await tx`update tasks set status = ${derived} where id = ${target.taskId}`;
+    return derived;
+  });
+}
+
+/**
+ * 3자 리뷰 수정 B1-1 (Fable#3): sealTaskSliceAndDerive is the only place a task's status was ever
+ * recomputed — a task whose LAST job goes terminal AFTER every participating repo had already
+ * sealed (no seal call left to trigger a re-derive) stayed 'open' forever, even though
+ * deriveTaskStatus would now say done/failed. This is graph/controller.ts's C2 scan's OTHER exit:
+ * where deriveTaskStatus reads done/failed (not open — that case still raises the unresolvable_task
+ * wake, unchanged), re-derive AND write it, under the same for-update lock sealTaskSliceAndDerive
+ * uses. Guarded to only ever move 'open' -> done|failed (never touches an already-terminal task,
+ * and a derivation that's still 'open' is a no-op write) — this is a READ-driven re-derivation, not
+ * a new way to flip a task, so it must never race ahead of what the graph facts actually say.
+ */
+export async function rederiveTask(sql: SQL, taskId: string): Promise<TaskStatus> {
+  return sql.begin(async (tx) => {
+    const taskRows = (await tx`select status from tasks where id = ${taskId} for update`) as Array<{ status: TaskStatus }>;
+    const task = taskRows[0];
+    if (!task || task.status !== 'open') return task?.status ?? 'open';
+
+    const derived = await loadAndDeriveTaskStatus(tx, taskId);
+    if (derived !== 'open') {
+      await tx`update tasks set status = ${derived} where id = ${taskId}`;
+    }
     return derived;
   });
 }

@@ -259,6 +259,50 @@ describe('startGraphController — wake records (harness/job-graph.md P2 round 2
     }
   });
 
+  test('C2-rederive: a task whose last non-terminal job goes terminal AFTER every participating repo already sealed is re-derived to done, not left permanently open (수정 B1-1)', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    // The repo seals its slice WHILE the job is still running (rule 2 permits this — seal only
+    // freezes future inserts, it doesn't require every existing job to already be terminal).
+    await sql`insert into task_seals (task_id, repo_id) values (${taskId}, ${repoId})`;
+    // The job only reaches terminal AFTER the seal — sealTaskSliceAndDerive (the only OTHER derive
+    // call site) never runs again for this task, so absent a rederive on this tick, the task would
+    // stay 'open' forever even though every participating repo is sealed and every job is terminal.
+    await sql`update jobs set status = 'done', status_changed_at = now() where id = ${jobId}`;
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
+    try {
+      const taskRows = await waitFor(async () => {
+        const rows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;
+        return rows[0]!.status === 'done' ? rows : undefined;
+      });
+      expect(taskRows[0]!.status).toBe('done');
+      // No unresolvable_task wake either — this is a clean, unambiguous derivation (all done), not
+      // the done/cancelled-mix case C2's OWN wake exists for.
+      expect(await openWakeCount('unresolvable_task', taskId)).toBe(0);
+    } finally {
+      controller.stop();
+    }
+  });
+
+  test('C2-prefilter: an open task with all-terminal jobs but NO seal at all is never a C2 candidate (수정 B1-4)', async () => {
+    const { repoId, taskId } = await makeChain();
+    await seedJob(taskId, repoId, 'done'); // all jobs terminal, but nobody ever sealed
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999 });
+    try {
+      await controller.tick();
+      await controller.tick();
+      expect(await openWakeCount('unresolvable_task', taskId)).toBe(0);
+      const taskRows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;
+      expect(taskRows[0]!.status).toBe('open'); // never rederived — no seal means no candidate
+    } finally {
+      controller.stop();
+    }
+  });
+
   test('D1: a dep whose expected generation no longer matches the target job raises a stale_dep wake, and the dep stays stale (D2)', async () => {
     const { repoId, taskId } = await makeChain();
     const targetJobId = await seedJob(taskId, repoId, 'pending'); // generation defaults to 1

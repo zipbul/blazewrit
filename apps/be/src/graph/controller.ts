@@ -3,6 +3,7 @@ import { reconcileTask, type ReconcileJob } from './reconcile';
 import { DEFAULT_LEASE_TTL_MS } from './lease';
 import { raiseWake, type WakeInput } from './wake';
 import { deriveTaskStatus } from './derive';
+import { rederiveTask } from './store';
 import { isTerminalJobStatus } from './transitions';
 import type { JobStatus } from './types';
 
@@ -131,7 +132,21 @@ export function startGraphController(sql: SQL, dispatch: (job: ReconcileJob) => 
 
       // C2: open tasks where every participating repo has sealed and every job is terminal, but
       // deriveTaskStatus still reads 'open' — a done/cancelled mix with no failure (ccbdd9b).
-      const openTasks = (await sql`select id, title from tasks where status = 'open'`) as Array<{ id: string; title: string }>;
+      // 3자 리뷰 수정 B1-4 (실측 #28): pre-filtered in SQL instead of loading every open task and
+      // running a per-task jobs query against each one — with 344 open tasks in the shared dev DB
+      // this scan alone measured ~100-130ms/tick. A candidate must have at least one seal AND at
+      // least one job AND no non-terminal job; this narrows to the SAME set the old app-level
+      // `jobRows.length === 0 || !jobRows.every(isTerminalJobStatus)` skip already limited itself
+      // to — no behavior change, just doing it in one query instead of N+1. The "every
+      // PARTICIPATING repo sealed" check (not just "some repo sealed") still happens below, same
+      // as before — this pre-filter only needs to rule out tasks with NO seal at all.
+      const openTasks = (await sql`
+        select id, title from tasks
+        where status = 'open'
+          and exists (select 1 from task_seals ts where ts.task_id = tasks.id)
+          and exists (select 1 from jobs j where j.task_id = tasks.id)
+          and not exists (select 1 from jobs j where j.task_id = tasks.id and j.status not in ('done', 'failed', 'cancelled'))
+      `) as Array<{ id: string; title: string }>;
       for (const task of openTasks) {
         const jobRows = (await sql`select status, repo_id from jobs where task_id = ${task.id}`) as Array<{ status: JobStatus; repo_id: string }>;
         if (jobRows.length === 0 || !jobRows.every((j) => isTerminalJobStatus(j.status))) continue;
@@ -146,6 +161,13 @@ export function startGraphController(sql: SQL, dispatch: (job: ReconcileJob) => 
             taskId: task.id,
             reason: `태스크 "${task.title}"이(가) done/cancelled가 섞인 채 해소되지 않았습니다 — 사람 판단이 필요합니다.`,
           });
+        } else {
+          // 3자 리뷰 수정 B1-1 (Fable#3): derived is done/failed but sealTaskSliceAndDerive (the
+          // only OTHER write path) already ran at seal time, before this job reached terminal — so
+          // nothing has re-derived since. Without this, a task whose participating repos all sealed
+          // BEFORE its last job finished would stay 'open' forever. rederiveTask re-checks under its
+          // own lock (not this candidate scan's already-stale read) and writes only open->done|failed.
+          await rederiveTask(sql, task.id);
         }
       }
 

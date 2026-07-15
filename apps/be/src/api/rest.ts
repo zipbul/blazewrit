@@ -88,6 +88,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   // ever calling reconcileTask, so runRegisteredJob (below) always resolves a claimed job id back
   // to the executor that actually knows how to run it, regardless of which pass claimed it.
   const jobExecutors = new Map<string, () => Promise<void>>();
+  // 3자 리뷰 수정 B1-2a (Fable#4+#7): a job that keeps getting orphan-reverted to pending is
+  // immediately eligible again, gets re-claimed, and orphans again — an infinite ping-pong with no
+  // way out short of a process restart (nothing ever re-registers its executor). Process-local, not
+  // persisted: this is a P4-before-real-reattachment interim, not a durable state — a real restart
+  // clearing it is fine, since the ping-pong can only happen WITHIN one process's lifetime anyway.
+  const orphanedOnce = new Set<string>();
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
   const runRegisteredJob = async (job: ReconcileJob): Promise<void> => {
     const exec = jobExecutors.get(job.id);
@@ -95,10 +101,24 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       // Orphan (harness/job-graph.md P2 spec B2): no registered closure for this job — the
       // process that dispatched it restarted, or the always-on controller's own periodic/restart
       // pass (graph/controller.ts) claimed it before any dispatchTask call in THIS process ever
-      // registered one. Running it with nothing to execute would strand it at 'running' forever,
-      // so revert the claim instead — the next reconcile pass can re-offer it immediately rather
-      // than waiting out a full lease TTL.
-      await sql`update jobs set status = 'pending', status_changed_at = now(), lease_expires_at = null where id = ${job.id} and status = 'running'`;
+      // registered one.
+      if (orphanedOnce.has(job.id)) {
+        // Already reverted this SAME job once before — reverting AGAIN would just make it eligible
+        // for another claim, orphan again, forever (B1-2a). reconcileTask's own signature can't
+        // change to filter this out before the claim (that's the actual fix, deferred to P4's real
+        // executor-reattachment), so instead: leave it claimed 'running' this time. The lease-expiry
+        // scan (graph/controller.ts A3) will fail it once its lease lapses, same as any other stuck
+        // job — a bounded wait instead of an unbounded loop. Wake dedup (raiseWake) already prevents
+        // spam either way, so this isn't about suppressing noise, only about breaking the loop.
+        return;
+      }
+      orphanedOnce.add(job.id);
+      // Running it with nothing to execute would strand it at 'running' forever, so revert the
+      // claim instead — the next reconcile pass can re-offer it immediately rather than waiting out
+      // a full lease TTL. status_changed_at is deliberately left untouched (B1-2a) — this is
+      // best-effort internal bookkeeping, not a real progress event, so it must not reset a stall
+      // timer that reads it.
+      await sql`update jobs set status = 'pending', lease_expires_at = null where id = ${job.id} and status = 'running'`;
       // The revert above is the recovery; this is just surfacing it to a human (P2 round 2) — its
       // own failure must never undo or block the revert.
       await raiseWake(
@@ -109,7 +129,14 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       return;
     }
     jobExecutors.delete(job.id);
-    await exec();
+    // 3자 리뷰 수정 B1-2b (Fable#4+#7): fire-and-forget, not awaited — executeJobFlow is
+    // self-contained (catches its own errors, marks work_items/jobs terminal itself; see its own
+    // comment above), so nothing here depends on it settling. Awaiting it made every caller of
+    // this function — including graph/controller.ts's always-on tick(), which single-flights and
+    // processes every open task's ready jobs in one sequential pass — block for as long as THIS
+    // ONE job's entire flow took, stalling lease-expiry/wake scans and every other task's own
+    // reconcile behind it for that whole time.
+    void exec().catch(() => undefined);
   };
   // F: the caller's hook for wiring graph/controller.ts's startGraphController to this API
   // instance's own registry-aware dispatch, without createRestApi returning anything but a bare
@@ -312,13 +339,16 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           // job — it goes through the assembler + grammar check, so N>1 decomposition (migration
           // step 9) only has to change assembleJobs, not this call site.
           const assembled = assembleJobs({ taskId: ctx, repoId: projectId, workItemId, request });
-          // Migration 9: validated against the task's REAL current jobs/edges (loadTaskGraph),
-          // replacing the earlier `[], []` stand-in — a second decomposition landing under a task
-          // that already has jobs/deps (cross-repo dispatch, or a future N>1 assembler) is now
-          // checked against what's actually there, not an empty placeholder. Inert for today's
-          // N=1 assembleJobs (it never proposes a dep), so no observable behavior change; it only
+          // Migration 9: validated against the REAL current jobs/edges (loadTaskGraph), replacing
+          // the earlier `[], []` stand-in — a second decomposition landing under a task that
+          // already has jobs/deps (cross-repo dispatch, or a future N>1 assembler) is now checked
+          // against what's actually there, not an empty placeholder. Inert for today's N=1
+          // assembleJobs (it never proposes a dep), so no observable behavior change; it only
           // matters once an assembler can propose edges that might collide with existing ones.
-          const loaded = await loadTaskGraph(sql, ctx);
+          // GLOBAL, not scoped to `ctx` (3자 리뷰 수정 B1-3): rule 7's cycle check has to see edges
+          // from OTHER tasks too — a task-scoped load can't detect a cross-task cycle where the
+          // OTHER task is the one holding the pre-existing edge (see load-task-graph.ts).
+          const loaded = await loadTaskGraph(sql);
           const validation = validateAssembly(loaded.jobs, loaded.edges, assembled);
           if (!validation.ok) {
             flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: invalid assembly: ${validation.reason}` });
