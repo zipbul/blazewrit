@@ -245,4 +245,50 @@ describe('GET /api/work-items — DTO projection contract (harness/job-graph.md 
     const matches = rows.filter((r) => r.id === workItemId);
     expect(matches).toHaveLength(1);
   });
+
+  /**
+   * D-round task #13 (Codex+Grok major rest.ts:875): the jobs query and the legacyOnly query used
+   * to run as two independent READ COMMITTED statements, each getting its OWN snapshot. A mirror
+   * insert (dispatchTask's graph-mirror insertJob) landing in the gap BETWEEN them could make a
+   * work item vanish from BOTH result sets: the jobs query's snapshot predates the insert (job not
+   * visible yet), and the legacyOnly query's `not exists (select 1 from jobs ...)` filter runs
+   * AFTER the insert, so it now correctly excludes the work_item too — the row falls through the
+   * crack between the two queries' own definitions of "which side owns it".
+   *
+   * Reproduced directly against the fix's actual mechanism (wrapping both queries in one
+   * REPEATABLE READ transaction) rather than racing the real HTTP endpoint's internal timing,
+   * which is too narrow a window to hit deterministically without an injected delay hook: this
+   * proves BOTH queries, run inside ONE such transaction, see the SAME snapshot even when a
+   * concurrent insert (from a genuinely different connection, `sql` — not `tx`) lands between
+   * them. Under plain sequential awaits (no transaction wrapper — the pre-fix shape), the second
+   * read WOULD observe the concurrent insert instead.
+   */
+  it('D6: the jobs query and the legacyOnly query see the SAME snapshot inside one repeatable-read transaction', async () => {
+    const workItemId = `${MARK}-snapshot-wi`;
+    await sql`insert into work_items (id, project_id, type, state, title, context_id) values (${workItemId}, ${projectId}, 'task', 'in_flow', 'snapshot test', ${workItemId})`;
+
+    try {
+      const { jobsSnapshotCount, legacySnapshotCount } = await sql.begin('isolation level repeatable read read only', async (tx) => {
+        const jobsBefore = (await tx`select count(*)::int as n from jobs where id = ${workItemId}`) as Array<{ n: number }>;
+        // Concurrent mirror insert from a DIFFERENT connection (the outer `sql`, not `tx`) — exactly
+        // what dispatchTask's graph-mirror dual-write does between the two queries in production.
+        await sql`insert into tasks (id, title, status) values (${workItemId}, ${workItemId}, 'open') on conflict (id) do nothing`;
+        await sql`insert into jobs (id, task_id, repo_id, title, status) values (${workItemId}, ${workItemId}, ${projectId}, 'snapshot test', 'pending')`;
+        const legacyAfter = (await tx`
+          select count(*)::int as n from work_items w where w.id = ${workItemId} and not exists (select 1 from jobs j where j.id = w.id)
+        `) as Array<{ n: number }>;
+        return { jobsSnapshotCount: jobsBefore[0]!.n, legacySnapshotCount: legacyAfter[0]!.n };
+      });
+
+      // Both reads inside the SAME transaction see the PRE-insert snapshot: the jobs query still
+      // sees 0 (the concurrent insert isn't visible to this transaction), and the legacyOnly-style
+      // query STILL counts the work item as legacy-only too — its own `not exists` check is frozen
+      // to the same snapshot, so it doesn't see the just-inserted job either. Whichever way this
+      // row is classified, both queries classify it the SAME way — nothing falls through a crack.
+      expect(jobsSnapshotCount).toBe(0);
+      expect(legacySnapshotCount).toBe(1);
+    } finally {
+      await sql`delete from jobs where id = ${workItemId}`;
+    }
+  });
 });

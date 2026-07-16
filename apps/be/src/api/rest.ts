@@ -22,10 +22,20 @@ import { JSON_RPC_ERRORS, A2A_ERRORS, FLOW_TYPES, type FlowType } from '@bw/dto'
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
 import { FlowHub, StepStreamHub, publishing } from './streams';
 import { createProposals } from '../meta/proposals';
-import { insertJob, insertJobTx, insertDepTx, WriteAclError, TerminalTaskError, SliceSealedError, DepCycleError } from '../graph/store';
+import {
+  insertJob,
+  WriteAclError,
+  TerminalTaskError,
+  SliceSealedError,
+  DepCycleError,
+  JobNotFoundError,
+  WaiterNotWaitingError,
+  DepWaiterTaskMismatchError,
+  DepTargetNotFoundError,
+} from '../graph/store';
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
 import { loadTaskGraph } from '../graph/load-task-graph';
-import { insertProposal, TaskNotOpenError, type NegotiationAsk } from '../graph/negotiation';
+import { insertProposal, materializeAskTx, TaskNotOpenError, EmptyAskError, ProposalIdConflictError, type NegotiationAsk } from '../graph/negotiation';
 import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
 import { withLeaseHeartbeat, renewLease, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
 import { raiseWake } from '../graph/wake';
@@ -407,51 +417,19 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   /** A negotiation reply is either a normal JSON-RPC success shape or errorResponse()'s own fixed shape. */
   type NegotiationResponse = Record<string, unknown> | JsonRpcErrorResponse;
 
-  /**
-   * accept's materialize (P3 migration 11, rule 8): writes ask.job/dep/gate + flips the proposal
-   * to 'accepted', all in ONE transaction (spec's "원자 materialize" — a partial write is not
-   * observable). `actorRepoId` is the provider (URL :projectId) — insertJobTx's own ACL check
-   * (actorRepoId === job.repoId) is what actually rejects a job ask aimed at someone else's repo
-   * (B3, via ask.job.repoId); this function doesn't duplicate that check, it just supplies
-   * actorRepoId as the acting party and lets ask.job.repoId (or actorRepoId itself, by default)
-   * be the job's own repoId.
-   */
-  const materializeAsk = async (actorRepoId: string, ask: NegotiationAsk): Promise<Record<string, string>> => {
-    return sql.begin(async (tx) => {
-      const taskRows = (await tx`select status from tasks where id = ${ask.taskId} for update`) as Array<{ status: string }>;
-      if (taskRows[0] && taskRows[0].status !== 'open') {
-        throw new TerminalTaskError(`task ${ask.taskId} is terminal (${taskRows[0].status})`);
-      }
-      const out: Record<string, string> = {};
-      if (ask.job) {
-        const jobId = newId();
-        const jobRepoId = ask.job.repoId ?? actorRepoId;
-        await insertJobTx(tx, actorRepoId, { id: jobId, taskId: ask.taskId, repoId: jobRepoId, title: ask.job.title, description: ask.job.description });
-        out.jobId = jobId;
-      }
-      if (ask.dep) {
-        // Cycle check (rule 7) + the deps/dep_members insert — insertDepTx (graph/store.ts, P4-1
-        // extraction) loads the REAL current graph inside THIS transaction, so it sees whatever a
-        // concurrently-committing accept already landed.
-        const depId = newId();
-        await insertDepTx(tx, {
-          id: depId,
-          waiterJobId: ask.dep.waiterJobId,
-          targetType: ask.dep.targetType,
-          targetId: ask.dep.targetId,
-          predicate: ask.dep.predicate,
-          acceptable: ask.dep.acceptable,
-        });
-        out.depId = depId;
-      }
-      if (ask.gate) {
-        const gateId = newId();
-        await tx`insert into external_gates (id, task_id, kind, description, status) values (${gateId}, ${ask.taskId}, ${ask.gate.kind}, ${ask.gate.description ?? null}, 'pending')`;
-        out.gateId = gateId;
-      }
-      return out;
-    });
-  };
+  /** Errors materializeAskTx (or the checks around it) can throw that mean "this ask is rejected, decisively" — accept records 'rejected' and returns a graceful JSON-RPC error, never a 500. */
+  const isRejectableAskError = (
+    err: unknown,
+  ): err is WriteAclError | TerminalTaskError | SliceSealedError | DepCycleError | EmptyAskError | JobNotFoundError | WaiterNotWaitingError | DepWaiterTaskMismatchError | DepTargetNotFoundError =>
+    err instanceof WriteAclError ||
+    err instanceof TerminalTaskError ||
+    err instanceof SliceSealedError ||
+    err instanceof DepCycleError ||
+    err instanceof EmptyAskError ||
+    err instanceof JobNotFoundError ||
+    err instanceof WaiterNotWaitingError ||
+    err instanceof DepWaiterTaskMismatchError ||
+    err instanceof DepTargetNotFoundError;
 
   /**
    * request (kind='request'): records the ask as 'proposed'. Never materializes — accept does.
@@ -475,6 +453,15 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
       await insertProposal(sql, { id: proposalId, taskId: ask.taskId, fromRepo, toRepo, kind: 'request', ask });
     } catch (err) {
       if (err instanceof TaskNotOpenError) {
+        // D-round task #19 / Fable m1: "task not open" is TRANSIENT, not a permanent verdict (the
+        // task may not exist YET, or existed and is terminal — either way, a later retry with the
+        // same messageId could legitimately see a different outcome once conditions change). The
+        // `data: { transient: true }` marker is what tells the a2a message/send handler NOT to
+        // cache this response in a2a_inbox (unlike a deterministic rejection — ACL, rule 9 at
+        // accept time, cycle — which always reproduces the same outcome and IS safe to cache).
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, err.message, { transient: true });
+      }
+      if (err instanceof ProposalIdConflictError) {
         return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, err.message);
       }
       throw err;
@@ -482,84 +469,133 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'proposed' } };
   };
 
-  /** accept (kind='accept'): materializes the referenced proposal's ask, or rejects it. */
+  /**
+   * accept (kind='accept'): materializes the referenced proposal's ask, or rejects it.
+   *
+   * D-round task #7 (Codex critical rest.ts:526 + Grok F-B1/B2/B3/B5): rewritten as ONE
+   * transaction — FOR UPDATE locks the proposal row for the whole call, so nothing else can flip
+   * its status out from under this check-then-act. materializeAskTx runs inside a SAVEPOINT: on a
+   * rejectable failure, the savepoint rolls back (undoing whatever job/dep/gate writes it made)
+   * while the OUTER transaction stays alive to record 'rejected' and commit normally — one
+   * transaction, not "materialize commits, then a separate statement flips status" (the old F-B1/
+   * F-B3 bug: a crash between those two steps left an orphan materialized job with no accepted
+   * proposal, and the unconditional 'rejected' write could clobber a since-accepted status).
+   *
+   * D-round task #12a (Codex major): ACL (actorRepoId === proposal.to_repo) is now checked BEFORE
+   * the alreadyAccepted short-circuit — an unauthorized accept must never be told "yes that
+   * succeeded" (even idempotently) just because someone else already accepted it first.
+   */
   const acceptProposal = async (actorRepoId: string, rpcId: string | number | null, proposalId: string): Promise<NegotiationResponse> => {
-    const rows = (await sql`select task_id, from_repo, to_repo, ask, status from a2a_proposals where id = ${proposalId}`) as Array<{
-      task_id: string;
-      from_repo: string;
-      to_repo: string;
-      ask: unknown;
-      status: string;
-    }>;
-    const proposal = rows[0];
-    if (!proposal) {
-      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${proposalId} not found`);
-    }
-    if (proposal.status === 'accepted') {
-      // B7: a re-accept of an ALREADY-accepted proposal (different messageId — the same messageId
-      // never reaches here, a2a_inbox already sealed it). insertJob has no upsert, so re-running
-      // materialize isn't safe; this is the "존재 검사" the spec calls for instead.
-      return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'accepted', alreadyAccepted: true } };
-    }
-    if (proposal.status !== 'proposed') {
-      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${proposalId} is ${proposal.status}, not acceptable`);
-    }
-    if (actorRepoId !== proposal.to_repo) {
-      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `${actorRepoId} is not the provider of proposal ${proposalId}`);
-    }
-    const ask = parseJson(proposal.ask, {}) as NegotiationAsk;
-    try {
-      const materialized = await materializeAsk(actorRepoId, ask);
-      await sql`update a2a_proposals set status = 'accepted' where id = ${proposalId}`;
-      return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'accepted', ...materialized } };
-    } catch (err) {
-      if (err instanceof WriteAclError || err instanceof TerminalTaskError || err instanceof SliceSealedError || err instanceof DepCycleError) {
-        // B6: materializeAsk's own transaction already rolled back — this is a SEPARATE statement
-        // recording the rejection, not part of that rolled-back transaction.
-        await sql`update a2a_proposals set status = 'rejected' where id = ${proposalId}`;
-        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, err.message);
+    return sql.begin(async (tx) => {
+      const rows = (await tx`select task_id, from_repo, to_repo, ask, status from a2a_proposals where id = ${proposalId} for update`) as Array<{
+        task_id: string;
+        from_repo: string;
+        to_repo: string;
+        ask: unknown;
+        status: string;
+      }>;
+      const proposal = rows[0];
+      if (!proposal) {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${proposalId} not found`);
       }
-      throw err; // unexpected failure: NOT stored in a2a_inbox either (A5 semantics) — retryable
-    }
+      if (actorRepoId !== proposal.to_repo) {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `${actorRepoId} is not the provider of proposal ${proposalId}`);
+      }
+      if (proposal.status === 'accepted') {
+        // B7: a re-accept of an ALREADY-accepted proposal (different messageId — the same messageId
+        // never reaches here, a2a_inbox already sealed it). insertJob has no upsert, so re-running
+        // materialize isn't safe; this is the "존재 검사" the spec calls for instead.
+        return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'accepted', alreadyAccepted: true } };
+      }
+      if (proposal.status !== 'proposed') {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${proposalId} is ${proposal.status}, not acceptable`);
+      }
+      const ask = parseJson(proposal.ask, {}) as NegotiationAsk;
+      try {
+        const materialized = await tx.savepoint((sp) => materializeAskTx(sp, actorRepoId, ask, newId));
+        // CAS, not an unconditional write: the FOR UPDATE lock held since this call's own SELECT
+        // makes a lost CAS structurally impossible here (nothing else can touch `status` inside
+        // that lock's lifetime) — kept as belt-and-suspenders, matching every other write path's
+        // own `where status = ...` convention rather than trusting the lock alone.
+        await tx`update a2a_proposals set status = 'accepted' where id = ${proposalId} and status = 'proposed'`;
+        return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'accepted', ...materialized } };
+      } catch (err) {
+        if (isRejectableAskError(err)) {
+          // The savepoint above already rolled back any partial job/dep/gate writes — this update
+          // is the OUTER transaction, still open, recording the decisive rejection and committing.
+          await tx`update a2a_proposals set status = 'rejected' where id = ${proposalId} and status = 'proposed'`;
+          return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, err.message);
+        }
+        throw err; // unexpected failure: whole tx rolls back, proposal stays 'proposed' — retryable, not stored in a2a_inbox (A5)
+      }
+    });
   };
 
-  /** counter (kind='counter'): the original proposal -> 'countered'; a NEW, direction-reversed proposal is recorded (not materialized). */
+  /**
+   * counter (kind='counter'): the original proposal -> 'countered'; a NEW, direction-reversed
+   * proposal is recorded (not materialized).
+   *
+   * D-round task #7 (D2, Grok F-B5): rewritten as ONE transaction, FOR UPDATE on the original
+   * proposal + a CAS (`and status = 'proposed'`) on the countered-flip — an accept and a counter
+   * racing the same proposal now serialize on the row lock instead of both succeeding.
+   * D-round task #19 / Fable m5: two checks now symmetric with request's own — the counter's new
+   * ask must target the SAME task as the original (not a smuggled redirect to an unrelated task),
+   * and that task must still be open.
+   */
   const counterProposal = async (
     requesterRepoId: string,
     rpcId: string | number | null,
     originalProposalId: string,
     ask: NegotiationAsk | undefined,
   ): Promise<NegotiationResponse> => {
-    const rows = (await sql`select task_id, from_repo, to_repo, status from a2a_proposals where id = ${originalProposalId}`) as Array<{
-      task_id: string;
-      from_repo: string;
-      to_repo: string;
-      status: string;
-    }>;
-    const original = rows[0];
-    if (!original) {
-      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${originalProposalId} not found`);
-    }
-    if (original.status !== 'proposed') {
-      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${originalProposalId} is ${original.status}, not counterable`);
-    }
-    // :projectId (URL) is "whoever must decide next" — for a counter, that's the ORIGINAL
-    // requester (roles reversed), so the call must land at THEIR endpoint.
-    if (requesterRepoId !== original.from_repo) {
-      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `${requesterRepoId} did not originate proposal ${originalProposalId}`);
-    }
     if (!ask || !ask.taskId) {
       return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, 'ask is required for a counter');
     }
-    const counterProposalId = newId();
-    await sql.begin(async (tx) => {
-      await tx`update a2a_proposals set status = 'countered' where id = ${originalProposalId}`;
+    return sql.begin(async (tx) => {
+      const rows = (await tx`select task_id, from_repo, to_repo, status from a2a_proposals where id = ${originalProposalId} for update`) as Array<{
+        task_id: string;
+        from_repo: string;
+        to_repo: string;
+        status: string;
+      }>;
+      const original = rows[0];
+      if (!original) {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${originalProposalId} not found`);
+      }
+      if (original.status !== 'proposed') {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${originalProposalId} is ${original.status}, not counterable`);
+      }
+      // :projectId (URL) is "whoever must decide next" — for a counter, that's the ORIGINAL
+      // requester (roles reversed), so the call must land at THEIR endpoint.
+      if (requesterRepoId !== original.from_repo) {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `${requesterRepoId} did not originate proposal ${originalProposalId}`);
+      }
+      // m5: a counter that redirects to a DIFFERENT task than the one being negotiated would be a
+      // smuggled cross-task request riding the counter protocol — reject it symmetrically with how
+      // a brand-new request's own ask.taskId is trusted at face value only for ITS OWN task.
+      if (ask.taskId !== original.task_id) {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `counter ask.taskId ${ask.taskId} does not match proposal ${originalProposalId}'s task ${original.task_id}`);
+      }
+      const taskRows = (await tx`select status from tasks where id = ${ask.taskId}`) as Array<{ status: string }>;
+      if (!taskRows[0] || taskRows[0].status !== 'open') {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `task ${ask.taskId} is not open for negotiation`, { transient: true });
+      }
+      const counterProposalId = newId();
+      const flipped = (await tx`
+        update a2a_proposals set status = 'countered' where id = ${originalProposalId} and status = 'proposed' returning id
+      `) as unknown[];
+      if (flipped.length === 0) {
+        // Structurally shouldn't happen (same FOR UPDATE-lock reasoning as accept's CAS) — kept as
+        // an explicit guard rather than silently inserting a counter against a proposal that lost
+        // the race to (e.g.) a concurrent accept.
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${originalProposalId} is ${original.status}, not counterable`);
+      }
       await tx`
         insert into a2a_proposals (id, task_id, from_repo, to_repo, kind, ask, status)
         values (${counterProposalId}, ${ask.taskId}, ${original.to_repo}, ${original.from_repo}, 'counter', ${ask}, 'proposed')
       `;
+      return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId: originalProposalId, status: 'countered', counterProposalId } };
     });
-    return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId: originalProposalId, status: 'countered', counterProposalId } };
   };
 
   /**
@@ -573,6 +609,16 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
    * for 'accept', and (roles reversed) the ORIGINAL requester for 'counter'. Nothing else in the
    * message identifies the OTHER side of a brand-new request, so 'request' alone carries it
    * explicitly; 'accept'/'counter' both derive it from the already-stored proposal row instead.
+   *
+   * D-round task #12b (Codex major, carried to P4-2): `fromRepo` on a 'request' is CALLER-SUPPLIED
+   * message content, not an authenticated identity — A2A is still loopback/unauthenticated, so
+   * nothing here stops a caller from claiming to BE some other repo. It is recorded verbatim
+   * (a2a_proposals.from_repo) and later used ONLY as a value to check against — never as a live
+   * assertion of "I am this repo right now" the way `providerRepoId` (this handler's OWN
+   * :projectId param, at least self-consistent per endpoint) is used for accept/counter's ACL.
+   * The real fix is P4-2's session-repo binding (harness/job-graph.md 배선 노트 decision 2's same
+   * principle, applied to A2A callers): a repo's identity should come from WHICH endpoint/session
+   * made the call, never from a field inside the call's own payload.
    */
   const handleNegotiation = async (
     providerRepoId: string,
@@ -694,37 +740,76 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           set.status = 400;
           return errorResponse(req.id ?? null, JSON_RPC_ERRORS.INVALID_PARAMS, 'message.messageId is required');
         }
-        // Replay check: a stored response means this exact messageId already ran to a successful
-        // completion — return it verbatim, re-running nothing. Only a SUCCESSFUL response is ever
-        // stored (below, after dispatchTask returns) — a throw anywhere before that point leaves no
-        // row here, so a retry after a transient failure still gets to actually process. The
-        // JSON-RPC envelope `id` (transport-layer correlation, distinct from message.messageId) is
-        // NOT part of what messageId idempotency promises — a retry may legitimately carry a
-        // different envelope id, so it's overwritten with THIS request's id on replay.
-        const seen = (await sql`select response from a2a_inbox where message_id = ${messageId}`) as Array<{ response: unknown }>;
-        if (seen.length > 0) {
-          return { ...(parseJson(seen[0]!.response, {}) as Record<string, unknown>), id: req.id ?? null };
+        // D-round task #10 (Codex critical rest.ts:718 + Grok F-C1): insert-first CLAIM, not
+        // check-then-act. The old shape (SELECT for a stored response, THEN run the side effect,
+        // THEN INSERT) left a gap between the SELECT and the INSERT that two concurrent requests
+        // for the SAME messageId could both walk through — both seeing "nothing stored yet", both
+        // running dispatchTask/handleNegotiation, `on conflict do nothing` only ever suppressing
+        // the SECOND insert's write, not the second run's side effect. Now the INSERT (a pending
+        // sentinel, not the real response) IS the claim — it happens before any side effect, so
+        // only the request that wins the insert ever gets to run one.
+        const PENDING = { pending: true };
+        const claimed = (await sql`
+          insert into a2a_inbox (message_id, response) values (${messageId}, ${PENDING})
+          on conflict (message_id) do nothing
+          returning message_id
+        `) as unknown[];
+        if (claimed.length === 0) {
+          // Lost the claim — someone else already holds this messageId. Two cases, both read from
+          // the SAME row so there's nothing further to decide:
+          //   - the row holds the REAL final response (a genuine SEQUENTIAL replay, A1/A4: the
+          //     first call already finished) -> return it verbatim, same as before.
+          //   - the row still holds PENDING (a genuine CONCURRENT duplicate racing the winner,
+          //     which hasn't finished yet) -> tell the caller to retry rather than block or
+          //     silently re-run the side effect a second time (spec's own judgment call: a short
+          //     poll-and-wait was considered and rejected as unneeded complexity for this round).
+          const rows = (await sql`select response from a2a_inbox where message_id = ${messageId}`) as Array<{ response: unknown }>;
+          const stored = parseJson(rows[0]?.response, PENDING) as Record<string, unknown>;
+          if (stored.pending === true) {
+            set.status = 409;
+            return errorResponse(req.id ?? null, JSON_RPC_ERRORS.INTERNAL_ERROR, `message ${messageId} is already being processed, retry`);
+          }
+          return { ...stored, id: req.id ?? null };
         }
-        // Negotiation routing (F2): metadata.negotiation present -> the negotiation handler
-        // INSTEAD of dispatchTask. The intent path below is otherwise completely untouched (F1).
-        const negotiation = message?.metadata?.negotiation;
+
+        // Won the claim — process for real.
         let response: NegotiationResponse;
-        if (negotiation && typeof negotiation === 'object') {
-          response = await handleNegotiation(params.projectId, req.id ?? null, negotiation);
-        } else {
-          const intent = message?.parts?.find((p) => p.kind === 'text')?.text ?? '';
-          // Trust boundary: only an enum-valid carried flowType is honored; anything else falls back.
-          const rawFlow = message?.metadata?.flowType;
-          const carried = typeof rawFlow === 'string' && (FLOW_TYPES as readonly string[]).includes(rawFlow) ? (rawFlow as FlowType) : undefined;
-          const taskId = dispatchTask(params.projectId, intent, message?.contextId, carried);
-          response = { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
+        try {
+          // Negotiation routing (F2): metadata.negotiation present -> the negotiation handler
+          // INSTEAD of dispatchTask. The intent path below is otherwise completely untouched (F1).
+          const negotiation = message?.metadata?.negotiation;
+          if (negotiation && typeof negotiation === 'object') {
+            response = await handleNegotiation(params.projectId, req.id ?? null, negotiation);
+          } else {
+            const intent = message?.parts?.find((p) => p.kind === 'text')?.text ?? '';
+            // Trust boundary: only an enum-valid carried flowType is honored; anything else falls back.
+            const rawFlow = message?.metadata?.flowType;
+            const carried = typeof rawFlow === 'string' && (FLOW_TYPES as readonly string[]).includes(rawFlow) ? (rawFlow as FlowType) : undefined;
+            const taskId = dispatchTask(params.projectId, intent, message?.contextId, carried);
+            response = { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
+          }
+        } catch (err) {
+          // A5 preserved: a throw during processing must leave NO row here (delete our own pending
+          // claim), so a retry with the same messageId actually gets to process, not permanently
+          // wedged behind a claim its own owner never finished.
+          await sql`delete from a2a_inbox where message_id = ${messageId}`.catch(() => undefined);
+          throw err;
         }
-        // Plain object, NOT JSON.stringify'd — bun's SQL driver double-encodes a string parameter
-        // into a jsonb column as a jsonb STRING SCALAR (see graph/wake.ts's raiseWake for the full
-        // story); a plain object binds correctly as a genuine jsonb object. on conflict do nothing:
-        // a concurrent duplicate racing this same messageId (P3 spec E, out of scope for this
-        // round) must not crash this request even if it loses the insert race.
-        await sql`insert into a2a_inbox (message_id, response) values (${messageId}, ${response}) on conflict (message_id) do nothing`;
+        // D-round task #19 / Fable m1: a TRANSIENT rejection (requestProposal's own "task not
+        // open" — see its `data: { transient: true }` marker) must NOT be cached here — the
+        // decisive-vs-transient distinction lives at the negotiation layer, this just honors it by
+        // deleting the claim instead of storing the response, so a retry once conditions change
+        // actually reprocesses instead of forever replaying the same stale rejection.
+        const errData = (response as Partial<JsonRpcErrorResponse>).error?.data;
+        const transient = !!errData && typeof errData === 'object' && (errData as { transient?: boolean }).transient === true;
+        if (transient) {
+          await sql`delete from a2a_inbox where message_id = ${messageId}`.catch(() => undefined);
+        } else {
+          // Plain object, NOT JSON.stringify'd — bun's SQL driver double-encodes a string parameter
+          // into a jsonb column as a jsonb STRING SCALAR (see graph/wake.ts's raiseWake for the
+          // full story); a plain object binds correctly as a genuine jsonb object.
+          await sql`update a2a_inbox set response = ${response} where message_id = ${messageId}`;
+        }
         return response;
       },
       { parse: 'text' },
@@ -853,20 +938,52 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     // observed live, only theoretically possible for a hand-inserted/backfilled orphan) falls
     // back to type 'task', same fallback the old workItemType() used for unrecognized flow types.
     .get('/api/work-items', async () => {
-      // distinct on (j.id) (3자 리뷰 수정 B2-3, minor 묶음): the OR join below is 1:N the moment
-      // more than one flow row ever matches the same job (e.g. a retry/duplicate flow row) —
-      // without this, each extra match duplicated that job in the response. Picks the
-      // most-recently-created matching flow per job; the outer query re-sorts the deduped set by
-      // the job's own created_at for display order (distinct on requires ordering by its own key first).
-      const rows = (await sql`
-        select * from (
-          select distinct on (j.id) j.id, j.repo_id, j.title, j.status, j.task_id, j.created_at, f.id as flow_id, f.flow_type
-          from jobs j
-          left join flows f on (f.job_id = j.id or f.work_item_id = j.id)
-          order by j.id, f.created_at desc nulls last
-        ) deduped
-        order by created_at desc
-      `) as Array<Record<string, unknown>>;
+      // D-round task #13 (Codex+Grok major rest.ts:875): the jobs query and the legacyOnly query
+      // below used to run as two independent READ COMMITTED statements — each one gets its OWN
+      // snapshot, so a mirror-write (dispatchTask's insertJob) landing in the gap BETWEEN them
+      // could make a work item vanish from BOTH: the jobs query's snapshot predates the insert (job
+      // not visible yet), and the legacyOnly query's snapshot postdates it (its own `not exists
+      // (select 1 from jobs ...)` filter now excludes the work_item row too, since the job DOES
+      // exist by the time legacyOnly runs) — the row falls through the crack between the two
+      // queries' own definitions of "which side owns it". Wrapping both in ONE REPEATABLE READ
+      // transaction gives them the SAME snapshot, closing that gap without restructuring either
+      // query's shape.
+      const { rows, legacyOnly } = await sql.begin('isolation level repeatable read read only', async (tx) => {
+        // distinct on (j.id) (3자 리뷰 수정 B2-3, minor 묶음): the OR join below is 1:N the moment
+        // more than one flow row ever matches the same job (e.g. a retry/duplicate flow row) —
+        // without this, each extra match duplicated that job in the response. Picks the
+        // most-recently-created matching flow per job; the outer query re-sorts the deduped set by
+        // the job's own created_at for display order (distinct on requires ordering by its own key first).
+        const rows = (await tx`
+          select * from (
+            select distinct on (j.id) j.id, j.repo_id, j.title, j.status, j.task_id, j.created_at, f.id as flow_id, f.flow_type
+            from jobs j
+            left join flows f on (f.job_id = j.id or f.work_item_id = j.id)
+            order by j.id, f.created_at desc nulls last
+          ) deduped
+          order by created_at desc
+        `) as Array<Record<string, unknown>>;
+        // 3자 리뷰 수정 B2-1 (Codex major #21): dispatchTask's graph-mirror insertJob can reject
+        // (e.g. rule 9 — the dispatch's contextId names an already-terminal task) while the LEGACY
+        // work_items/flows write still proceeds via the direct-run fallback (see dispatchTask). That
+        // work item then has NO jobs row at all, so the query above can never find it — it would
+        // silently vanish from the FE despite having actually run. Mapped with the exact PRE-migration-5
+        // DTO shape (dcb9ac4~1) — that was the last shape describing a work_items row on its own,
+        // with no jobs-table concept to borrow from.
+        // Same distinct-on dedup as the jobs query above — a legacy work_item with more than one
+        // matching flow row (e.g. a pre-graph retry) must not duplicate in the response either.
+        const legacyOnly = (await tx`
+          select * from (
+            select distinct on (w.id) w.id, w.project_id, w.type, w.state, w.title, w.context_id, w.created_at, f.id as active_flow_id
+            from work_items w
+            left join flows f on f.work_item_id = w.id
+            where not exists (select 1 from jobs j where j.id = w.id or j.legacy_work_item_id = w.id)
+            order by w.id, f.created_at desc nulls last
+          ) deduped
+          order by created_at desc
+        `) as Array<Record<string, unknown>>;
+        return { rows, legacyOnly };
+      });
       // cancelled -> 'blocked' (not a distinct FE state): kept as-is (3자 리뷰 수정 B2-3, minor
       // 묶음, judgment call) — the WorkItemDto contract only ever had in_flow/done/blocked, and a
       // cancelled job is unambiguously "not done", same bucket a failed one already renders in.
@@ -895,25 +1012,6 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         };
       });
 
-      // 3자 리뷰 수정 B2-1 (Codex major #21): dispatchTask's graph-mirror insertJob can reject
-      // (e.g. rule 9 — the dispatch's contextId names an already-terminal task) while the LEGACY
-      // work_items/flows write still proceeds via the direct-run fallback (see dispatchTask). That
-      // work item then has NO jobs row at all, so the query above can never find it — it would
-      // silently vanish from the FE despite having actually run. Mapped with the exact PRE-migration-5
-      // DTO shape (dcb9ac4~1) — that was the last shape describing a work_items row on its own,
-      // with no jobs-table concept to borrow from.
-      // Same distinct-on dedup as the jobs query above — a legacy work_item with more than one
-      // matching flow row (e.g. a pre-graph retry) must not duplicate in the response either.
-      const legacyOnly = (await sql`
-        select * from (
-          select distinct on (w.id) w.id, w.project_id, w.type, w.state, w.title, w.context_id, w.created_at, f.id as active_flow_id
-          from work_items w
-          left join flows f on f.work_item_id = w.id
-          where not exists (select 1 from jobs j where j.id = w.id or j.legacy_work_item_id = w.id)
-          order by w.id, f.created_at desc nulls last
-        ) deduped
-        order by created_at desc
-      `) as Array<Record<string, unknown>>;
       const fromLegacy = legacyOnly.map((w) => {
         const created = new Date(w.created_at as string).toISOString();
         return {

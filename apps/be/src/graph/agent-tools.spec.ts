@@ -152,6 +152,43 @@ describe('buildGraphTools (harness/job-graph.md 그래프 관리 배선 decision
     expect(second.content[0].text).toContain('DepCycleError');
   });
 
+  test('D-round #11/#21: dep_declare rejects a waiter that is not pending/blocked (already running)', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const { jobId: waiterJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'waiter' })) as { jobId: string };
+    const { jobId: targetJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'target' })) as { jobId: string };
+    await sql`update jobs set status = 'running' where id = ${waiterJobId}`; // e.g. already claimed by reconcile
+
+    const res = await call(tools, DEP_DECLARE_TOOL, { waiterJobId, targetType: 'job', targetId: targetJobId });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('WaiterNotWaitingError');
+    const rows = (await sql`select id from deps where waiter_job = ${waiterJobId}`) as Array<{ id: string }>;
+    expect(rows.length).toBe(0);
+  });
+
+  test('D-round #21: dep_declare rejects a job target that does not exist', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const { jobId: waiterJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'waiter' })) as { jobId: string };
+
+    const res = await call(tools, DEP_DECLARE_TOOL, { waiterJobId, targetType: 'job', targetId: id('nonexistent-target') });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('DepTargetNotFoundError');
+  });
+
+  test('D-round #21: dep_declare writes expectedGen through to dep_members.expected_gen', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const { jobId: waiterJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'waiter' })) as { jobId: string };
+    const { jobId: targetJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'target' })) as { jobId: string };
+
+    const res = await call(tools, DEP_DECLARE_TOOL, { waiterJobId, targetType: 'job', targetId: targetJobId, expectedGen: 1 });
+    expect(res.isError).toBeUndefined();
+    const { depId } = payload(res) as { depId: string };
+    const rows = (await sql`select expected_gen from dep_members where dep_id = ${depId}`) as Array<{ expected_gen: number | null }>;
+    expect(rows[0]?.expected_gen).toBe(1);
+  });
+
   test('dep_declare rejects declaring a dep whose waiter job belongs to another repo', async () => {
     const { taskId, repoP, repoQ } = await makeTwoRepoTask();
     const toolsQ = buildGraphTools(ctxFor(taskId, repoQ));

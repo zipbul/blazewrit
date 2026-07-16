@@ -26,6 +26,31 @@ export class JobNotFoundError extends Error {}
  */
 export class NotRerunnableError extends Error {}
 
+/**
+ * D-round task #11 (Codex critical rest.ts:457 + Grok F-E2): insertDepTx's waiter isn't
+ * pending/blocked — either already claimed running by reconcile, or already terminal. A dep
+ * attached after the fact would never be evaluated (the job either already ran or never will
+ * again), so this rejects instead of silently creating a dead edge.
+ */
+export class WaiterNotWaitingError extends Error {}
+
+/**
+ * D-round task #21 (Fable M2-a): insertDepTx's `expectWaiterTaskId` was given (the caller knows
+ * which task this dep declaration is supposed to belong to — negotiation's materializeAskTx always
+ * passes the ask's own taskId) and the waiter job's actual task_id doesn't match. Closes the "a
+ * negotiation ask names some UNRELATED task's job as the waiter, blocking it without that task's
+ * own consent" hole — rule 1's spirit extended to cross-task dep asks.
+ */
+export class DepWaiterTaskMismatchError extends Error {}
+
+/**
+ * D-round task #21 (Fable M2-c): a job-target dep_member whose target_id names no existing job row.
+ * dep_members.target_id has no FK (it's polymorphic across job/task/external), so this is the only
+ * check that catches it — left unchecked, the dep would sit 'pending' forever (liveMemberOutcome
+ * reads a missing target as 'pending', never satisfied).
+ */
+export class DepTargetNotFoundError extends Error {}
+
 export interface NewJobInput {
   id: string;
   taskId: string;
@@ -93,26 +118,72 @@ export interface NewDepInput {
   targetId: string;
   predicate?: DepPredicate;
   acceptable?: DepOutcome[];
+  /** Rule 5 stale-detection anchor (D-round task #21 / Fable M2-d) — written to dep_members.expected_gen when given. */
+  expectedGen?: number;
+  /** dep_declare's ACL (P4-1): when given, the waiter job must belong to this repo, else WriteAclError. */
+  expectWaiterRepoId?: string;
+  /** materializeAskTx's guard (D-round task #21 / Fable M2-a): when given, the waiter job must belong to this task, else DepWaiterTaskMismatchError. */
+  expectWaiterTaskId?: string;
 }
 
 /**
  * Rule 7 (cycle check) + the deps/dep_members insert that materializes one wait-edge. Extracted
- * (P4-1) out of rest.ts's materializeAsk so the negotiation accept path and dep_declare (P4 agent
- * tool, graph/agent-tools.ts) share ONE cycle-check-then-insert body instead of two copies
- * drifting apart. Loads the REAL current graph via loadTaskGraph(tx) — same transaction, so it
- * sees whatever a concurrently-committing write already landed — and rejects with DepCycleError
+ * (P4-1) out of rest.ts's old materializeAsk (now graph/negotiation.ts's materializeAskTx) so the
+ * negotiation accept path and dep_declare (P4 agent tool, graph/agent-tools.ts) share ONE
+ * cycle-check-then-insert body instead of two copies drifting apart. Loads the REAL current graph
+ * via loadTaskGraph(tx) — same transaction, so it sees whatever a concurrently-committing write
+ * already landed — and rejects with DepCycleError
  * if `dep` would close a wait cycle.
  *
- * Deliberately does NOT check that `dep.waiterJobId` belongs to any particular repo —
- * materializeAsk never enforced that (accepting a negotiation ask writes whatever dep the ask
- * named, the provider's own consent to accept is the gate), so adding it here would be a behavior
- * change for that caller. dep_declare enforces its own waiter-ownership ACL itself, before ever
- * calling this (P4-1 judgment call — see agent-tools.ts).
+ * D-round (task #11/#21, Codex critical + Grok F-E2 + Fable M2): the waiter row is now the FIRST
+ * thing this locks and validates, single `for update` fetch —
+ *   - missing waiter -> JobNotFoundError
+ *   - `expectWaiterRepoId` given and mismatched -> WriteAclError (dep_declare's ACL — P4-1 kept the
+ *     check caller-side; this just moved the fetch dep_declare used to do itself into here, one
+ *     lock acquisition instead of two)
+ *   - `expectWaiterTaskId` given and mismatched -> DepWaiterTaskMismatchError (materializeAskTx's
+ *     guard — a negotiation ask must not be able to name a waiter under some UNRELATED task)
+ *   - waiter not pending/blocked -> WaiterNotWaitingError (already claimed running by reconcile, or
+ *     already terminal — attaching a dep now would never be evaluated)
+ * A job-target whose target_id names no existing job -> DepTargetNotFoundError (dep_members has no
+ * FK on target_id; left unchecked the dep would sit 'pending' forever).
+ *
+ * Locking the waiter row here (not just reading it) is also what serializes this against
+ * reconcile's own claim (`update jobs set status = 'ready' where id = ... and status in (...)`) —
+ * whichever gets there first wins, and the loser sees the other's already-committed status instead
+ * of racing past it (task #11's "reconcile가 dep 커밋 전 ready로 claim" window).
+ *
+ * Deliberately does NOT check that `dep.waiterJobId` belongs to any particular repo UNLESS
+ * `expectWaiterRepoId` is given — materializeAskTx never enforced ownership (accepting a
+ * negotiation ask writes whatever dep the ask named FOR A JOB UNDER THE RIGHT TASK, the provider's
+ * own consent to accept is the gate), so requiring it here would be a behavior change for that
+ * caller; only `expectWaiterTaskId` applies there.
  *
  * `tx` must already be an open transaction/savepoint context (mirrors insertJobTx's own contract)
  * — this does NOT call `.begin()` itself.
  */
 export async function insertDepTx(tx: SQL, dep: NewDepInput): Promise<void> {
+  const waiterRows = (await tx`select repo_id, task_id, status from jobs where id = ${dep.waiterJobId} for update`) as Array<{
+    repo_id: string;
+    task_id: string;
+    status: JobStatus;
+  }>;
+  const waiter = waiterRows[0];
+  if (!waiter) throw new JobNotFoundError(`job ${dep.waiterJobId} not found`);
+  if (dep.expectWaiterRepoId !== undefined && waiter.repo_id !== dep.expectWaiterRepoId) {
+    throw new WriteAclError(`actor ${dep.expectWaiterRepoId} cannot declare a dep for job ${dep.waiterJobId} owned by repo ${waiter.repo_id}`);
+  }
+  if (dep.expectWaiterTaskId !== undefined && waiter.task_id !== dep.expectWaiterTaskId) {
+    throw new DepWaiterTaskMismatchError(`waiter job ${dep.waiterJobId} belongs to task ${waiter.task_id}, not ${dep.expectWaiterTaskId}`);
+  }
+  if (waiter.status !== 'pending' && waiter.status !== 'blocked') {
+    throw new WaiterNotWaitingError(`waiter job ${dep.waiterJobId} is ${waiter.status}, not pending/blocked`);
+  }
+  if (dep.targetType === 'job') {
+    const targetRows = (await tx`select 1 from jobs where id = ${dep.targetId}`) as unknown[];
+    if (targetRows.length === 0) throw new DepTargetNotFoundError(`target job ${dep.targetId} not found`);
+  }
+
   const { jobs, edges } = await loadTaskGraph(tx);
   const candidate: CycleEdge = { waiterJobId: dep.waiterJobId, targetType: dep.targetType, targetId: dep.targetId };
   if (wouldCreateCycle(jobs, edges, candidate)) {
@@ -120,8 +191,8 @@ export async function insertDepTx(tx: SQL, dep: NewDepInput): Promise<void> {
   }
   await tx`insert into deps (id, waiter_job, predicate, status) values (${dep.id}, ${dep.waiterJobId}, ${dep.predicate ?? 'all'}, 'active')`;
   await tx`
-    insert into dep_members (dep_id, target_type, target_id, acceptable)
-    values (${dep.id}, ${dep.targetType}, ${dep.targetId}, ${tx.array(dep.acceptable ?? ['satisfied'], 'text')})
+    insert into dep_members (dep_id, target_type, target_id, expected_gen, acceptable)
+    values (${dep.id}, ${dep.targetType}, ${dep.targetId}, ${dep.expectedGen ?? null}, ${tx.array(dep.acceptable ?? ['satisfied'], 'text')})
   `;
 }
 

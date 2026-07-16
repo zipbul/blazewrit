@@ -175,4 +175,43 @@ describe('A2A messageId idempotency (P3 migration 10, rule 8)', () => {
     const body2 = (await res2.json()) as { id: string };
     expect(body2.id).toBe(`${MARK}-rpc-second`);
   });
+
+  /**
+   * D-round task #10 (Codex critical rest.ts:718 + Grok F-C1): the OLD shape was check-then-act —
+   * SELECT for a stored response, then run the side effect, then INSERT `on conflict do nothing`.
+   * Two concurrent requests for the SAME messageId could both pass the SELECT (nothing stored yet)
+   * and both run dispatchTask; the conflict-do-nothing insert only ever suppressed the SECOND
+   * insert's WRITE, never the second RUN's side effect. Reproduced deterministically (no timing
+   * luck): seed the pending claim sentinel directly, exactly as if a real concurrent request had
+   * already won the insert-first claim and simply hadn't finished processing yet.
+   */
+  it('D3: a request whose messageId is already claimed (still processing) never re-runs the side effect', async () => {
+    const app = createRestApi(sql, { executor: passingExecutor, newId });
+    const messageId = `${MARK}-msg-d3`;
+    const title = `${MARK} d3 concurrent intent`;
+
+    await sql`insert into a2a_inbox (message_id, response) values (${messageId}, ${{ pending: true }})`;
+
+    const res = await sendA2A(app, title, messageId);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { message: string } };
+    expect(body.error?.message).toContain('already being processed');
+
+    expect(await jobCountByTitle(title)).toBe(0); // the loser never ran dispatchTask
+    expect(await inboxRow(messageId)).toEqual({ response: { pending: true } }); // winner's claim untouched
+  });
+
+  it('D3: once the winner finishes (real response stored), a later request for the SAME messageId replays it — not "still processing"', async () => {
+    const app = createRestApi(sql, { executor: passingExecutor, newId });
+    const messageId = `${MARK}-msg-d3-done`;
+    const title = `${MARK} d3 done intent`;
+    const realResponse = { jsonrpc: '2.0', id: 'whatever', result: { kind: 'task', id: 'x', status: { state: 'working' } } };
+    await sql`insert into a2a_inbox (message_id, response) values (${messageId}, ${realResponse})`;
+
+    const res = await sendA2A(app, title, messageId);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result?: unknown };
+    expect(body.result).toEqual(realResponse.result);
+    expect(await jobCountByTitle(title)).toBe(0); // replay, never actually dispatched
+  });
 });

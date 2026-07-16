@@ -1,7 +1,7 @@
 import { tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { SQL } from 'bun';
-import { insertJob, insertDepTx, sealTaskSliceAndDerive, unsealTaskSlice, JobNotFoundError, WriteAclError } from './store';
+import { insertJob, insertDepTx, sealTaskSliceAndDerive, unsealTaskSlice, WriteAclError } from './store';
 import { insertProposal, type NegotiationAsk } from './negotiation';
 
 /**
@@ -107,46 +107,46 @@ export function buildJobAddTool(ctx: GraphToolContext) {
 }
 
 /**
- * dep_declare(waiterJobId, targetType, targetId, predicate?, acceptable?) — declares a wait-edge:
- * `waiterJobId` waits on (job|task|external) `targetId`. Two guards, in order:
- *   1. ACL (this handler's own, NOT insertDepTx's): `waiterJobId` must be one of ctx.actorRepoId's
- *      OWN jobs — an agent may only make ITS OWN jobs wait on something, never someone else's
- *      (locked `for update` in the same transaction as the insert, so the check and the write see
- *      the same row).
- *   2. Cycle check (rule 7, via insertDepTx -> loadTaskGraph + wouldCreateCycle): rejected with
- *      DepCycleError if the edge would close a wait cycle.
+ * dep_declare(waiterJobId, targetType, targetId, predicate?, acceptable?, expectedGen?) —
+ * declares a wait-edge: `waiterJobId` waits on (job|task|external) `targetId`. All guards now live
+ * in insertDepTx itself (D-round task #11/#21 — a single `for update` lock+validate instead of this
+ * handler's own separate pre-check + insertDepTx's cycle check):
+ *   - `waiterJobId` must be one of ctx.actorRepoId's OWN jobs (`expectWaiterRepoId`) — an agent may
+ *     only make ITS OWN jobs wait on something, never someone else's. Target need not be its own.
+ *   - the waiter must currently be pending/blocked (WaiterNotWaitingError otherwise — already
+ *     claimed running by reconcile, or already terminal, means a dep now would never be evaluated).
+ *   - a job target must actually exist (DepTargetNotFoundError otherwise).
+ *   - the edge must not close a wait cycle (rule 7, DepCycleError otherwise).
  */
 function buildDepDeclareTool(ctx: GraphToolContext): GraphToolDef {
   return tool(
     DEP_DECLARE_TOOL,
     '네 소유 잡 하나가 다른 잡/태스크/외부 게이트가 끝나기를 기다리게 만든다(대기 간선 선언). 대상은 ' +
-      '네 것이 아니어도 되지만, 기다리는 쪽(waiterJobId)은 반드시 네 레포의 잡이어야 한다. 순환이 생기면 거절된다.',
+      '네 것이 아니어도 되지만, 기다리는 쪽(waiterJobId)은 반드시 네 레포의 pending/blocked 잡이어야 ' +
+      '한다(이미 실행 중이거나 끝난 잡엔 못 검). 순환이 생기면 거절된다.',
     {
       waiterJobId: z.string(),
       targetType: z.enum(DEP_TARGET_TYPES),
       targetId: z.string(),
       predicate: z.enum(DEP_PREDICATES).optional(),
       acceptable: z.array(z.enum(DEP_OUTCOMES)).optional(),
+      expectedGen: z.number().int().optional(),
     },
     async (args) => {
       try {
         const depId = ctx.newId();
-        await ctx.sql.begin(async (tx) => {
-          const jobRows = (await tx`select repo_id from jobs where id = ${args.waiterJobId} for update`) as Array<{ repo_id: string }>;
-          const job = jobRows[0];
-          if (!job) throw new JobNotFoundError(`job ${args.waiterJobId} not found`);
-          if (job.repo_id !== ctx.actorRepoId) {
-            throw new WriteAclError(`actor ${ctx.actorRepoId} cannot declare a dep for job ${args.waiterJobId} owned by repo ${job.repo_id}`);
-          }
-          await insertDepTx(tx, {
+        await ctx.sql.begin((tx) =>
+          insertDepTx(tx, {
             id: depId,
             waiterJobId: args.waiterJobId,
             targetType: args.targetType,
             targetId: args.targetId,
             predicate: args.predicate,
             acceptable: args.acceptable,
-          });
-        });
+            expectedGen: args.expectedGen,
+            expectWaiterRepoId: ctx.actorRepoId,
+          }),
+        );
         return okResult({ depId });
       } catch (err) {
         return errorResult(err);
@@ -247,6 +247,7 @@ function buildA2aRequestTool(ctx: GraphToolContext): GraphToolDef {
       targetId: z.string(),
       predicate: z.enum(DEP_PREDICATES).optional(),
       acceptable: z.array(z.enum(DEP_OUTCOMES)).optional(),
+      expectedGen: z.number().int().optional(),
     })
     .optional();
   const askGateShape = z.object({ kind: z.string(), description: z.string().optional() }).optional();

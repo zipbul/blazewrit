@@ -506,3 +506,329 @@ describe('F: negotiation never touches the intent path', () => {
     expect(workItemRows).toHaveLength(0);
   });
 });
+
+/**
+ * 3자 리뷰 수정 D라운드 (round-D-negotiation-atomicity.md): the accept/counter/request path
+ * rewritten as single transactions with real FOR UPDATE CAS, plus the dep-ask hardening (task
+ * #11/#21) and the request/accept minor bundle (D5, D7 m3/m4/m5, #12a).
+ */
+describe('D: negotiation transaction atomicity + dep-ask hardening', () => {
+  it('D1 (task #7): two concurrent accepts of the same proposal materialize exactly once', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, job: { title: 'race ask' } },
+    });
+
+    // Hold the proposal row locked in a SEPARATE transaction so both concurrent accept calls
+    // genuinely BLOCK on it (same deterministic technique as graph/reconcile.spec.ts's C1
+    // blocked-write test) — real interleaving forced by a real lock, not timing luck.
+    let releaseLock!: () => void;
+    const continueSignal = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const lockTxDone = sql.begin(async (tx) => {
+      await tx`select id from a2a_proposals where id = ${proposalId} for update`;
+      await continueSignal;
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Different messageIds — this exercises acceptProposal's OWN proposal-row CAS, decoupled from
+    // the outer a2a_inbox messageId dedup (same isolation B7 already relies on).
+    const p1 = sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    const p2 = sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    await new Promise((r) => setTimeout(r, 100));
+
+    releaseLock();
+    await lockTxDone;
+    const [res1, res2] = await Promise.all([p1, p2]);
+
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    const body1 = (await res1.json()) as { result: { alreadyAccepted?: boolean } };
+    const body2 = (await res2.json()) as { result: { alreadyAccepted?: boolean } };
+    const materializedCount = [body1, body2].filter((b) => !b.result.alreadyAccepted).length;
+    expect(materializedCount).toBe(1); // exactly one call actually materialized
+
+    const jobRows = (await sql`select 1 from jobs where task_id = ${taskId}`) as unknown[];
+    expect(jobRows).toHaveLength(1); // never two, regardless of which call "won"
+  });
+
+  it('D2 (task #7): a concurrent accept and counter on the same proposal serialize — exactly one wins', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, job: { title: 'accept-vs-counter' } },
+    });
+
+    let releaseLock!: () => void;
+    const continueSignal = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const lockTxDone = sql.begin(async (tx) => {
+      await tx`select id from a2a_proposals where id = ${proposalId} for update`;
+      await continueSignal;
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const acceptP = sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    const counterP = sendNegotiation(app, repoA, id('rpc'), id('msg'), {
+      kind: 'counter',
+      proposalId,
+      ask: { taskId, job: { title: 'counter instead' } },
+    });
+    await new Promise((r) => setTimeout(r, 100));
+
+    releaseLock();
+    await lockTxDone;
+    const [acceptRes, counterRes] = await Promise.all([acceptP, counterP]);
+    const acceptBody = (await acceptRes.json()) as { result?: unknown; error?: unknown };
+    const counterBody = (await counterRes.json()) as { result?: unknown; error?: unknown };
+    const successes = [acceptBody, counterBody].filter((b) => b.result !== undefined).length;
+    expect(successes).toBe(1); // never both
+
+    const row = await proposalRow(proposalId);
+    expect(row?.status === 'accepted' || row?.status === 'countered').toBe(true);
+    if (row?.status === 'accepted') {
+      const jobRows = (await sql`select 1 from jobs where task_id = ${taskId}`) as unknown[];
+      expect(jobRows).toHaveLength(1);
+    } else {
+      const jobRows = (await sql`select 1 from jobs where task_id = ${taskId}`) as unknown[];
+      expect(jobRows).toHaveLength(0); // countered, never materialized
+    }
+  });
+
+  it('D4/#11: accept rejects a dep ask whose waiter is already running (not pending/blocked)', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const waiterJobId = await seedJob(taskId, repoA, 'running');
+    const targetJobId = await seedJob(taskId, repoB, 'pending');
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, dep: { waiterJobId, targetType: 'job', targetId: targetJobId } },
+    });
+
+    const res = await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { error?: unknown; result?: unknown };
+    expect(body.result).toBeUndefined();
+    expect(body.error).toBeDefined();
+    expect((await proposalRow(proposalId))?.status).toBe('rejected');
+    const depRows = (await sql`select 1 from deps where waiter_job = ${waiterJobId}`) as unknown[];
+    expect(depRows).toHaveLength(0);
+  });
+
+  it('#21/M2-a: accept rejects a dep ask whose waiter belongs to a DIFFERENT task than the negotiation', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const otherTaskId = await makeTask();
+    const waiterJobId = await seedJob(otherTaskId, repoA, 'pending'); // belongs to the OTHER task
+    const targetJobId = await seedJob(taskId, repoB, 'pending');
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, dep: { waiterJobId, targetType: 'job', targetId: targetJobId } },
+    });
+
+    const res = await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { error?: unknown; result?: unknown };
+    expect(body.result).toBeUndefined();
+    expect(body.error).toBeDefined();
+    const depRows = (await sql`select 1 from deps where waiter_job = ${waiterJobId}`) as unknown[];
+    expect(depRows).toHaveLength(0);
+  });
+
+  it('#21/M2-c: accept rejects a dep ask whose job target does not exist', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const waiterJobId = await seedJob(taskId, repoA, 'pending');
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, dep: { waiterJobId, targetType: 'job', targetId: id('nonexistent-job') } },
+    });
+
+    const res = await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { error?: unknown; result?: unknown };
+    expect(body.result).toBeUndefined();
+    expect(body.error).toBeDefined();
+  });
+
+  it('#21/M2-d: accept writes ask.dep.expectedGen through to dep_members.expected_gen', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const waiterJobId = await seedJob(taskId, repoA, 'pending');
+    const targetJobId = await seedJob(taskId, repoB, 'pending');
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, dep: { waiterJobId, targetType: 'job', targetId: targetJobId, expectedGen: 1 } },
+    });
+
+    const res = await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    const body = (await res.json()) as { result: { depId: string } };
+    const memberRows = (await sql`select expected_gen from dep_members where dep_id = ${body.result.depId}`) as Array<{ expected_gen: number | null }>;
+    expect(memberRows[0]?.expected_gen).toBe(1);
+  });
+
+  it('#12a: an unauthorized repo accepting an ALREADY-accepted proposal gets an ACL rejection, not alreadyAccepted', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, job: { title: 'legit' } },
+    });
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId }); // real provider accepts
+
+    const impostor = `${MARK}-impostor`;
+    await sql`insert into repos (id, product_id, name, cwd) values (${impostor}, ${MARK}, ${impostor}, '/tmp')`;
+    await sql`insert into projects (id, name, status) values (${impostor}, ${impostor}, 'active')`;
+    const res = await sendNegotiation(app, impostor, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { error?: { message: string }; result?: { alreadyAccepted?: boolean } };
+    expect(body.result).toBeUndefined(); // NOT alreadyAccepted:true — a flat ACL rejection instead
+    expect(body.error?.message).toContain('is not the provider');
+  });
+
+  it('D5/#12c: reusing a proposalId with a DIFFERENT ask is rejected, not silently discarded', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, job: { title: 'first ask' } },
+    });
+    const res = await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, job: { title: 'DIFFERENT ask' } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { error?: { message: string }; result?: unknown };
+    expect(body.result).toBeUndefined();
+    expect(body.error?.message).toContain('already exists');
+    expect((await proposalRow(proposalId))?.status).toBe('proposed'); // unchanged
+  });
+
+  it('D5: reusing a proposalId with the IDENTICAL ask is a safe no-op (genuine replay)', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const proposalId = id('proposal');
+    const ask = { taskId, job: { title: 'same ask' } };
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'request', proposalId, fromRepo: repoA, ask });
+    const res = await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'request', proposalId, fromRepo: repoA, ask });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result?: { status: string }; error?: unknown };
+    expect(body.error).toBeUndefined();
+    expect(body.result?.status).toBe('proposed');
+  });
+
+  it('D7/m3: accept rejects an EMPTY ask (no job, dep, or gate)', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'request', proposalId, fromRepo: repoA, ask: { taskId } });
+    const res = await sendNegotiation(app, repoB, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { error?: unknown; result?: unknown };
+    expect(body.result).toBeUndefined();
+    expect(body.error).toBeDefined();
+    expect((await proposalRow(proposalId))?.status).toBe('rejected');
+  });
+
+  it('D7/m4: accept(job ask) self-heals a missing repos row for the accepting provider (registered after boot)', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const proposalId = id('proposal');
+    const freshRepo = `${MARK}-fresh-repo`;
+    await sql`insert into projects (id, name, status) values (${freshRepo}, ${freshRepo}, 'active')`;
+    // Deliberately NO `repos` row for freshRepo — simulates a provider that registered after boot,
+    // before any dispatch/backfill ever mirrored it (m4's exact gap).
+    await sendNegotiation(app, freshRepo, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, job: { title: 'self-heal' } },
+    });
+    const res = await sendNegotiation(app, freshRepo, id('rpc'), id('msg'), { kind: 'accept', proposalId });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result?: { jobId: string }; error?: unknown };
+    expect(body.error).toBeUndefined();
+    expect(body.result?.jobId).toBeTruthy();
+    const jobRows = (await sql`select repo_id from jobs where id = ${body.result!.jobId}`) as Array<{ repo_id: string }>;
+    expect(jobRows[0]?.repo_id).toBe(freshRepo);
+    const repoRows = (await sql`select 1 from repos where id = ${freshRepo}`) as unknown[];
+    expect(repoRows).toHaveLength(1); // self-healed
+  });
+
+  it("D7/m5: a counter whose ask.taskId does not match the original proposal's task is rejected", async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const otherTaskId = await makeTask();
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, job: { title: 'original' } },
+    });
+    const res = await sendNegotiation(app, repoA, id('rpc'), id('msg'), {
+      kind: 'counter',
+      proposalId,
+      ask: { taskId: otherTaskId, job: { title: 'redirect' } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { error?: { message: string }; result?: unknown };
+    expect(body.result).toBeUndefined();
+    expect(body.error?.message).toContain('does not match');
+    expect((await proposalRow(proposalId))?.status).toBe('proposed'); // unaffected
+  });
+
+  it('D7/m5: a counter into a terminal task is rejected', async () => {
+    const app = createRestApi(sql, { newId });
+    const taskId = await makeTask();
+    const proposalId = id('proposal');
+    await sendNegotiation(app, repoB, id('rpc'), id('msg'), {
+      kind: 'request',
+      proposalId,
+      fromRepo: repoA,
+      ask: { taskId, job: { title: 'original' } },
+    });
+    await sql`update tasks set status = 'done' where id = ${taskId}`;
+    const res = await sendNegotiation(app, repoA, id('rpc'), id('msg'), {
+      kind: 'counter',
+      proposalId,
+      ask: { taskId, job: { title: 'too late' } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { error?: unknown; result?: unknown };
+    expect(body.result).toBeUndefined();
+    expect(body.error).toBeDefined();
+    expect((await proposalRow(proposalId))?.status).toBe('proposed'); // unaffected
+  });
+});
