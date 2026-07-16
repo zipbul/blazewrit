@@ -165,6 +165,15 @@ export async function ensureSchema(sql: SQL): Promise<void> {
   // write touches this; round 2's stall detection (rule 4) reads it as "time since last transition".
   await sql`alter table jobs add column if not exists lease_expires_at timestamptz`;
   await sql`alter table jobs add column if not exists status_changed_at timestamptz not null default now()`;
+  // P4-2b 후속 (Fable+Codex 3자 리뷰): the HUMAN-APPROVED flowType (A2A metadata, dispatchTask's
+  // own carriedFlowType) was never durable on the graph side — a registry-miss reconstruction
+  // (rest.ts's runRegisteredJob) had no choice but to re-derive it from the title via
+  // StubFlowClassifier, which can genuinely diverge from what was actually approved (a different
+  // step sequence, an unwanted HITL pause). Nullable on purpose: only dispatchTask's own jobs ever
+  // get one written (see rest.ts) — A2A-accept/job_add jobs (insertJobTx) never had an approved
+  // flowType to begin with, so null there is correct, not a gap; reconstruction falls back to
+  // classify(title) exactly as before whenever this is null.
+  await sql`alter table jobs add column if not exists flow_type text`;
   await sql`create table if not exists deps (
     id text primary key,
     waiter_job text not null references jobs(id),

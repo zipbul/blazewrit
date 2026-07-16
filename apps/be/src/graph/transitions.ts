@@ -19,13 +19,17 @@ const WHITELIST: Record<JobStatus, JobStatus[]> = {
  * Job status-machine whitelist: pending→ready|blocked|cancelled, blocked→ready|cancelled,
  * ready→running|cancelled, running→done|failed|cancelled, terminal→(none).
  *
- * running→pending is DELIBERATELY absent (3자 리뷰 수정 B2-3, minor 묶음): rest.ts's
- * runRegisteredJob does exactly this transition, raw, to revert an orphaned claim (a job the
- * always-on controller claimed but no execution closure was ever registered for in THIS process).
- * That is a contract-EXTERNAL recovery write, not a normal job-lifecycle step — it does not go
- * through canTransitionJob, and it must not be added to this whitelist just to make it "official":
- * doing so would make running→pending look like something ANY caller may do mid-flow, which is not
- * true (a job legitimately running its own flow must never be silently rewound to pending under it).
+ * running→pending is DELIBERATELY absent. Historical note (3자 리뷰 수정 B2-3, minor 묶음):
+ * rest.ts's runRegisteredJob used to do exactly this transition, raw, to revert an orphaned claim
+ * (a job the always-on controller claimed but no execution closure was ever registered for in
+ * THIS process) — that write is GONE (P4-2b): a registry miss now reconstructs the job's flow
+ * straight from its jobs row and actually runs it to a terminal state instead of rewinding it, so
+ * nothing in this codebase performs a running→pending write anymore. Still kept off the
+ * whitelist, not just left absent by omission: adding it would make running→pending look like
+ * something ANY caller may do mid-flow through the normal transition machinery, which was never
+ * true and still isn't (a job legitimately running its own flow must never be silently rewound to
+ * pending under it) — the whitelist should stay a description of what's actually reachable, not
+ * grow a hole for a write pattern this codebase no longer has any use for.
  */
 export function canTransitionJob(from: JobStatus, to: JobStatus): boolean {
   return WHITELIST[from].includes(to);

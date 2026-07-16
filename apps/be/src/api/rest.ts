@@ -38,7 +38,6 @@ import { loadTaskGraph } from '../graph/load-task-graph';
 import { insertProposal, materializeAskTx, TaskNotOpenError, EmptyAskError, ProposalIdConflictError, type NegotiationAsk } from '../graph/negotiation';
 import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
 import { withLeaseHeartbeat, renewLease, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
-import { raiseWake } from '../graph/wake';
 import type { StepExecutor } from '../orchestrator/types';
 
 /** Origins allowed to call the API — NEVER '*': any web page the user visits must not read the chat log. */
@@ -110,63 +109,190 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const selfBaseUrl = deps.selfBaseUrl ?? 'http://localhost:4500';
   // HITL: decisionId -> resolver that resumes the suspended flow.
   const pendingDecisions = new Map<string, (answer: string) => void>();
-  // Job-graph reconcile handoff (harness/job-graph.md migration step 8): jobId -> the
-  // dispatchTask call's own executeJobFlow closure. Two dispatches sharing a contextId land
-  // under the SAME task, so reconcileTask(sql, ctx, ...) run from EITHER one can see (and claim)
-  // the OTHER's job too — whichever dispatch's reconcile pass wins that race must still run the
-  // claimed job's OWN flow (its flowType/request/dbFacts), not the caller's. This registry is
-  // that indirection: each dispatchTask registers its closure under its own workItemId before
-  // ever calling reconcileTask, so runRegisteredJob (below) always resolves a claimed job id back
-  // to the executor that actually knows how to run it, regardless of which pass claimed it.
+  // Job-graph reconcile handoff (harness/job-graph.md migration step 8): jobId -> the executor
+  // closure for that job. Two dispatches sharing a contextId land under the SAME task, so
+  // reconcileTask(sql, ctx, ...) run from EITHER one can see (and claim) the OTHER's job too —
+  // whichever dispatch's reconcile pass wins that race must still run the claimed job's OWN flow
+  // (its flowType/request/dbFacts), not the caller's. This registry is that indirection: each
+  // dispatchTask registers its closure under its own workItemId before ever calling
+  // reconcileTask, so runRegisteredJob (below) always resolves a claimed job id back to the
+  // executor that actually knows how to run it, regardless of which pass claimed it. A registry
+  // MISS (below) no longer means "nobody will ever run this" (P4-2b) — it's reconstructed
+  // straight from the jobs row instead.
   const jobExecutors = new Map<string, () => Promise<void>>();
-  // 3자 리뷰 수정 B1-2a (Fable#4+#7): a job that keeps getting orphan-reverted to pending is
-  // immediately eligible again, gets re-claimed, and orphans again — an infinite ping-pong with no
-  // way out short of a process restart (nothing ever re-registers its executor). Process-local, not
-  // persisted: this is a P4-before-real-reattachment interim, not a durable state — a real restart
-  // clearing it is fine, since the ping-pong can only happen WITHIN one process's lifetime anyway.
-  const orphanedOnce = new Set<string>();
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+
+  /**
+   * Builds one job's runnable flow-to-completion closure (harness/job-graph.md migration step 8)
+   * — a factory (P4-2b), not a plain closure, so the exact same terminal-write/heartbeat contract
+   * can be built from TWO different origins: `dispatchTask` below builds one bound to the job it
+   * just created itself (jobGeneration always 1 — insertJob's own convention for a brand-new
+   * job), and runRegisteredJob (below) builds one bound to a job it had to RECONSTRUCT from the
+   * jobs table — a job dispatchTask never touched at all (an A2A-accept or agent job_add job —
+   * graph/negotiation.ts's materializeAskTx and the job_add MCP tool both call insertJob(Tx)
+   * directly, never dispatchTask) or a dispatchTask job whose in-memory closure was lost to a
+   * process restart. That reconstruction path passes the row's REAL `generation`, not a guess —
+   * closing 3자 리뷰 수정 E1's `jobGeneration = 1` constant, which was only ever an approximation
+   * true for the one caller (dispatchTask) that existed until now; a reconstructed gen>1 job
+   * (re-run via bumpJobGeneration, then reclaimed) now completes with a CAS write that actually
+   * matches its own row instead of losing the race by construction.
+   *
+   * Self-contained — catches its OWN errors and marks both work_items and jobs terminal on
+   * failure — because reconcileTask's own dispatch try/catch only marks the jobs-table row
+   * 'failed' on a thrown error; if this let an exception escape instead of handling it here, the
+   * legacy work_items row would be left stuck at 'in_flow' forever when run through reconcile.
+   * Direct-call and reconcile-call must behave identically either way, so all terminal
+   * bookkeeping lives here, not in either caller.
+   */
+  const makeJobFlow = (p: { workItemId: string; projectId: string; request: string; flowType: FlowType; jobGeneration: number }) => async (): Promise<void> => {
+    const { workItemId, projectId, request, flowType, jobGeneration } = p;
+    try {
+      // TWO-PHASE AGENT-ASSEMBLED flow: with an assembler injected, seed ground-only and compose
+      // the rest AFTER ground runs — the agent picks steps from ground's real output, not just the
+      // seed. With none, run the curated workflow for this flow type (no network at boot).
+      const dbFacts = await gatherFacts(sql, projectId, flowType, request);
+      const seedWorkflow = deps.assembler
+        ? { flowType, steps: [{ name: 'ground', reviewer: true }] }
+        : buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name));
+      const composeRest = deps.assembler
+        ? async ({ groundOutput }: { groundOutput: unknown }) => {
+            const groundReport = typeof groundOutput === 'string' ? groundOutput : JSON.stringify(groundOutput);
+            const a = await assembleFlow({ seed: flowType, facts: { ...dbFacts, groundReport } }, deps.assembler!);
+            return { steps: a.workflow.steps, sessionId: a.sessionId };
+          }
+        : undefined;
+      // Real mode (deps.executorFor set) builds this job's own executor bound to its repo's
+      // cwd; everything else (tests, the paced stub) keeps using the one shared executor.
+      const executor = deps.executorFor ? deps.executorFor(await resolveRepoCwd(sql, projectId)) : (deps.executor ?? new PacedStepExecutor());
+      // Heartbeat (harness/job-graph.md P2 spec A2): one more wrapper OUTSIDE publishing()'s SSE
+      // layer — every step transition also renews this job's claim lease. A stalled/crashed flow
+      // simply stops calling setCurrentStep, so its lease lapses on its own; orchestrator.ts
+      // itself never learns the graph exists.
+      const result = await runFlow(seedWorkflow, {
+        store: withLeaseHeartbeat(publishing(store, flowHub, stepHub), sql, workItemId, leaseTtlMs, jobGeneration),
+        executor,
+        newId,
+        request,
+        workItemId,
+        // Job-graph mirror (harness/job-graph.md migration step 4): the job id mirrors the
+        // work_item id one-to-one (commit 3's backfill convention). Since migration step 6
+        // (above), the dual-write block already creates this job row up front, so this is now
+        // a real live reference rather than an eventually-consistent one.
+        jobId: workItemId,
+        composeRest,
+        // 3자 리뷰 수정 C2 (Grok F4): the heartbeat above only renews at STEP BOUNDARIES
+        // (setCurrentStep) — a single step running longer than leaseTtlMs (default 10 min; a
+        // real implement/investigate step against the Agent SDK plausibly does) got its lease
+        // flagged expired and the job failed by controller.ts's A3 scan, even with a live worker
+        // still emitting the whole time. The lease's job is "detect a CRASHED worker", not
+        // "detect a slow step" — so every live agent event (tool_use/thinking/assistant, fired
+        // well within one step) also renews it. Fire-and-forget: onAgentEvent's own contract is
+        // synchronous/void (orchestrator.ts calls it uncaught, unawaited), and renewLease's own
+        // `where status = 'running'` guard already makes a stray late renewal harmless.
+        onAgentEvent: (stepRunId, event) => {
+          stepHub.record(stepRunId, event);
+          void renewLease(sql, workItemId, leaseTtlMs, jobGeneration).catch(() => undefined);
+        },
+        requestDecision: async (d) => {
+          const id = newId();
+          await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;
+          // The HITL question is a conversational turn in this task's thread.
+          await recordTurn(sql, { scope: workItemId, role: 'agent', text: `❓ ${d.question} (질문함에서 답해주세요)` });
+          flowHub.publish({ type: 'decision-open', id, flowId: d.flowId });
+          return new Promise<string>((resolve) => pendingDecisions.set(id, resolve));
+        },
+        onLearning: async (l) => {
+          await sql`insert into learnings (id, flow_id, project_id, text) values (${newId()}, ${l.flowId}, ${projectId}, ${l.text})`;
+          flowHub.publish({ type: 'learning', flowId: l.flowId });
+        },
+      });
+      // CAS-guarded (3자 리뷰 수정 A라운드 A1; generation-guarded since E1, Fable M1): a
+      // lease-expiry scan or a gen++ may have already moved this row on to a DIFFERENT
+      // terminal/regenerated state by the time this (possibly slow) flow finally finishes — an
+      // unconditional write here would clobber that newer, more authoritative state with a
+      // stale "yes I completed" that has nothing to do with it. `status = 'running'` alone
+      // catches a terminal/pending move; `generation = ${jobGeneration}` additionally catches
+      // the case where the row was ALSO re-claimed back to 'running' at a NEWER generation
+      // before this stale write arrives — the status guard alone would then wrongly match.
+      // work_items itself carries no generation column (Codex task#23): it's a soft, best-effort
+      // mirror — jobs is the authoritative row (E-round's A3 scan already CAS-guards its own
+      // work_items write the same status-only way), so a matching guard here would add no real
+      // protection beyond what's already true in practice.
+      await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId} and state = 'in_flow'`;
+      // Job-graph mirror: a raw status update, not the state-machine (canTransitionJob /
+      // bumpJobGeneration) — routing this through the proper transition machinery is P2
+      // reconcile's job. This is best-effort bookkeeping so the mirror doesn't silently drift
+      // while dispatch predates reconcile; a failure here must not affect the legacy path above.
+      await sql`
+        update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'}, status_changed_at = now(), lease_expires_at = null
+        where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}
+      `.catch(() => undefined);
+      flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
+    } catch (err) {
+      await sql`update work_items set state = 'blocked' where id = ${workItemId} and state = 'in_flow'`.catch(() => undefined);
+      await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}`.catch(() => undefined);
+      flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
+    }
+  };
+
   const runRegisteredJob = async (job: ReconcileJob): Promise<void> => {
     const exec = jobExecutors.get(job.id);
     if (!exec) {
-      // Orphan (harness/job-graph.md P2 spec B2): no registered closure for this job — the
-      // process that dispatched it restarted, or the always-on controller's own periodic/restart
-      // pass (graph/controller.ts) claimed it before any dispatchTask call in THIS process ever
-      // registered one.
-      if (orphanedOnce.has(job.id)) {
-        // Already reverted this SAME job once before — reverting AGAIN would just make it eligible
-        // for another claim, orphan again, forever (B1-2a). reconcileTask's own signature can't
-        // change to filter this out before the claim (that's the actual fix, deferred to P4's real
-        // executor-reattachment), so instead: leave it claimed 'running' this time. The lease-expiry
-        // scan (graph/controller.ts A3) will fail it once its lease lapses, same as any other stuck
-        // job — a bounded wait instead of an unbounded loop. Wake dedup (raiseWake) already prevents
-        // spam either way, so this isn't about suppressing noise, only about breaking the loop.
-        return;
-      }
-      orphanedOnce.add(job.id);
-      // Running it with nothing to execute would strand it at 'running' forever, so revert the
-      // claim instead — the next reconcile pass can re-offer it immediately rather than waiting out
-      // a full lease TTL. status_changed_at is deliberately left untouched (B1-2a) — this is
-      // best-effort internal bookkeeping, not a real progress event, so it must not reset a stall
-      // timer that reads it.
-      await sql`update jobs set status = 'pending', lease_expires_at = null where id = ${job.id} and status = 'running'`;
-      // The revert above is the recovery; this is just surfacing it to a human (P2 round 2) — its
-      // own failure must never undo or block the revert.
-      await raiseWake(
-        sql,
-        { kind: 'orphaned_ready', taskId: job.taskId, jobId: job.id, reason: `잡 "${job.title}"이(가) 재시작 이후 실행 주체를 찾지 못해 대기 상태로 되돌렸습니다.` },
-        newId,
-      ).catch(() => undefined);
+      // Registry miss (harness/job-graph.md P2 spec B2's origin — P4-2b closes it): no
+      // dispatchTask call in THIS process ever registered a closure for this job. Two real
+      // sources: (a) an A2A-accept or agent job_add job — neither ever calls dispatchTask, they
+      // write straight to the jobs table (graph/negotiation.ts's materializeAskTx, the job_add
+      // MCP tool), so NO process, ever, has a registered closure for it; (b) a dispatchTask job
+      // whose in-memory closure was lost to THIS process's own restart.
+      //
+      // Superseded here (3자 리뷰 수정 B1-2a/B2's revert-to-pending-and-wake, and the
+      // orphanedOnce ping-pong guard it needed): reverting to pending only ever bought source
+      // (a)'s job another claim that would hit this exact same registry miss again, forever —
+      // there is no future registration ever coming for a job dispatchTask never created.
+      // Reconstructing and actually RUNNING the flow to a terminal state instead means there is
+      // no ping-pong left to guard against — the job either finishes or fails, either way it
+      // stops being reclaimable, so orphanedOnce's whole reason to exist is gone with it.
+      const rows = (await sql`
+        select id, repo_id, task_id, title, generation, flow_type from jobs where id = ${job.id} and status = 'running'
+      `) as Array<{ id: string; repo_id: string; task_id: string; title: string; generation: number; flow_type: string | null }>;
+      const row = rows[0];
+      if (!row) return; // the claim this reconcile pass granted already flipped or vanished under us — nothing to run
+      // repo mirror (same as dispatchTask's own dual-write below): a provider whose only prior
+      // activity was graph-native (no dispatchTask call ever ran its repos insert) may have no
+      // repos row yet — resolveRepoCwd would otherwise silently pin this run to '.'.
+      await sql`insert into repos (id, product_id, name, cwd) values (${row.repo_id}, 'legacy', ${row.repo_id}, '.') on conflict (id) do nothing`;
+      const request = String(row.title ?? row.id);
+      // P4-2b 후속 (Fable+Codex 3자 리뷰): dispatchTask now writes its own job's flow_type
+      // (below) — that's the human-APPROVED flowType (A2A metadata's carriedFlowType), and it
+      // must win here over a fresh re-classify, which can genuinely disagree with what was
+      // approved (a different step sequence, an unwanted/missing HITL 'decide' pause). Only
+      // falls back to classify(request) when flow_type is null — an A2A-accept/job_add job
+      // (insertJobTx never writes one; there was no approved flowType for those to begin with)
+      // or a legacy pre-migration row.
+      const carriedFlowType = row.flow_type as FlowType | null;
+      const flowType = carriedFlowType && (FLOW_TYPES as readonly string[]).includes(carriedFlowType) ? carriedFlowType : new StubFlowClassifier().classify(request);
+      const reconstructed = makeJobFlow({
+        workItemId: row.id,
+        projectId: row.repo_id,
+        request,
+        flowType,
+        // ★ the row's REAL generation, not a guess — closes 3자 리뷰 수정 E1's approximation (it
+        // hardcoded 1, true only for dispatchTask's own fresh-job caller). A reconstructed gen>1
+        // job (re-run via bumpJobGeneration, then reclaimed) now completes with a CAS write that
+        // actually matches its own row instead of losing the race by construction.
+        jobGeneration: row.generation,
+      });
+      void reconstructed().catch(() => undefined); // fire-and-forget — same contract as the registered-closure branch below
       return;
     }
     jobExecutors.delete(job.id);
-    // 3자 리뷰 수정 B1-2b (Fable#4+#7): fire-and-forget, not awaited — executeJobFlow is
-    // self-contained (catches its own errors, marks work_items/jobs terminal itself; see its own
-    // comment above), so nothing here depends on it settling. Awaiting it made every caller of
-    // this function — including graph/controller.ts's always-on tick(), which single-flights and
-    // processes every open task's ready jobs in one sequential pass — block for as long as THIS
-    // ONE job's entire flow took, stalling lease-expiry/wake scans and every other task's own
-    // reconcile behind it for that whole time.
+    // 3자 리뷰 수정 B1-2b (Fable#4+#7): fire-and-forget, not awaited — the flow closure is
+    // self-contained (catches its own errors, marks work_items/jobs terminal itself; see
+    // makeJobFlow's own comment above), so nothing here depends on it settling. Awaiting it made
+    // every caller of this function — including graph/controller.ts's always-on tick(), which
+    // single-flights and processes every open task's ready jobs in one sequential pass — block
+    // for as long as THIS ONE job's entire flow took, stalling lease-expiry/wake scans and every
+    // other task's own reconcile behind it for that whole time.
     void exec().catch(() => undefined);
   };
   // F: the caller's hook for wiring graph/controller.ts's startGraphController to this API
@@ -247,108 +373,18 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     // 3자 리뷰 수정 E1 (Fable M1): insertJob (graph/store.ts) always creates a NEW job row at
     // generation=1, and this dispatchTask call is the ONLY thing that ever creates the jobs row
     // for workItemId — so the generation this specific dispatch's flow is running is always
-    // exactly this. Captured as a constant (not re-SELECTed live) so every CAS write below guards
-    // against a LATER generation too, not just a later status on the same generation: a
-    // lease-expiry scan can fail this job, bumpJobGeneration (graph/store.ts) can gen++ it back to
-    // pending, and a re-claim can put it BACK to 'running' at the new generation — all while this
-    // (possibly still-running, unaware) flow instance is in flight. A write still carrying this
-    // captured generation then correctly loses that race instead of phantom-done'ing or
-    // re-terminal-ing a run that isn't this one.
+    // exactly this. Passed to makeJobFlow (P4-2b factory, defined above) below, and referenced
+    // directly by this function's own outer catch (the graph-write/reconcile IIFE's catch,
+    // further down) for the exact same "guard every CAS write against a later generation, not
+    // just a later status" reason makeJobFlow's own doc comment explains in full.
     const jobGeneration = 1;
 
-    // Runs this job's flow to completion (harness/job-graph.md migration step 8): extracted out
-    // of the dispatch IIFE so it can be handed to reconcileTask as its dispatch callback instead
-    // of only ever running inline. Self-contained — catches its OWN errors and marks both
-    // work_items and jobs terminal on failure — because reconcileTask's own dispatch try/catch
-    // only marks the jobs-table row 'failed' on a thrown error; if this function let an exception
-    // escape instead of handling it here, the legacy work_items row would be left stuck at
-    // 'in_flow' forever when run through reconcile. Direct-call and reconcile-call must behave
-    // identically either way, so all terminal bookkeeping lives here, not in the caller.
-    const executeJobFlow = async (): Promise<void> => {
-      try {
-        // TWO-PHASE AGENT-ASSEMBLED flow: with an assembler injected, seed ground-only and compose
-        // the rest AFTER ground runs — the agent picks steps from ground's real output, not just the
-        // seed. With none, run the curated workflow for this flow type (no network at boot).
-        const dbFacts = await gatherFacts(sql, projectId, flowType, request);
-        const seedWorkflow = deps.assembler
-          ? { flowType, steps: [{ name: 'ground', reviewer: true }] }
-          : buildWorkflow(flowType, WORKFLOWS[flowType].steps.map((s) => s.name));
-        const composeRest = deps.assembler
-          ? async ({ groundOutput }: { groundOutput: unknown }) => {
-              const groundReport = typeof groundOutput === 'string' ? groundOutput : JSON.stringify(groundOutput);
-              const a = await assembleFlow({ seed: flowType, facts: { ...dbFacts, groundReport } }, deps.assembler!);
-              return { steps: a.workflow.steps, sessionId: a.sessionId };
-            }
-          : undefined;
-        // Real mode (deps.executorFor set) builds this job's own executor bound to its repo's
-        // cwd; everything else (tests, the paced stub) keeps using the one shared executor.
-        const executor = deps.executorFor ? deps.executorFor(await resolveRepoCwd(sql, projectId)) : (deps.executor ?? new PacedStepExecutor());
-        // Heartbeat (harness/job-graph.md P2 spec A2): one more wrapper OUTSIDE publishing()'s SSE
-        // layer — every step transition also renews this job's claim lease. A stalled/crashed flow
-        // simply stops calling setCurrentStep, so its lease lapses on its own; orchestrator.ts
-        // itself never learns the graph exists.
-        const result = await runFlow(seedWorkflow, {
-          store: withLeaseHeartbeat(publishing(store, flowHub, stepHub), sql, workItemId, leaseTtlMs, jobGeneration),
-          executor,
-          newId,
-          request,
-          workItemId,
-          // Job-graph mirror (harness/job-graph.md migration step 4): the job id mirrors the
-          // work_item id one-to-one (commit 3's backfill convention). Since migration step 6
-          // (above), the dual-write block already creates this job row up front, so this is now
-          // a real live reference rather than an eventually-consistent one.
-          jobId: workItemId,
-          composeRest,
-          // 3자 리뷰 수정 C2 (Grok F4): the heartbeat above only renews at STEP BOUNDARIES
-          // (setCurrentStep) — a single step running longer than leaseTtlMs (default 10 min; a
-          // real implement/investigate step against the Agent SDK plausibly does) got its lease
-          // flagged expired and the job failed by controller.ts's A3 scan, even with a live worker
-          // still emitting the whole time. The lease's job is "detect a CRASHED worker", not
-          // "detect a slow step" — so every live agent event (tool_use/thinking/assistant, fired
-          // well within one step) also renews it. Fire-and-forget: onAgentEvent's own contract is
-          // synchronous/void (orchestrator.ts calls it uncaught, unawaited), and renewLease's own
-          // `where status = 'running'` guard already makes a stray late renewal harmless.
-          onAgentEvent: (stepRunId, event) => {
-            stepHub.record(stepRunId, event);
-            void renewLease(sql, workItemId, leaseTtlMs, jobGeneration).catch(() => undefined);
-          },
-          requestDecision: async (d) => {
-            const id = newId();
-            await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;
-            // The HITL question is a conversational turn in this task's thread.
-            await recordTurn(sql, { scope: workItemId, role: 'agent', text: `❓ ${d.question} (질문함에서 답해주세요)` });
-            flowHub.publish({ type: 'decision-open', id, flowId: d.flowId });
-            return new Promise<string>((resolve) => pendingDecisions.set(id, resolve));
-          },
-          onLearning: async (l) => {
-            await sql`insert into learnings (id, flow_id, project_id, text) values (${newId()}, ${l.flowId}, ${projectId}, ${l.text})`;
-            flowHub.publish({ type: 'learning', flowId: l.flowId });
-          },
-        });
-        // CAS-guarded (3자 리뷰 수정 A라운드 A1; generation-guarded since E1, Fable M1): a
-        // lease-expiry scan or a gen++ may have already moved this row on to a DIFFERENT
-        // terminal/regenerated state by the time this (possibly slow) flow finally finishes — an
-        // unconditional write here would clobber that newer, more authoritative state with a
-        // stale "yes I completed" that has nothing to do with it. `status = 'running'` alone
-        // catches a terminal/pending move; `generation = ${jobGeneration}` additionally catches
-        // the case where the row was ALSO re-claimed back to 'running' at a NEWER generation
-        // before this stale write arrives — the status guard alone would then wrongly match.
-        await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId} and state = 'in_flow'`;
-        // Job-graph mirror: a raw status update, not the state-machine (canTransitionJob /
-        // bumpJobGeneration) — routing this through the proper transition machinery is P2
-        // reconcile's job. This is best-effort bookkeeping so the mirror doesn't silently drift
-        // while dispatch predates reconcile; a failure here must not affect the legacy path above.
-        await sql`
-          update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'}, status_changed_at = now(), lease_expires_at = null
-          where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}
-        `.catch(() => undefined);
-        flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
-      } catch (err) {
-        await sql`update work_items set state = 'blocked' where id = ${workItemId} and state = 'in_flow'`.catch(() => undefined);
-        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}`.catch(() => undefined);
-        flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
-      }
-    };
+    // Runs this job's flow to completion (harness/job-graph.md migration step 8) — built by
+    // makeJobFlow (P4-2b) bound to the job THIS call just created, so it can be handed to
+    // reconcileTask as its dispatch callback instead of only ever running inline. Self-contained:
+    // catches its own errors and marks both work_items and jobs terminal on failure (see
+    // makeJobFlow's own doc comment above for why that bookkeeping has to live there, not here).
+    const executeJobFlow = makeJobFlow({ workItemId, projectId, request, flowType, jobGeneration });
     // Registered synchronously, before any await below — so if another dispatch under the SAME
     // ctx wins the reconcile claim race on THIS job (see jobExecutors above), it can still find
     // and run this exact closure the instant the row it's looking up could possibly exist.
@@ -400,6 +436,14 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
               await insertJob(sql, projectId, job);
             }
             graphWriteOk = true;
+            // P4-2b 후속 (Fable+Codex 3자 리뷰): persists the human-APPROVED flowType onto the
+            // job row itself — best-effort, not folded into insertJob/assembleJobs (both stay
+            // flowType-agnostic; N=1 today makes a targeted update the smaller change than
+            // threading an optional field through two extra signatures for one caller). A failure
+            // here must never undo the graph write that already landed above; it only means a
+            // registry-miss reconstruction of THIS job (runRegisteredJob, below) falls back to
+            // re-classifying the title instead of reusing the exact approved flowType.
+            await sql`update jobs set flow_type = ${flowType} where id = ${workItemId}`.catch(() => undefined);
           }
         } catch (err) {
           flowHub.publish({ type: 'flow-error', workItemId, message: `graph mirror: ${String(err)}` });

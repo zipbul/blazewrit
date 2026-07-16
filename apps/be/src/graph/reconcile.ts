@@ -164,6 +164,13 @@ export async function reconcileTask(
     } catch {
       // CAS-guarded (3자 리뷰 수정 A라운드 A1): the job may have already moved on (lease-expiry
       // scan, gen++) by the time this catch runs — an unconditional write would clobber that.
+      // Codex task#23 / P4-2b: no generation guard added here on purpose — this function is
+      // generic over whatever `dispatch` callback the caller supplies (a test's own mock included),
+      // it has no captured generation of its own to guard with. rest.ts's actual dispatch callback
+      // (runRegisteredJob) is fire-and-forget internally (every branch — registered-closure and
+      // reconstructed alike — wraps its own execution in `.catch(() => undefined)`), so it never
+      // actually throws; this catch is unreachable through THAT caller and only exists for the
+      // generic contract (a `dispatch` that legitimately throws, e.g. in this file's own tests).
       await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${job.id} and status = 'running'`.catch(
         () => undefined,
       );
