@@ -123,8 +123,13 @@ export async function reconcileTask(
 
     const ready = await jobIsReady(sql, job.id);
     if (!ready) {
+      // CAS-guarded (3자 리뷰 수정 C1, Grok F1): `job.status` is this pass's SELECT snapshot, not
+      // the row's live status — jobIsReady's own DB round-trips are a real window for the row to
+      // move on (claimed 'running' by a concurrent reconcile pass; dispatchTask's inline call and
+      // the always-on controller's tick are NOT mutually exclusive). An unconditional write here
+      // would clobber that newer state back to 'blocked', breaking done/running monotonicity.
       if (job.status !== 'blocked' && canTransitionJob(job.status, 'blocked')) {
-        await sql`update jobs set status = 'blocked', status_changed_at = now() where id = ${job.id}`;
+        await sql`update jobs set status = 'blocked', status_changed_at = now() where id = ${job.id} and status in ('pending', 'blocked')`;
       }
       continue;
     }

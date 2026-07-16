@@ -218,6 +218,47 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       controller.stop();
     }
   });
+
+  /**
+   * A6 (3자 리뷰 수정 C3, Grok F12): a 'running' job with lease_expires_at NULL is ALWAYS abnormal
+   * — the only way a job legitimately becomes 'running' is reconcileTask's own claim transaction,
+   * which grants a lease in the SAME transaction as the status write (rule A1), so there is no
+   * window in which a genuinely-claimed job is ever observed 'running' with no lease. A crashed
+   * process's boot backfill (schema.ts's in_flow -> 'running' mirror, no lease column set) or any
+   * other stray write can still produce this shape, and NONE of the other scans catch it: A3
+   * requires lease_expires_at NOT NULL, reconcile only touches pending/blocked, the B2-2 self-heal
+   * only fires once the SOURCE reaches done/blocked, and the stall backstop (C1) only scans
+   * 'blocked'. Left unresolved forever otherwise.
+   */
+  test('A6: a running job with a NULL lease past the stall threshold raises an orphaned_ready wake (never auto-failed)', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`update jobs set status_changed_at = ${new Date(Date.now() - 60_000)} where id = ${jobId}`;
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999, stallThresholdMs: 1_000 });
+    try {
+      await waitFor(async () => ((await openWakeCount('orphaned_ready', taskId)) > 0 ? true : undefined));
+      expect(await jobStatus(jobId)).toBe('running'); // never auto-failed -- a human decides (rule 4 spirit)
+    } finally {
+      controller.stop();
+    }
+  });
+
+  test('A6: a running job with a NULL lease that has NOT yet crossed the stall threshold is left alone', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running'); // status_changed_at defaults to now()
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999, stallThresholdMs: 60_000 });
+    try {
+      await new Promise((r) => setTimeout(r, 150));
+      expect(await jobStatus(jobId)).toBe('running');
+      expect(await openWakeCount('orphaned_ready', taskId)).toBe(0);
+    } finally {
+      controller.stop();
+    }
+  });
 });
 
 describe('startGraphController — wake records (harness/job-graph.md P2 round 2 spec C/D)', () => {

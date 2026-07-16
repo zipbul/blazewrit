@@ -99,6 +99,29 @@ export function startGraphController(sql: SQL, dispatch: (job: ReconcileJob) => 
         }
       }
 
+      // A6 (3자 리뷰 수정 C3, Grok F12): a 'running' job with lease_expires_at NULL is ALWAYS
+      // abnormal — a legitimate claim (reconcileTask's ready→running transaction) grants a lease
+      // in the SAME transaction as the status write, so there is no window in which a genuinely
+      // claimed job is ever observed running with no lease. A crashed process's boot backfill
+      // (schema.ts's in_flow -> 'running' mirror, no lease set) is the known source. None of the
+      // other scans catch this shape (A3 requires lease NOT NULL; reconcile only touches
+      // pending/blocked; the stall backstop only scans 'blocked') — left unresolved forever
+      // otherwise. No auto-failure (rule 4 spirit, same as C1/C2 below): a human decides whether
+      // this is a genuine crash or a backfill artifact still worth re-registering.
+      const zombieRunning = (await sql`
+        select id, task_id, title from jobs
+        where status = 'running' and lease_expires_at is null
+          and status_changed_at < now() - (${stallThresholdMs} * interval '1 millisecond')
+      `) as Array<{ id: string; task_id: string; title: string }>;
+      for (const job of zombieRunning) {
+        await wake({
+          kind: 'orphaned_ready',
+          taskId: job.task_id,
+          jobId: job.id,
+          reason: `잡 "${job.title}"이(가) lease 없이 running 상태로 정체되어 있습니다 — 크래시 또는 백필 잔류로 보입니다.`,
+        });
+      }
+
       // B1/B3: every open task with a pending/blocked job gets a fresh pass.
       const taskRows = (await sql`
         select distinct j.task_id as id from jobs j join tasks t on t.id = j.task_id

@@ -26,7 +26,7 @@ import { insertJob } from '../graph/store';
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
 import { loadTaskGraph } from '../graph/load-task-graph';
 import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
-import { withLeaseHeartbeat, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
+import { withLeaseHeartbeat, renewLease, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
 import { raiseWake } from '../graph/wake';
 import type { StepExecutor } from '../orchestrator/types';
 
@@ -276,7 +276,19 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           // a real live reference rather than an eventually-consistent one.
           jobId: workItemId,
           composeRest,
-          onAgentEvent: (stepRunId, event) => stepHub.record(stepRunId, event),
+          // 3자 리뷰 수정 C2 (Grok F4): the heartbeat above only renews at STEP BOUNDARIES
+          // (setCurrentStep) — a single step running longer than leaseTtlMs (default 10 min; a
+          // real implement/investigate step against the Agent SDK plausibly does) got its lease
+          // flagged expired and the job failed by controller.ts's A3 scan, even with a live worker
+          // still emitting the whole time. The lease's job is "detect a CRASHED worker", not
+          // "detect a slow step" — so every live agent event (tool_use/thinking/assistant, fired
+          // well within one step) also renews it. Fire-and-forget: onAgentEvent's own contract is
+          // synchronous/void (orchestrator.ts calls it uncaught, unawaited), and renewLease's own
+          // `where status = 'running'` guard already makes a stray late renewal harmless.
+          onAgentEvent: (stepRunId, event) => {
+            stepHub.record(stepRunId, event);
+            void renewLease(sql, workItemId, leaseTtlMs).catch(() => undefined);
+          },
           requestDecision: async (d) => {
             const id = newId();
             await sql`insert into decisions (id, flow_id, status, request_type, question, options) values (${id}, ${d.flowId}, ${'open'}, ${'single_choice'}, ${d.question}, ${JSON.stringify(d.options)})`;

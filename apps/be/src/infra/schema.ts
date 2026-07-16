@@ -206,6 +206,16 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     select p.id, 'legacy', p.name, coalesce(nullif(p.repo_path, ''), '.')
     from projects p
     on conflict (id) do nothing`;
+  // Self-heal (3자 리뷰 수정 C4, Grok F14): the insert above is `on conflict (id) do nothing` — a
+  // project registered before its repo_path was ever set gets mirrored with cwd='.' on the FIRST
+  // boot, and setting repo_path afterward never reaches the mirror again (the insert is a no-op
+  // every later boot). resolveRepoCwd would then keep running that repo's jobs against '.' (the
+  // wrong checkout) forever, even though the real cwd is now known. Only fires when the mirror's
+  // cwd is STILL '.' (the "not configured yet" signal) — a manually-set cwd (anything else) is
+  // never touched, same protection the "does not overwrite" test above already covers for inserts.
+  await sql`update repos set cwd = nullif(p.repo_path, '')
+    from projects p
+    where repos.id = p.id and repos.cwd = '.' and coalesce(nullif(p.repo_path, ''), '') <> ''`;
 
   // Backfill (harness/job-graph.md migration step 3): mirror work_items → tasks/jobs. A task's
   // id is the context_id anchor (coalesce(context_id, id)) — work_items that share one
