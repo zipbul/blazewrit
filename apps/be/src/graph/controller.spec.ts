@@ -148,7 +148,12 @@ describe('startGraphController — restart + periodic reconcile (harness/job-gra
       const concurrent = await controller.tick();
       expect(concurrent).toEqual({ expired: [], reconciled: [], wakes: [] });
 
-      await waitFor(async () => ((await jobStatus(jobId)) !== 'pending' ? true : undefined));
+      // Observe the dispatch through the MOCK, not a DB status poll (same pattern as B2). reconcileTask
+      // commits status='running' BEFORE calling dispatch, so a separate-connection jobStatus poll can
+      // see 'running' in the window before the dispatch call lands in mock.calls — waiting on the mock
+      // itself closes that race (this was the actual source of B4's shared-DB flakiness, not the no-op
+      // assertion above, which is deterministic via run-to-completion).
+      await waitFor(async () => (dispatch.mock.calls.some(([job]) => job.id === jobId) ? true : undefined));
       expect(dispatch.mock.calls.some(([job]) => job.id === jobId)).toBe(true);
     } finally {
       controller.stop();
