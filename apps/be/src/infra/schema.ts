@@ -263,6 +263,13 @@ export async function ensureSchema(sql: SQL): Promise<void> {
   // migration step 3, "jobs.legacy_work_item_id"). repo_id = project_id, which the repos
   // backfill above guarantees exists by the time this insert runs.
   await sql`alter table jobs add column if not exists legacy_work_item_id text`;
+  // 3자 리뷰 수정 E4 (Fable M4): the REAL job-creation write path (graph/store.ts's insertJob)
+  // rejects a new job under a terminal task with TerminalTaskError (rule 9) — this raw backfill
+  // INSERT used to have no such filter, so it could resurrect a brand-new mirror job under a task
+  // that's already closed to further writes (another repo already sealed and completed that task
+  // out from under this work_item's own project). `join tasks` on the SAME anchor id the tasks
+  // upsert above just wrote/confirmed, filtered to 'open', closes that hole without touching a
+  // work_item whose anchor task is (as almost all of them are) still open.
   await sql`insert into jobs (id, task_id, repo_id, title, status, generation, legacy_work_item_id, created_at)
     select w.id, coalesce(w.context_id, w.id), w.project_id, coalesce(w.title, w.id),
       case w.state
@@ -273,6 +280,8 @@ export async function ensureSchema(sql: SQL): Promise<void> {
       end,
       1, w.id, w.created_at
     from work_items w
+    join tasks t on t.id = coalesce(w.context_id, w.id)
+    where t.status = 'open'
     on conflict (id) do nothing`;
   // Self-heal (harness/job-graph.md migration step 5): rows mirrored by an earlier boot (before
   // created_at was added to the insert above) got created_at = that boot's `now()` default
@@ -293,11 +302,21 @@ export async function ensureSchema(sql: SQL): Promise<void> {
   // backfill self-correction, not a second completion-write path) and only fires when the
   // mirror's status is still non-terminal, so it's idempotent and never clobbers a job a live
   // reconcile/dispatch path has already moved on from.
+  //
+  // `jobs.generation = 1` (3자 리뷰 수정 E5, Fable M5): the legacy work_item row is NEVER revisited
+  // once its state is set (no live write path routes a re-run back through it), so it can only
+  // ever describe generation 1's outcome. bumpJobGeneration (graph/store.ts) can gen++ this same
+  // mirror row to a fresh pending re-run slot (generation 2+), entirely independent of the
+  // work_item — without this guard, the very next boot would read the still-terminal work_item and
+  // slam that brand-new re-run slot straight back to done/failed before it ever got claimed, a
+  // regression of the same "once moved on, never revert" principle every other self-heal here
+  // already respects.
   await sql`update jobs set
       status = case w.state when 'done' then 'done' when 'blocked' then 'failed' else jobs.status end,
       status_changed_at = now(), lease_expires_at = null
     from work_items w
     where jobs.legacy_work_item_id = w.id
       and w.state in ('done', 'blocked')
-      and jobs.status not in ('done', 'failed', 'cancelled')`;
+      and jobs.status not in ('done', 'failed', 'cancelled')
+      and jobs.generation = 1`;
 }

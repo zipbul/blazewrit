@@ -244,6 +244,18 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     const workItemId = newId();
     const ctx = contextId ?? workItemId; // correlate cross-project realizations of one intent
 
+    // 3자 리뷰 수정 E1 (Fable M1): insertJob (graph/store.ts) always creates a NEW job row at
+    // generation=1, and this dispatchTask call is the ONLY thing that ever creates the jobs row
+    // for workItemId — so the generation this specific dispatch's flow is running is always
+    // exactly this. Captured as a constant (not re-SELECTed live) so every CAS write below guards
+    // against a LATER generation too, not just a later status on the same generation: a
+    // lease-expiry scan can fail this job, bumpJobGeneration (graph/store.ts) can gen++ it back to
+    // pending, and a re-claim can put it BACK to 'running' at the new generation — all while this
+    // (possibly still-running, unaware) flow instance is in flight. A write still carrying this
+    // captured generation then correctly loses that race instead of phantom-done'ing or
+    // re-terminal-ing a run that isn't this one.
+    const jobGeneration = 1;
+
     // Runs this job's flow to completion (harness/job-graph.md migration step 8): extracted out
     // of the dispatch IIFE so it can be handed to reconcileTask as its dispatch callback instead
     // of only ever running inline. Self-contained — catches its OWN errors and marks both
@@ -276,7 +288,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         // simply stops calling setCurrentStep, so its lease lapses on its own; orchestrator.ts
         // itself never learns the graph exists.
         const result = await runFlow(seedWorkflow, {
-          store: withLeaseHeartbeat(publishing(store, flowHub, stepHub), sql, workItemId, leaseTtlMs),
+          store: withLeaseHeartbeat(publishing(store, flowHub, stepHub), sql, workItemId, leaseTtlMs, jobGeneration),
           executor,
           newId,
           request,
@@ -298,7 +310,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           // `where status = 'running'` guard already makes a stray late renewal harmless.
           onAgentEvent: (stepRunId, event) => {
             stepHub.record(stepRunId, event);
-            void renewLease(sql, workItemId, leaseTtlMs).catch(() => undefined);
+            void renewLease(sql, workItemId, leaseTtlMs, jobGeneration).catch(() => undefined);
           },
           requestDecision: async (d) => {
             const id = newId();
@@ -313,10 +325,14 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
             flowHub.publish({ type: 'learning', flowId: l.flowId });
           },
         });
-        // CAS-guarded (3자 리뷰 수정 A라운드 A1): a lease-expiry scan or a gen++ may have already
-        // moved this row on to a DIFFERENT terminal/regenerated state by the time this (possibly
-        // slow) flow finally finishes — an unconditional write here would clobber that newer,
-        // more authoritative state with a stale "yes I completed" that has nothing to do with it.
+        // CAS-guarded (3자 리뷰 수정 A라운드 A1; generation-guarded since E1, Fable M1): a
+        // lease-expiry scan or a gen++ may have already moved this row on to a DIFFERENT
+        // terminal/regenerated state by the time this (possibly slow) flow finally finishes — an
+        // unconditional write here would clobber that newer, more authoritative state with a
+        // stale "yes I completed" that has nothing to do with it. `status = 'running'` alone
+        // catches a terminal/pending move; `generation = ${jobGeneration}` additionally catches
+        // the case where the row was ALSO re-claimed back to 'running' at a NEWER generation
+        // before this stale write arrives — the status guard alone would then wrongly match.
         await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId} and state = 'in_flow'`;
         // Job-graph mirror: a raw status update, not the state-machine (canTransitionJob /
         // bumpJobGeneration) — routing this through the proper transition machinery is P2
@@ -324,12 +340,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         // while dispatch predates reconcile; a failure here must not affect the legacy path above.
         await sql`
           update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'}, status_changed_at = now(), lease_expires_at = null
-          where id = ${workItemId} and status = 'running'
+          where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}
         `.catch(() => undefined);
         flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
       } catch (err) {
         await sql`update work_items set state = 'blocked' where id = ${workItemId} and state = 'in_flow'`.catch(() => undefined);
-        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running'`.catch(() => undefined);
+        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     };
@@ -405,9 +421,11 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         }
       } catch (err) {
         jobExecutors.delete(workItemId);
-        // CAS-guarded (A1) — same rationale as executeJobFlow's own catch above.
+        // CAS-guarded (A1) + generation-guarded (E1) — same rationale as executeJobFlow's own
+        // catch above; a jobs row for workItemId, if it exists at all at this point, was only
+        // ever created by THIS dispatch's own graph write above, at generation 1.
         await sql`update work_items set state = 'blocked' where id = ${workItemId} and state = 'in_flow'`.catch(() => undefined);
-        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running'`.catch(() => undefined);
+        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}`.catch(() => undefined);
         flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     })();

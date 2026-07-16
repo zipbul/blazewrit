@@ -22,9 +22,9 @@ async function makeChain() {
   return { taskId, repoId };
 }
 
-async function seedJob(taskId: string, repoId: string, status: string, leaseExpiresAt: Date | null): Promise<string> {
+async function seedJob(taskId: string, repoId: string, status: string, leaseExpiresAt: Date | null, generation = 1): Promise<string> {
   const jobId = id('job');
-  await sql`insert into jobs (id, task_id, repo_id, title, status, lease_expires_at) values (${jobId}, ${taskId}, ${repoId}, 'x', ${status}, ${leaseExpiresAt})`;
+  await sql`insert into jobs (id, task_id, repo_id, title, status, generation, lease_expires_at) values (${jobId}, ${taskId}, ${repoId}, 'x', ${status}, ${generation}, ${leaseExpiresAt})`;
   return jobId;
 }
 
@@ -55,7 +55,7 @@ describe('renewLease', () => {
     const past = new Date(Date.now() - 60_000);
     const jobId = await seedJob(taskId, repoId, 'running', past);
 
-    await renewLease(sql, jobId, 30_000);
+    await renewLease(sql, jobId, 30_000, 1);
 
     const leaseExpiresAt = await jobLeaseExpiresAt(jobId);
     expect(leaseExpiresAt!.getTime()).toBeGreaterThan(Date.now());
@@ -65,9 +65,27 @@ describe('renewLease', () => {
     const { taskId, repoId } = await makeChain();
     const jobId = await seedJob(taskId, repoId, 'pending', null);
 
-    await renewLease(sql, jobId, 30_000);
+    await renewLease(sql, jobId, 30_000, 1);
 
     expect(await jobLeaseExpiresAt(jobId)).toBeNull();
+  });
+
+  /**
+   * 3자 리뷰 수정 E1 (Fable M1): a heartbeat carries the generation the CALLER captured when its
+   * flow started — a stale renewal from a superseded run (gen 1) arriving AFTER a lease-expiry
+   * scan failed the job, bumpJobGeneration moved it to gen 2, and a re-claim put it BACK to
+   * 'running' must not renew the NEW generation's lease. Without the guard, `status = 'running'`
+   * alone would still match and let a dead run's heartbeat keep a live claim's lease alive.
+   */
+  test("does not renew a lease for a job whose generation has moved on (stale heartbeat from a superseded run)", async () => {
+    const { taskId, repoId } = await makeChain();
+    const original = new Date(Date.now() + 60_000);
+    const jobId = await seedJob(taskId, repoId, 'running', original, 2); // already re-claimed at gen 2
+
+    await renewLease(sql, jobId, 30_000, 1); // a stale gen-1 heartbeat, arriving late
+
+    const leaseExpiresAt = await jobLeaseExpiresAt(jobId);
+    expect(leaseExpiresAt!.getTime()).toBe(original.getTime()); // untouched
   });
 });
 
@@ -87,7 +105,7 @@ describe('withLeaseHeartbeat (harness/job-graph.md P2 spec A2 — heartbeat = st
     const { taskId, repoId } = await makeChain();
     const past = new Date(Date.now() - 60_000);
     const jobId = await seedJob(taskId, repoId, 'running', past);
-    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000);
+    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000, 1);
 
     await wrapped.setCurrentStep('some-flow-id', 'implement');
 
@@ -105,7 +123,7 @@ describe('withLeaseHeartbeat (harness/job-graph.md P2 spec A2 — heartbeat = st
         delegatedTo = { flowId, step };
       },
     };
-    const wrapped = withLeaseHeartbeat(spyStore, sql, jobId, 30_000);
+    const wrapped = withLeaseHeartbeat(spyStore, sql, jobId, 30_000, 1);
 
     await wrapped.setCurrentStep('flow-x', 'verify');
 
@@ -128,7 +146,7 @@ describe('withLeaseHeartbeat — setStatus (3자 리뷰 수정 A라운드 A2: HI
   test("setStatus('suspended') clears the lease — a HITL pause is not a crash", async () => {
     const { taskId, repoId } = await makeChain();
     const jobId = await seedJob(taskId, repoId, 'running', new Date(Date.now() + 60_000));
-    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000);
+    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000, 1);
 
     await wrapped.setStatus('some-flow-id', 'suspended');
 
@@ -139,7 +157,7 @@ describe('withLeaseHeartbeat — setStatus (3자 리뷰 수정 A라운드 A2: HI
     const { taskId, repoId } = await makeChain();
     // No lease -- as if a prior 'suspended' call already cleared it.
     const jobId = await seedJob(taskId, repoId, 'running', null);
-    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000);
+    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000, 1);
 
     await wrapped.setStatus('some-flow-id', 'active');
 
@@ -152,7 +170,7 @@ describe('withLeaseHeartbeat — setStatus (3자 리뷰 수정 A라운드 A2: HI
     const { taskId, repoId } = await makeChain();
     const original = new Date(Date.now() + 60_000);
     const jobId = await seedJob(taskId, repoId, 'running', original);
-    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000);
+    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000, 1);
 
     await wrapped.setStatus('some-flow-id', 'completed');
 
@@ -170,7 +188,7 @@ describe('withLeaseHeartbeat — setStatus (3자 리뷰 수정 A라운드 A2: HI
         delegated = { flowId, status };
       },
     };
-    const wrapped = withLeaseHeartbeat(spyStore, sql, jobId, 30_000);
+    const wrapped = withLeaseHeartbeat(spyStore, sql, jobId, 30_000, 1);
 
     await wrapped.setStatus('flow-y', 'suspended');
 
@@ -180,7 +198,7 @@ describe('withLeaseHeartbeat — setStatus (3자 리뷰 수정 A라운드 A2: HI
   test('integration: a suspended job is never flagged expired by the controller scan (no wake, stays running)', async () => {
     const { taskId, repoId } = await makeChain();
     const jobId = await seedJob(taskId, repoId, 'running', new Date(Date.now() + 60_000));
-    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000);
+    const wrapped = withLeaseHeartbeat(fakeStore, sql, jobId, 30_000, 1);
 
     await wrapped.setStatus('some-flow-id', 'suspended'); // lease cleared -- scan's own `is not null` excludes it
 

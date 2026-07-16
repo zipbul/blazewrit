@@ -193,4 +193,43 @@ describe('A1: terminal job/work_item writes are CAS-guarded against a stale in-f
     expect(await workItemState(workItemId)).toBe('done'); // must NOT be clobbered back to 'blocked'
     expect((await jobRow(workItemId))?.status).toBe('done'); // must NOT be clobbered back to 'failed'
   });
+
+  /**
+   * 3자 리뷰 수정 E1 (Fable M1): case② already covers a stale completion arriving after a gen++
+   * left the job 'pending' (still guarded by the plain status CAS, since 'pending' ≠ 'running').
+   * This case is the sharper one the status-only guard can't catch: the row gets RE-CLAIMED back
+   * to 'running' at the NEW generation before the stale gen-1 write lands — `status = 'running'`
+   * alone would then wrongly match and phantom-done a run (gen 2) that this stale write knows
+   * nothing about. Only a generation-scoped CAS closes this.
+   */
+  it("④ a late success completion (stale gen 1) must not phantom-done a job re-claimed to gen-2 running", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const app = createRestApi(sql, { executor: makeGatedExecutor(gate), newId });
+
+    const text = `${MARK} case4 chore`;
+    const res = await sendA2A(app, projectId, text, { metadata: { flowType: 'chore' } });
+    const { id: workItemId } = ((await res.json()) as { result: { id: string } }).result;
+
+    await waitFor(async () => (await jobRow(workItemId))?.status === 'running');
+
+    // Simulate: lease expiry -> failed -> gen++ -> re-claimed to running, a fresh gen-2 attempt
+    // now genuinely in flight (this test doesn't need to actually drive that second run — only
+    // that the row is 'running' again at generation 2 by the time the STALE gen-1 write arrives).
+    await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId}`;
+    await bumpJobGeneration(sql, projectId, workItemId); // gen 1 -> 2, status -> pending
+    await sql`update jobs set status = 'running', lease_expires_at = now() + interval '10 minutes' where id = ${workItemId} and status = 'pending'`;
+
+    release(); // the STALE gen-1 flow's completion write finally arrives
+
+    // No natural "it's done now" signal to wait on here (we're asserting it stays running) --
+    // give the stale write a moment to land, then check it didn't take.
+    await new Promise((r) => setTimeout(r, 300));
+
+    const row = await jobRow(workItemId);
+    expect(row?.status).toBe('running'); // must NOT be phantom-done by the stale gen-1 write
+    expect(row?.generation).toBe(2);
+  });
 });

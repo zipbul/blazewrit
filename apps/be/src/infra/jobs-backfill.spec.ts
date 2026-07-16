@@ -195,4 +195,59 @@ describe('schema backfill: work_items → tasks/jobs (harness/job-graph.md step 
     const jobs = (await sql`select id from jobs where id = ${workItemId}`) as Array<{ id: string }>;
     expect(jobs).toHaveLength(1);
   });
+
+  /**
+   * 3자 리뷰 수정 E4 (Fable M4): the mirror INSERT has no filter on the anchor task's status —
+   * graph/store.ts's insertJob (the REAL job-creation write path) rejects an insert under a
+   * terminal task with TerminalTaskError (rule 9), but this raw backfill INSERT bypasses that
+   * check entirely and would resurrect a brand-new mirror job under a task that's already closed
+   * to further writes (e.g. another repo already sealed and completed that task). Reproduced by
+   * pre-seeding the anchor task as already-terminal before the work_item's own context_id ever
+   * points at it — the tasks upsert above is `on conflict do nothing`, so this pre-existing status
+   * survives into the jobs INSERT that follows it.
+   */
+  test('does not mirror a work_item under an anchor task that is already terminal (rule 9 boundary)', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    await sql`insert into tasks (id, title, status) values (${contextId}, ${contextId}, 'done')`;
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'in_flow', 'do the thing', ${contextId})`;
+    await ensureSchema(sql);
+
+    const jobs = (await sql`select id from jobs where id = ${workItemId}`) as Array<{ id: string }>;
+    expect(jobs).toHaveLength(0);
+  });
+
+  /**
+   * 3자 리뷰 수정 E5 (Fable M5): the self-heal above (B2-2) only ever checked the mirror's own
+   * status ('running' -> done/failed once the source resolves) — it never checked GENERATION.
+   * bumpJobGeneration (graph/store.ts) can gen++ a terminal mirror back to 'pending' at generation
+   * 2 (a real re-run slot, independent of the untouched legacy work_item row) — without a
+   * generation guard, the very next boot's self-heal reads the still-terminal work_item and slams
+   * that fresh re-run slot straight back to done/failed, discarding it before it ever got claimed.
+   */
+  test('does not re-terminal a gen++\'d mirror job even once the source work_item reads done', async () => {
+    const projectId = id('project');
+    await makeProject(projectId);
+    const contextId = id('context');
+    const workItemId = id('wi');
+    await sql`insert into work_items (id, project_id, type, state, title, context_id)
+      values (${workItemId}, ${projectId}, 'flow', 'in_flow', 'do the thing', ${contextId})`;
+    await ensureSchema(sql); // first boot: mirrors as 'running', generation 1
+
+    // A real re-run cycle already moved this job on, independent of the legacy work_item row
+    // (which nothing else in this rollout-window scenario ever revisits again).
+    await sql`update jobs set status = 'pending', generation = 2 where id = ${workItemId}`;
+    await sql`update work_items set state = 'done' where id = ${workItemId}`;
+    await ensureSchema(sql); // second boot: self-heal must not touch a job past its original generation
+
+    const jobs = (await sql`select status, generation from jobs where id = ${workItemId}`) as Array<{
+      status: string;
+      generation: number;
+    }>;
+    expect(jobs[0]!.status).toBe('pending');
+    expect(jobs[0]!.generation).toBe(2);
+  });
 });

@@ -146,6 +146,60 @@ describe('reconcileTask — lease (harness/job-graph.md P2 spec A1)', () => {
   });
 });
 
+describe('reconcileTask — dep status write latch CAS (E-round task #8, Grok F-A2)', () => {
+  /**
+   * F-A2: jobIsReady's dep status write (`update deps set status = ${newStatus} where id =
+   * ${dep.id}`) carried no status condition — `dep.status` (the SELECT snapshot this pass's own
+   * evaluateDep call ran against) could be stale by the time the WRITE lands if a DIFFERENT,
+   * concurrently-committing reconcile pass already released this SAME dep in between (dispatchTask's
+   * inline call and this always-on controller's tick are NOT mutually exclusive, same as C1's own
+   * rationale). An unconditional write then clobbers 'released' back to 'stale'/'active' — a real
+   * regression of rule 11's latch (once released, never reverts).
+   *
+   * Constructed deterministically (no timing luck, same technique as the C1 test below): a
+   * `for update` lock is taken on the dep row in a SEPARATE transaction, which ALSO writes
+   * status='released' (but doesn't commit yet) — reconcileTask's own conditional UPDATE, once it
+   * gets there, genuinely BLOCKS on that same row (a real Postgres write-write conflict, not a
+   * race) until the lock is released.
+   */
+  test('a released dep is never clobbered by a concurrently-committing reconcile pass', async () => {
+    const { repoId, taskId } = await makeChain();
+    const targetJobId = await seedJob(taskId, repoId, 'pending'); // stays unmet — evaluateDep won't itself compute 'released'
+    const waiterJobId = await seedJob(taskId, repoId, 'pending');
+    const depId = id('dep');
+    await sql`insert into deps (id, waiter_job, status) values (${depId}, ${waiterJobId}, 'active')`;
+    // expected_gen=99 mismatches the target's real generation (1) — isStaleMember forces evaluateDep
+    // to compute 'stale' (not 'active'), so this pass's own write actually fires (newStatus differs
+    // from the 'active' snapshot it read) instead of being skipped by the `if (newStatus !==
+    // dep.status)` no-op guard.
+    await sql`insert into dep_members (dep_id, target_type, target_id, expected_gen) values (${depId}, 'job', ${targetJobId}, 99)`;
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    let releaseLock!: () => void;
+    const continueSignal = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const lockTxDone = sql.begin(async (tx) => {
+      await tx`select id from deps where id = ${depId} for update`;
+      // The "concurrent pass" release, from the SAME transaction that already holds the lock (a
+      // write from a DIFFERENT connection would itself block on this same lock).
+      await tx`update deps set status = 'released' where id = ${depId}`;
+      await continueSignal; // hold it open — don't commit yet
+    });
+    await new Promise((r) => setTimeout(r, 50)); // let the lock actually acquire + release-write land first
+
+    const p = reconcileTask(sql, taskId, dispatch);
+    await new Promise((r) => setTimeout(r, 100)); // let reconcileTask read the PRE-release snapshot and reach its own blocked write
+
+    releaseLock();
+    await lockTxDone; // commits status='released'
+    await p; // reconcileTask's blocked write resumes now — CAS-guarded, no-ops against the now-'released' row
+
+    const rows = (await sql`select status from deps where id = ${depId}`) as Array<{ status: string }>;
+    expect(rows[0]!.status).toBe('released'); // must NOT be clobbered back to 'stale'
+  });
+});
+
 describe('reconcileTask — not-ready blocked-write CAS (3자 리뷰 수정 C1, Grok F1)', () => {
   /**
    * F1: the not-ready branch's write (`update jobs set status = 'blocked' ...`) carried no status

@@ -88,7 +88,16 @@ async function jobIsReady(sql: SQL, jobId: string): Promise<boolean> {
     }
     const newStatus = evaluateDep({ predicate: dep.predicate, status: dep.status }, evalMembers);
     if (newStatus !== dep.status) {
-      await sql`update deps set status = ${newStatus} where id = ${dep.id}`;
+      // E-round task #8 (Grok F-A2) / rule 11's latch: `dep.status` is this loop iteration's own
+      // SELECT snapshot, not the row's live status — evaluateDep's `stale`/`active` never fires once
+      // ITS OWN read already sees 'released' (evaluateDep's own latch check), but a DIFFERENT,
+      // concurrently-running reconcile pass (dispatchTask's inline call and this always-on
+      // controller's tick are NOT mutually exclusive) could release this SAME dep in the gap between
+      // this pass's SELECT and this UPDATE. An unconditional write here would then clobber that
+      // newer 'released' back to 'stale'/'active' — a real regression of rule 11 (once released,
+      // never reverts). `and status <> 'released'` makes the write a no-op once that's happened,
+      // same CAS shape as every other write path's own status guard.
+      await sql`update deps set status = ${newStatus} where id = ${dep.id} and status <> 'released'`;
     }
     depStatuses.push(newStatus);
   }

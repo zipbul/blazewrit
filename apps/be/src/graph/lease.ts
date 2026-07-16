@@ -7,15 +7,23 @@ import type { OrchestratorStore } from '../orchestrator/types';
 export const DEFAULT_LEASE_TTL_MS = 10 * 60 * 1000;
 
 /**
- * Extends `jobId`'s lease by `ttlMs` from now — only while it's still 'running'. The status guard
- * matters: a job that already went terminal (or got reverted to pending as an orphan) must not
- * have its lease silently resurrected by a late-arriving renewal from a step that no longer
- * matters.
+ * Extends `jobId`'s lease by `ttlMs` from now — only while it's still 'running' AND still on the
+ * SAME `generation` the caller is renewing on behalf of. The status guard alone matters (a job
+ * that already went terminal, or got reverted to pending as an orphan, must not have its lease
+ * silently resurrected by a late-arriving renewal from a step that no longer matters) — but status
+ * alone isn't enough: a lease-expiry scan can fail a job, bumpJobGeneration (graph/store.ts) can
+ * gen++ it back to pending, and a re-claim can put it BACK to 'running' at the new generation,
+ * all before a stale heartbeat from the SUPERSEDED run finally lands. Without the generation
+ * guard, that stale heartbeat would still match `status = 'running'` and keep renewing a lease
+ * that belongs to a completely different run — exactly the escape hatch the caller's own
+ * generation-guarded terminal writes (rest.ts's executeJobFlow) are trying to close (3자 리뷰 수정
+ * E1, Fable M1: renewLease was the other half of that same hole — the terminal writes could lose
+ * the race, but a stray renewal could still keep the stale run's lease alive long enough to matter).
  */
-export async function renewLease(sql: SQL, jobId: string, ttlMs: number): Promise<void> {
+export async function renewLease(sql: SQL, jobId: string, ttlMs: number, generation: number): Promise<void> {
   await sql`
     update jobs set lease_expires_at = now() + (${ttlMs} * interval '1 millisecond')
-    where id = ${jobId} and status = 'running'
+    where id = ${jobId} and status = 'running' and generation = ${generation}
   `;
 }
 
@@ -34,20 +42,27 @@ export async function renewLease(sql: SQL, jobId: string, ttlMs: number): Promis
  * reloads it exactly as claim/heartbeat do. Every other status (`'completed'`/`'abandoned'`)
  * passes through untouched — executeJobFlow's own completion dual-write already clears the lease
  * for those.
+ *
+ * `generation` (3자 리뷰 수정 E1, Fable M1): the generation THIS wrapped store's caller is running
+ * on behalf of — captured once by rest.ts's executeJobFlow at dispatch time, not re-read live, so
+ * a stale wrapper instance from a superseded run can never renew (or suspend-clear/resume-reload)
+ * a lease that now belongs to a different generation's claim. Threaded into every write below,
+ * including the suspend-clear: an unguarded clear would otherwise null out a CURRENT generation's
+ * live lease in response to a stale HITL signal from a run that no longer owns this job.
  */
-export function withLeaseHeartbeat(store: OrchestratorStore, sql: SQL, jobId: string, ttlMs: number): OrchestratorStore {
+export function withLeaseHeartbeat(store: OrchestratorStore, sql: SQL, jobId: string, ttlMs: number, generation: number): OrchestratorStore {
   return {
     ...store,
     setCurrentStep: async (flowId, step) => {
       await store.setCurrentStep(flowId, step);
-      await renewLease(sql, jobId, ttlMs);
+      await renewLease(sql, jobId, ttlMs, generation);
     },
     setStatus: async (flowId, status) => {
       await store.setStatus(flowId, status);
       if (status === 'suspended') {
-        await sql`update jobs set lease_expires_at = null where id = ${jobId} and status = 'running'`;
+        await sql`update jobs set lease_expires_at = null where id = ${jobId} and status = 'running' and generation = ${generation}`;
       } else if (status === 'active') {
-        await renewLease(sql, jobId, ttlMs);
+        await renewLease(sql, jobId, ttlMs, generation);
       }
     },
   };

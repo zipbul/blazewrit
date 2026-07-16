@@ -42,6 +42,27 @@ async function setLeaseExpiresAt(jobId: string, when: Date): Promise<void> {
   await sql`update jobs set lease_expires_at = ${when} where id = ${jobId}`;
 }
 
+/** A flow row tied to `jobId` via flows.job_id (the same column pg-store.ts's createFlow always sets). */
+async function seedFlow(jobId: string, status: string): Promise<string> {
+  const flowId = id('flow');
+  await sql`
+    insert into flows (id, job_id, flow_type, status, current_step)
+    values (${flowId}, ${jobId}, 'chore', ${status}, 'implement')
+  `;
+  return flowId;
+}
+
+/** A decision row tied to `flowId` via decisions.flow_id — the HITL request/answer record
+ * rest.ts's requestDecision creates and /api/decisions/:id/answer later flips to 'answered'. */
+async function seedDecision(flowId: string, status: string): Promise<string> {
+  const decisionId = id('decision');
+  await sql`
+    insert into decisions (id, flow_id, status, request_type, question)
+    values (${decisionId}, ${flowId}, ${status}, 'single_choice', 'q?')
+  `;
+  return decisionId;
+}
+
 async function openWakeCount(kind: string, taskId: string): Promise<number> {
   const rows = (await sql`
     select id from decisions where request_type = 'agent_wake' and status = 'open' and meta->>'kind' = ${kind} and meta->>'taskId' = ${taskId}
@@ -71,6 +92,8 @@ afterAll(async () => {
   // this runs. Give it a moment to settle before closing the connection out from under it.
   await new Promise((r) => setTimeout(r, 500));
   await sql`delete from decisions where request_type = 'agent_wake' and meta->>'taskId' like ${PREFIX + '%'}`;
+  await sql`delete from decisions where id like ${PREFIX + '%'}`; // F-round: seedDecision's HITL rows
+  await sql`delete from flows where id like ${PREFIX + '%'}`;
   // FK-reverse order (dep_members/deps reference jobs; jobs/task_seals reference tasks/repos).
   await sql`delete from dep_members where dep_id like ${PREFIX + '%'}`;
   await sql`delete from deps where id like ${PREFIX + '%'}`;
@@ -260,6 +283,83 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       await new Promise((r) => setTimeout(r, 150));
       expect(await jobStatus(jobId)).toBe('running');
       expect(await openWakeCount('orphaned_ready', taskId)).toBe(0);
+    } finally {
+      controller.stop();
+    }
+  });
+
+  /**
+   * E-round task #9 (Grok F-A4 = Fable M6): the zombie scan's own A6 shape (running + NULL lease
+   * past the stall threshold) is EXACTLY what lease.ts's withLeaseHeartbeat deliberately produces
+   * on a HITL suspend (`setStatus('suspended')`, 3자 리뷰 수정 A라운드 A2) — a job legitimately
+   * waiting on a human decision, not a crashed worker. Before this fix, A6's scan had no way to
+   * tell the two apart and raised the same "crashed or backfill-stranded" orphaned_ready wake for
+   * both.
+   *
+   * F-round task #22 (Grok F-E3): narrowed since — "suspended flow" alone isn't enough, because a
+   * suspended flow left behind by a CRASH (resolver lost on restart, see the test below) has the
+   * exact same shape. The DB-visible tell is the decision itself: a live pause's decision is still
+   * 'open' (nobody has answered it yet), so THAT'S what this test now seeds and asserts stays
+   * excluded — the exclusion's real scope, not just "any suspended flow".
+   */
+  test('a job whose flow is suspended (HITL pause) with an OPEN decision is never flagged orphaned by the zombie scan, even past the stall threshold', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`update jobs set status_changed_at = ${new Date(Date.now() - 60_000)} where id = ${jobId}`;
+    const flowId = await seedFlow(jobId, 'suspended');
+    await seedDecision(flowId, 'open'); // still genuinely awaiting a human answer
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999, stallThresholdMs: 1_000 });
+    try {
+      // Give the scan several real passes a fair chance to (wrongly) flag this job.
+      for (let i = 0; i < 5; i++) {
+        await controller.tick();
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      expect(await openWakeCount('orphaned_ready', taskId)).toBe(0);
+      expect(await jobStatus(jobId)).toBe('running'); // untouched either way
+    } finally {
+      controller.stop();
+    }
+  });
+
+  /**
+   * F-round task #22 (Grok F-E3, the regression E-round's own exclusion introduced): a crash right
+   * after HITL suspend loses rest.ts's in-memory pendingDecisions resolver — a human answering
+   * `/api/decisions/:id/answer` afterward still flips the decision to 'answered', but nothing is
+   * left registered to actually resume the flow, so it stays 'suspended' forever with the job stuck
+   * 'running'+lease null. E-round's blanket "any suspended flow" exclusion hid this permanently (no
+   * wake, ever). Narrowed exclusion no longer matches here (the decision is 'answered', not 'open')
+   * — this case must wake, same as any other zombie.
+   */
+  test('a job whose flow is suspended but its decision was already ANSWERED (resolver lost after restart) still gets flagged as orphaned', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`update jobs set status_changed_at = ${new Date(Date.now() - 60_000)} where id = ${jobId}`;
+    const flowId = await seedFlow(jobId, 'suspended');
+    await seedDecision(flowId, 'answered'); // a human answered, but no resolver was left to resume it
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999, stallThresholdMs: 1_000 });
+    try {
+      await waitFor(async () => ((await openWakeCount('orphaned_ready', taskId)) > 0 ? true : undefined));
+      expect(await jobStatus(jobId)).toBe('running'); // never auto-failed -- a human decides (rule 4 spirit)
+    } finally {
+      controller.stop();
+    }
+  });
+
+  test('a running job with a NULL lease and an ABANDONED (not suspended) flow still gets flagged — the exclusion is narrow', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`update jobs set status_changed_at = ${new Date(Date.now() - 60_000)} where id = ${jobId}`;
+    await seedFlow(jobId, 'abandoned'); // a real crash mid-flow, not a HITL pause
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    const controller = startGraphController(sql, dispatch, { tickMs: 999_999, stallThresholdMs: 1_000 });
+    try {
+      await waitFor(async () => ((await openWakeCount('orphaned_ready', taskId)) > 0 ? true : undefined));
     } finally {
       controller.stop();
     }

@@ -95,23 +95,56 @@ export function startGraphController(sql: SQL, dispatch: (job: ReconcileJob) => 
         `) as Array<{ id: string }>;
         if (rows[0]) {
           expired.push(rows[0].id);
+          // E-round task #19/m7 (Fable m7): the legacy work_items mirror (jobId === workItemId,
+          // dispatchTask's own 1:1 convention) was left at 'in_flow' forever once A3 failed the
+          // jobs-table row out from under it — nothing else ever revisits a lease-expired job's
+          // work_item. /api/projects' activeCount (count(*) filter (where state='in_flow')) then
+          // over-counts permanently for every lease-expiry this scan ever catches. CAS-guarded like
+          // every other work_items write in this codebase (rest.ts's own dual-writes) — a job that
+          // was never mirrored (graph-only, no legacy row) just matches zero rows, harmlessly.
+          await sql`update work_items set state = 'blocked' where id = ${jobId} and state = 'in_flow'`.catch(() => undefined);
           await wake({ kind: 'lease_expired', taskId, jobId, reason: `잡 실행 lease가 만료되어 실패 처리했습니다 (jobId=${jobId}).` });
         }
       }
 
-      // A6 (3자 리뷰 수정 C3, Grok F12): a 'running' job with lease_expires_at NULL is ALWAYS
-      // abnormal — a legitimate claim (reconcileTask's ready→running transaction) grants a lease
-      // in the SAME transaction as the status write, so there is no window in which a genuinely
-      // claimed job is ever observed running with no lease. A crashed process's boot backfill
-      // (schema.ts's in_flow -> 'running' mirror, no lease set) is the known source. None of the
-      // other scans catch this shape (A3 requires lease NOT NULL; reconcile only touches
-      // pending/blocked; the stall backstop only scans 'blocked') — left unresolved forever
-      // otherwise. No auto-failure (rule 4 spirit, same as C1/C2 below): a human decides whether
-      // this is a genuine crash or a backfill artifact still worth re-registering.
+      // A6 (3자 리뷰 수정 C3, Grok F12): a 'running' job with lease_expires_at NULL is abnormal for
+      // a CRASHED worker — a legitimate claim (reconcileTask's ready→running transaction) grants a
+      // lease in the SAME transaction as the status write, so a genuinely claimed job is never
+      // observed running with no lease UNLESS something else deliberately cleared it. A crashed
+      // process's boot backfill (schema.ts's in_flow -> 'running' mirror, no lease set) is one
+      // known source.
+      //
+      // E-round task #9 (Grok F-A4 = Fable M6): the OTHER known source is deliberate, not a crash —
+      // lease.ts's withLeaseHeartbeat clears the lease on HITL suspend (`setStatus('suspended')`,
+      // 3자 리뷰 수정 A라운드 A2) precisely so THIS scan wouldn't fail a job mid-decision, but never
+      // excluded it from being flagged as an *orphan* wake either — a job legitimately waiting on a
+      // human got the same "crashed or backfill-stranded" treatment as an actual zombie.
+      //
+      // F-round task #22 (Grok F-E3): E-round's own exclusion (any suspended flow, full stop) was
+      // itself too broad — it also hid a genuine crash: HITL suspend leaves job='running'+lease
+      // null+flow='suspended', and the in-memory pendingDecisions resolver (rest.ts) that would
+      // ever flip that flow back to 'active' is lost on a process restart. A human answering
+      // `/api/decisions/:id/answer` afterward still flips decisions.status to 'answered', but the
+      // no-longer-registered resolver call is a no-op — the flow stays 'suspended' forever, with no
+      // wake to ever surface that. Narrowed to only exclude a suspended flow that STILL has an OPEN
+      // decision: that's the one DB-visible signal of "the process is still alive and a human is
+      // genuinely still deciding" (the live case this exclusion exists for). A suspended flow whose
+      // decision has already been answered (or has none at all) is exactly the resolver-lost case
+      // above — no longer excluded, so it wakes like any other zombie. Link: `decisions.flow_id` ->
+      // `flows.id` -> `flows.job_id` -> `jobs.id` (same job_id column createFlow always sets,
+      // pg-store.ts). Remaining gap (accepted): a crash where the human hasn't answered YET
+      // (decision still open) is indistinguishable in the DB from a live slow HITL wait, so it's
+      // still excluded — closing that needs real process-liveness/resumption (P4-2b), out of scope
+      // here. No auto-failure either way (rule 4 spirit, same as C1/C2 below): a human decides.
       const zombieRunning = (await sql`
         select id, task_id, title from jobs
         where status = 'running' and lease_expires_at is null
           and status_changed_at < now() - (${stallThresholdMs} * interval '1 millisecond')
+          and not exists (
+            select 1 from flows f
+            join decisions d on d.flow_id = f.id
+            where f.job_id = jobs.id and f.status = 'suspended' and d.status = 'open'
+          )
       `) as Array<{ id: string; task_id: string; title: string }>;
       for (const job of zombieRunning) {
         await wake({
