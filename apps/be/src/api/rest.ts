@@ -493,13 +493,41 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           set.status = 404;
           return errorResponse(req.id ?? null, A2A_ERRORS.TASK_NOT_FOUND ?? -32001, 'unknown project');
         }
-        const message = (req.params as { message?: { contextId?: string; parts?: Array<{ kind: string; text?: string }>; metadata?: Record<string, unknown> } } | undefined)?.message;
+        const message = (req.params as { message?: { messageId?: string; contextId?: string; parts?: Array<{ kind: string; text?: string }>; metadata?: Record<string, unknown> } } | undefined)?.message;
+        // messageId idempotency (harness/job-graph.md P3 migration 10, rule 8): required, not
+        // just conventional — the A2A spec's MessageDto already declares it a mandatory field,
+        // and every real caller in this codebase (dispatchViaA2A + every live test) already sends
+        // one, so enforcing it here rejects a malformed caller rather than silently degrading to
+        // "no idempotency for this message".
+        const messageId = message?.messageId;
+        if (typeof messageId !== 'string' || !messageId) {
+          set.status = 400;
+          return errorResponse(req.id ?? null, JSON_RPC_ERRORS.INVALID_PARAMS, 'message.messageId is required');
+        }
+        // Replay check: a stored response means this exact messageId already ran to a successful
+        // completion — return it verbatim, re-running nothing. Only a SUCCESSFUL response is ever
+        // stored (below, after dispatchTask returns) — a throw anywhere before that point leaves no
+        // row here, so a retry after a transient failure still gets to actually process. The
+        // JSON-RPC envelope `id` (transport-layer correlation, distinct from message.messageId) is
+        // NOT part of what messageId idempotency promises — a retry may legitimately carry a
+        // different envelope id, so it's overwritten with THIS request's id on replay.
+        const seen = (await sql`select response from a2a_inbox where message_id = ${messageId}`) as Array<{ response: unknown }>;
+        if (seen.length > 0) {
+          return { ...(parseJson(seen[0]!.response, {}) as Record<string, unknown>), id: req.id ?? null };
+        }
         const intent = message?.parts?.find((p) => p.kind === 'text')?.text ?? '';
         // Trust boundary: only an enum-valid carried flowType is honored; anything else falls back.
         const rawFlow = message?.metadata?.flowType;
         const carried = typeof rawFlow === 'string' && (FLOW_TYPES as readonly string[]).includes(rawFlow) ? (rawFlow as FlowType) : undefined;
         const taskId = dispatchTask(params.projectId, intent, message?.contextId, carried);
-        return { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
+        const response = { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
+        // Plain object, NOT JSON.stringify'd — bun's SQL driver double-encodes a string parameter
+        // into a jsonb column as a jsonb STRING SCALAR (see graph/wake.ts's raiseWake for the full
+        // story); a plain object binds correctly as a genuine jsonb object. on conflict do nothing:
+        // a concurrent duplicate racing this same messageId (P3 spec E, out of scope for this
+        // round) must not crash this request even if it loses the insert race.
+        await sql`insert into a2a_inbox (message_id, response) values (${messageId}, ${response}) on conflict (message_id) do nothing`;
+        return response;
       },
       { parse: 'text' },
     )
@@ -858,6 +886,22 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         status: r.status as string,
         createdAt: new Date(r.created_at as string).toISOString(),
       }));
+    })
+    // external_gates firing (harness/job-graph.md P3 migration 10, spec D): webhook/human/cron all
+    // land here — the one write path that flips a gate pending -> fired. Idempotent: firing an
+    // already-fired gate is a 200 no-op (the real-world event it represents may itself be
+    // redelivered), not an error. This does NOT touch job/task status itself (D6) — it only writes
+    // the gate; reconcileTask (graph/reconcile.ts) is what derives a waiting job's readiness from
+    // the fired gate on its next pass, same as any other dep target.
+    .post('/api/gates/:id/fire', async ({ params, set }) => {
+      const fired = (await sql`update external_gates set status = 'fired' where id = ${params.id} and status = 'pending' returning id`) as Array<{ id: string }>;
+      if (fired.length > 0) return { id: params.id, status: 'fired' };
+      const rows = (await sql`select status from external_gates where id = ${params.id}`) as Array<{ status: string }>;
+      if (!rows[0]) {
+        set.status = 404;
+        return { error: 'gate not found' };
+      }
+      return { id: params.id, status: rows[0].status }; // already fired — idempotent no-op
     })
     // Intent-resolved dispatch: the user approved a triage analysis, so route to the project the
     // central agent already resolved (re-validated here) instead of re-running the meta router.

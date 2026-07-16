@@ -189,6 +189,16 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     status text not null default 'pending' check (status in ('pending', 'fired')),
     created_at timestamptz not null default now()
   )`;
+  // A2A transport idempotency (harness/job-graph.md P3 migration 10, rule 8): message.messageId
+  // (A2A spec field, required on every inbound message) is the physical dedup key — a replayed
+  // messageId (network retry, at-least-once redelivery) returns this stored response verbatim
+  // instead of re-running the handler. No project scoping: messageId is client-generated and
+  // meant to be globally unique per the A2A spec.
+  await sql`create table if not exists a2a_inbox (
+    message_id text primary key,
+    response jsonb not null,
+    created_at timestamptz not null default now()
+  )`;
 
   // Backfill (harness/job-graph.md migration step 2): mirror projects → repos 1:1, with a
   // single placeholder product for repos that don't belong to one yet. Read-verification

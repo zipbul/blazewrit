@@ -12,11 +12,14 @@ const sql = new SQL(process.env.BW_PG_URL ?? 'postgres://postgres:blazewrit@loca
 const MARK = `asmwire-${Date.now()}`;
 const PROJECT = `${MARK}-proj`;
 
+// messageId must be unique per call (P3 migration 10 / rule 8: the A2A endpoint now dedups on it) —
+// a literal shared across both it()s below would make the second call replay the first's response.
+let msgSeq = 0;
 const a2aSend = (app: ReturnType<typeof createRestApi>, text: string, metadata?: Record<string, unknown>) =>
   app.handle(new Request(`http://localhost/agents/${encodeURIComponent(PROJECT)}/a2a`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: '1', method: 'message/send',
-      params: { message: { kind: 'message', messageId: 'm', role: 'user', parts: [{ kind: 'text', text }], ...(metadata ? { metadata } : {}) } } }),
+      params: { message: { kind: 'message', messageId: `m-${msgSeq++}`, role: 'user', parts: [{ kind: 'text', text }], ...(metadata ? { metadata } : {}) } } }),
   }));
 
 async function flowFor(title: string) {
@@ -54,6 +57,7 @@ afterAll(async () => {
   await sql`delete from step_runs where flow_id in (select f.id from flows f join work_items w on w.id = f.work_item_id where w.project_id = ${PROJECT})`;
   await sql`delete from flows where work_item_id in (select id from work_items where project_id = ${PROJECT})`;
   await sql`delete from work_items where project_id = ${PROJECT}`;
+  await sql`delete from a2a_inbox where message_id like ${'m-%'}`;
   await sql`delete from projects where id = ${PROJECT}`;
   await sql.end();
 }, 20_000);

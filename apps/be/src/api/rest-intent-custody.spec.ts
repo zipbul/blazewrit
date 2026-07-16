@@ -17,12 +17,15 @@ const post = (app: ReturnType<typeof createRestApi>, path: string, body: unknown
   app.handle(new Request(`http://localhost${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
 
 /** Drive the A2A endpoint directly (loopback self-fetch is not available inside app.handle tests). */
+// messageId must be unique per call (P3 migration 10 / rule 8: the A2A endpoint now dedups on it) —
+// a literal shared across all three it()s below would make the 2nd/3rd calls replay the 1st's response.
+let msgSeq = 0;
 const a2aSend = (app: ReturnType<typeof createRestApi>, projectId: string, text: string, metadata?: Record<string, unknown>) =>
   post(app, `/agents/${encodeURIComponent(projectId)}/a2a`, {
     jsonrpc: '2.0',
     id: 'r1',
     method: 'message/send',
-    params: { message: { kind: 'message', messageId: 'm1', role: 'user', parts: [{ kind: 'text', text }], ...(metadata ? { metadata } : {}) } },
+    params: { message: { kind: 'message', messageId: `m1-${msgSeq++}`, role: 'user', parts: [{ kind: 'text', text }], ...(metadata ? { metadata } : {}) } },
   });
 
 beforeAll(async () => {
@@ -50,6 +53,7 @@ afterAll(async () => {
   await sql`delete from step_runs where flow_id in (select f.id from flows f join work_items w on w.id = f.work_item_id where w.project_id = ${PROJECT})`;
   await sql`delete from flows where work_item_id in (select id from work_items where project_id = ${PROJECT})`;
   await sql`delete from work_items where project_id = ${PROJECT}`;
+  await sql`delete from a2a_inbox where message_id like ${'m1-%'}`;
   await sql`delete from projects where id = ${PROJECT}`;
   await sql.end();
 }, 20_000);
