@@ -22,10 +22,10 @@ import { JSON_RPC_ERRORS, A2A_ERRORS, FLOW_TYPES, type FlowType } from '@bw/dto'
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
 import { FlowHub, StepStreamHub, publishing } from './streams';
 import { createProposals } from '../meta/proposals';
-import { insertJob, insertJobTx, WriteAclError, TerminalTaskError, SliceSealedError, DepCycleError } from '../graph/store';
+import { insertJob, insertJobTx, insertDepTx, WriteAclError, TerminalTaskError, SliceSealedError, DepCycleError } from '../graph/store';
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
 import { loadTaskGraph } from '../graph/load-task-graph';
-import { wouldCreateCycle, type CycleEdge } from '../graph/cycle';
+import { insertProposal, TaskNotOpenError, type NegotiationAsk } from '../graph/negotiation';
 import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
 import { withLeaseHeartbeat, renewLease, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
 import { raiseWake } from '../graph/wake';
@@ -408,22 +408,6 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   type NegotiationResponse = Record<string, unknown> | JsonRpcErrorResponse;
 
   /**
-   * What one negotiation `ask` can request (harness/job-graph.md P3 migration 11, rule 8's frozen
-   * wire shape). job.repoId (judgment call, absent from the doc's shown `job?: { title,
-   * description? }`) is OPTIONAL and defaults to the provider's own repo when omitted — added
-   * because B3's own case ("accept의 job.repoId ≠ :projectId(provider) → ACL 거절") only makes
-   * sense if the ask can carry an attacker/mistake-controlled repoId for insertJobTx's existing
-   * ACL check to actually catch; the doc's prose (actor/ACL section) assumes this field exists
-   * even though the shown shape omits it.
-   */
-  interface NegotiationAsk {
-    taskId: string;
-    job?: { title: string; description?: string; repoId?: string };
-    dep?: { waiterJobId: string; targetType: 'job' | 'task' | 'external'; targetId: string; predicate?: 'all' | 'any'; acceptable?: string[] };
-    gate?: { kind: string; description?: string };
-  }
-
-  /**
    * accept's materialize (P3 migration 11, rule 8): writes ask.job/dep/gate + flips the proposal
    * to 'accepted', all in ONE transaction (spec's "원자 materialize" — a partial write is not
    * observable). `actorRepoId` is the provider (URL :projectId) — insertJobTx's own ACL check
@@ -446,19 +430,18 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         out.jobId = jobId;
       }
       if (ask.dep) {
-        // Cycle check (rule 7) against the REAL current graph, loaded inside this same transaction
-        // so it sees whatever a concurrently-committing accept already landed.
-        const { jobs, edges } = await loadTaskGraph(tx);
-        const candidate: CycleEdge = { waiterJobId: ask.dep.waiterJobId, targetType: ask.dep.targetType, targetId: ask.dep.targetId };
-        if (wouldCreateCycle(jobs, edges, candidate)) {
-          throw new DepCycleError(`dep ${candidate.waiterJobId} -> ${candidate.targetType}:${candidate.targetId} would create a cycle`);
-        }
+        // Cycle check (rule 7) + the deps/dep_members insert — insertDepTx (graph/store.ts, P4-1
+        // extraction) loads the REAL current graph inside THIS transaction, so it sees whatever a
+        // concurrently-committing accept already landed.
         const depId = newId();
-        await tx`insert into deps (id, waiter_job, predicate, status) values (${depId}, ${ask.dep.waiterJobId}, ${ask.dep.predicate ?? 'all'}, 'active')`;
-        await tx`
-          insert into dep_members (dep_id, target_type, target_id, acceptable)
-          values (${depId}, ${ask.dep.targetType}, ${ask.dep.targetId}, ${tx.array(ask.dep.acceptable ?? ['satisfied'], 'text')})
-        `;
+        await insertDepTx(tx, {
+          id: depId,
+          waiterJobId: ask.dep.waiterJobId,
+          targetType: ask.dep.targetType,
+          targetId: ask.dep.targetId,
+          predicate: ask.dep.predicate,
+          acceptable: ask.dep.acceptable,
+        });
         out.depId = depId;
       }
       if (ask.gate) {
@@ -470,7 +453,11 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     });
   };
 
-  /** request (kind='request'): records the ask as 'proposed'. Never materializes — accept does. */
+  /**
+   * request (kind='request'): records the ask as 'proposed'. Never materializes — accept does.
+   * The write itself is insertProposal (graph/negotiation.ts, P4-1 extraction) — shared with the
+   * a2a_request agent tool, which calls it directly (no JSON-RPC envelope to unwrap here).
+   */
   const requestProposal = async (
     toRepo: string,
     rpcId: string | number | null,
@@ -481,18 +468,17 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     if (!fromRepo || !ask || !ask.taskId) {
       return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, 'negotiation.fromRepo and ask.taskId are required for a request');
     }
-    const taskRows = (await sql`select status from tasks where id = ${ask.taskId}`) as Array<{ status: string }>;
-    if (!taskRows[0] || taskRows[0].status !== 'open') {
-      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `task ${ask.taskId} is not open for negotiation`);
+    try {
+      // on conflict do nothing (A3: a different messageId with the SAME proposalId+ask is
+      // processed again, since the idempotency key is messageId, not proposalId) — re-recording an
+      // identical proposal row is a safe no-op, not a duplicate-key crash. (insertProposal's own doc.)
+      await insertProposal(sql, { id: proposalId, taskId: ask.taskId, fromRepo, toRepo, kind: 'request', ask });
+    } catch (err) {
+      if (err instanceof TaskNotOpenError) {
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, err.message);
+      }
+      throw err;
     }
-    // on conflict do nothing (A3: a different messageId with the SAME proposalId+ask is processed
-    // again, since the idempotency key is messageId, not proposalId) — re-recording an identical
-    // proposal row is a safe no-op, not a duplicate-key crash.
-    await sql`
-      insert into a2a_proposals (id, task_id, from_repo, to_repo, kind, ask, status)
-      values (${proposalId}, ${ask.taskId}, ${fromRepo}, ${toRepo}, 'request', ${ask}, 'proposed')
-      on conflict (id) do nothing
-    `;
     return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'proposed' } };
   };
 

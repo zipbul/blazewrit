@@ -1,7 +1,9 @@
 import type { SQL } from 'bun';
 import { deriveTaskStatus } from './derive';
 import { bumpGeneration } from './transitions';
-import type { JobStatus, TaskStatus } from './types';
+import { wouldCreateCycle, type CycleEdge } from './cycle';
+import { loadTaskGraph } from './load-task-graph';
+import type { DepOutcome, DepPredicate, DepTargetType, JobStatus, TaskStatus } from './types';
 
 /** Rule 1: actorRepoId doesn't own the job/seal row being written. */
 export class WriteAclError extends Error {}
@@ -82,6 +84,50 @@ export async function insertJobTx(tx: SQL, actorRepoId: string, job: NewJobInput
     insert into jobs (id, task_id, repo_id, title, description, status, generation)
     values (${job.id}, ${job.taskId}, ${job.repoId}, ${job.title}, ${job.description ?? null}, 'pending', 1)
   `;
+}
+
+export interface NewDepInput {
+  id: string;
+  waiterJobId: string;
+  targetType: DepTargetType;
+  targetId: string;
+  predicate?: DepPredicate;
+  acceptable?: DepOutcome[];
+}
+
+/**
+ * Rule 7 (cycle check) + the deps/dep_members insert that materializes one wait-edge. Extracted
+ * (P4-1) out of rest.ts's materializeAsk so the negotiation accept path and dep_declare (P4 agent
+ * tool, graph/agent-tools.ts) share ONE cycle-check-then-insert body instead of two copies
+ * drifting apart. Loads the REAL current graph via loadTaskGraph(tx) — same transaction, so it
+ * sees whatever a concurrently-committing write already landed — and rejects with DepCycleError
+ * if `dep` would close a wait cycle.
+ *
+ * Deliberately does NOT check that `dep.waiterJobId` belongs to any particular repo —
+ * materializeAsk never enforced that (accepting a negotiation ask writes whatever dep the ask
+ * named, the provider's own consent to accept is the gate), so adding it here would be a behavior
+ * change for that caller. dep_declare enforces its own waiter-ownership ACL itself, before ever
+ * calling this (P4-1 judgment call — see agent-tools.ts).
+ *
+ * `tx` must already be an open transaction/savepoint context (mirrors insertJobTx's own contract)
+ * — this does NOT call `.begin()` itself.
+ */
+export async function insertDepTx(tx: SQL, dep: NewDepInput): Promise<void> {
+  const { jobs, edges } = await loadTaskGraph(tx);
+  const candidate: CycleEdge = { waiterJobId: dep.waiterJobId, targetType: dep.targetType, targetId: dep.targetId };
+  if (wouldCreateCycle(jobs, edges, candidate)) {
+    throw new DepCycleError(`dep ${candidate.waiterJobId} -> ${candidate.targetType}:${candidate.targetId} would create a cycle`);
+  }
+  await tx`insert into deps (id, waiter_job, predicate, status) values (${dep.id}, ${dep.waiterJobId}, ${dep.predicate ?? 'all'}, 'active')`;
+  await tx`
+    insert into dep_members (dep_id, target_type, target_id, acceptable)
+    values (${dep.id}, ${dep.targetType}, ${dep.targetId}, ${tx.array(dep.acceptable ?? ['satisfied'], 'text')})
+  `;
+}
+
+/** insertDepTx wrapped in its own transaction, for a caller that doesn't already hold one open (dep_declare's shape — see agent-tools.ts). */
+export async function insertDep(sql: SQL, dep: NewDepInput): Promise<void> {
+  await sql.begin((tx) => insertDepTx(tx, dep));
 }
 
 /**
