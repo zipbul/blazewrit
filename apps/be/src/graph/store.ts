@@ -12,6 +12,9 @@ export class SliceSealedError extends Error {}
 /** Rule 9: the task is terminal (done/failed/cancelled) — no further graph writes are allowed. */
 export class TerminalTaskError extends Error {}
 
+/** Rule 7: a proposed dep edge would close a wait cycle (cycle.ts's wouldCreateCycle said yes). */
+export class DepCycleError extends Error {}
+
 /** bumpJobGeneration target: no job row exists with the given id. */
 export class JobNotFoundError extends Error {}
 
@@ -48,26 +51,37 @@ export interface SealTarget {
  * shape-only write path.
  */
 export async function insertJob(sql: SQL, actorRepoId: string, job: NewJobInput): Promise<void> {
+  await sql.begin((tx) => insertJobTx(tx, actorRepoId, job));
+}
+
+/**
+ * insertJob's transactional core, split out (P3 migration 10/11) so a caller that already holds
+ * an open transaction can reuse the SAME ACL/rule-9/seal checks without nesting `.begin()` — bun's
+ * SQL rejects that outright ("cannot call begin inside a transaction use savepoint() instead").
+ * The negotiation accept handler (rest.ts) is exactly that caller: job/dep/gate materialize +
+ * the proposal's status flip all need to land in ONE transaction, and this is the piece of that
+ * transaction insertJob itself can't be called into directly. `tx` must already be an open
+ * transaction/savepoint context — this does NOT call `.begin()` itself.
+ */
+export async function insertJobTx(tx: SQL, actorRepoId: string, job: NewJobInput): Promise<void> {
   if (actorRepoId !== job.repoId) {
     throw new WriteAclError(`actor ${actorRepoId} cannot write jobs into repo ${job.repoId}`);
   }
-  await sql.begin(async (tx) => {
-    const taskRows = (await tx`select status from tasks where id = ${job.taskId} for update`) as Array<{ status: TaskStatus }>;
-    const task = taskRows[0];
-    if (task && task.status !== 'open') {
-      throw new TerminalTaskError(`task ${job.taskId} is terminal (${task.status})`);
-    }
+  const taskRows = (await tx`select status from tasks where id = ${job.taskId} for update`) as Array<{ status: TaskStatus }>;
+  const task = taskRows[0];
+  if (task && task.status !== 'open') {
+    throw new TerminalTaskError(`task ${job.taskId} is terminal (${task.status})`);
+  }
 
-    const sealRows = (await tx`select 1 from task_seals where task_id = ${job.taskId} and repo_id = ${job.repoId}`) as unknown[];
-    if (sealRows.length > 0) {
-      throw new SliceSealedError(`repo ${job.repoId} has already sealed its slice of task ${job.taskId}`);
-    }
+  const sealRows = (await tx`select 1 from task_seals where task_id = ${job.taskId} and repo_id = ${job.repoId}`) as unknown[];
+  if (sealRows.length > 0) {
+    throw new SliceSealedError(`repo ${job.repoId} has already sealed its slice of task ${job.taskId}`);
+  }
 
-    await tx`
-      insert into jobs (id, task_id, repo_id, title, description, status, generation)
-      values (${job.id}, ${job.taskId}, ${job.repoId}, ${job.title}, ${job.description ?? null}, 'pending', 1)
-    `;
-  });
+  await tx`
+    insert into jobs (id, task_id, repo_id, title, description, status, generation)
+    values (${job.id}, ${job.taskId}, ${job.repoId}, ${job.title}, ${job.description ?? null}, 'pending', 1)
+  `;
 }
 
 /**

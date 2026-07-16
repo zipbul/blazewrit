@@ -17,14 +17,15 @@ import { maybeSummarize, makeLlmSummarizer, type Summarizer } from '../triage/ch
 import { ScopeQueue } from '../triage/chat/scope-queue';
 import { seedProjectCard } from '../a2a/agent-card';
 import { parseJsonRpc } from '../a2a/jsonrpc';
-import { errorResponse } from '../a2a/types';
+import { errorResponse, type JsonRpcErrorResponse } from '../a2a/types';
 import { JSON_RPC_ERRORS, A2A_ERRORS, FLOW_TYPES, type FlowType } from '@bw/dto';
 import { toFlowDto, toStepRunDto, type FlowRow, type StepRunRow } from './mappers';
 import { FlowHub, StepStreamHub, publishing } from './streams';
 import { createProposals } from '../meta/proposals';
-import { insertJob } from '../graph/store';
+import { insertJob, insertJobTx, WriteAclError, TerminalTaskError, SliceSealedError, DepCycleError } from '../graph/store';
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
 import { loadTaskGraph } from '../graph/load-task-graph';
+import { wouldCreateCycle, type CycleEdge } from '../graph/cycle';
 import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
 import { withLeaseHeartbeat, renewLease, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
 import { raiseWake } from '../graph/wake';
@@ -403,6 +404,207 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     return workItemId;
   };
 
+  /** A negotiation reply is either a normal JSON-RPC success shape or errorResponse()'s own fixed shape. */
+  type NegotiationResponse = Record<string, unknown> | JsonRpcErrorResponse;
+
+  /**
+   * What one negotiation `ask` can request (harness/job-graph.md P3 migration 11, rule 8's frozen
+   * wire shape). job.repoId (judgment call, absent from the doc's shown `job?: { title,
+   * description? }`) is OPTIONAL and defaults to the provider's own repo when omitted — added
+   * because B3's own case ("accept의 job.repoId ≠ :projectId(provider) → ACL 거절") only makes
+   * sense if the ask can carry an attacker/mistake-controlled repoId for insertJobTx's existing
+   * ACL check to actually catch; the doc's prose (actor/ACL section) assumes this field exists
+   * even though the shown shape omits it.
+   */
+  interface NegotiationAsk {
+    taskId: string;
+    job?: { title: string; description?: string; repoId?: string };
+    dep?: { waiterJobId: string; targetType: 'job' | 'task' | 'external'; targetId: string; predicate?: 'all' | 'any'; acceptable?: string[] };
+    gate?: { kind: string; description?: string };
+  }
+
+  /**
+   * accept's materialize (P3 migration 11, rule 8): writes ask.job/dep/gate + flips the proposal
+   * to 'accepted', all in ONE transaction (spec's "원자 materialize" — a partial write is not
+   * observable). `actorRepoId` is the provider (URL :projectId) — insertJobTx's own ACL check
+   * (actorRepoId === job.repoId) is what actually rejects a job ask aimed at someone else's repo
+   * (B3, via ask.job.repoId); this function doesn't duplicate that check, it just supplies
+   * actorRepoId as the acting party and lets ask.job.repoId (or actorRepoId itself, by default)
+   * be the job's own repoId.
+   */
+  const materializeAsk = async (actorRepoId: string, ask: NegotiationAsk): Promise<Record<string, string>> => {
+    return sql.begin(async (tx) => {
+      const taskRows = (await tx`select status from tasks where id = ${ask.taskId} for update`) as Array<{ status: string }>;
+      if (taskRows[0] && taskRows[0].status !== 'open') {
+        throw new TerminalTaskError(`task ${ask.taskId} is terminal (${taskRows[0].status})`);
+      }
+      const out: Record<string, string> = {};
+      if (ask.job) {
+        const jobId = newId();
+        const jobRepoId = ask.job.repoId ?? actorRepoId;
+        await insertJobTx(tx, actorRepoId, { id: jobId, taskId: ask.taskId, repoId: jobRepoId, title: ask.job.title, description: ask.job.description });
+        out.jobId = jobId;
+      }
+      if (ask.dep) {
+        // Cycle check (rule 7) against the REAL current graph, loaded inside this same transaction
+        // so it sees whatever a concurrently-committing accept already landed.
+        const { jobs, edges } = await loadTaskGraph(tx);
+        const candidate: CycleEdge = { waiterJobId: ask.dep.waiterJobId, targetType: ask.dep.targetType, targetId: ask.dep.targetId };
+        if (wouldCreateCycle(jobs, edges, candidate)) {
+          throw new DepCycleError(`dep ${candidate.waiterJobId} -> ${candidate.targetType}:${candidate.targetId} would create a cycle`);
+        }
+        const depId = newId();
+        await tx`insert into deps (id, waiter_job, predicate, status) values (${depId}, ${ask.dep.waiterJobId}, ${ask.dep.predicate ?? 'all'}, 'active')`;
+        await tx`
+          insert into dep_members (dep_id, target_type, target_id, acceptable)
+          values (${depId}, ${ask.dep.targetType}, ${ask.dep.targetId}, ${tx.array(ask.dep.acceptable ?? ['satisfied'], 'text')})
+        `;
+        out.depId = depId;
+      }
+      if (ask.gate) {
+        const gateId = newId();
+        await tx`insert into external_gates (id, task_id, kind, description, status) values (${gateId}, ${ask.taskId}, ${ask.gate.kind}, ${ask.gate.description ?? null}, 'pending')`;
+        out.gateId = gateId;
+      }
+      return out;
+    });
+  };
+
+  /** request (kind='request'): records the ask as 'proposed'. Never materializes — accept does. */
+  const requestProposal = async (
+    toRepo: string,
+    rpcId: string | number | null,
+    proposalId: string,
+    fromRepo: string | undefined,
+    ask: NegotiationAsk | undefined,
+  ): Promise<NegotiationResponse> => {
+    if (!fromRepo || !ask || !ask.taskId) {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, 'negotiation.fromRepo and ask.taskId are required for a request');
+    }
+    const taskRows = (await sql`select status from tasks where id = ${ask.taskId}`) as Array<{ status: string }>;
+    if (!taskRows[0] || taskRows[0].status !== 'open') {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `task ${ask.taskId} is not open for negotiation`);
+    }
+    // on conflict do nothing (A3: a different messageId with the SAME proposalId+ask is processed
+    // again, since the idempotency key is messageId, not proposalId) — re-recording an identical
+    // proposal row is a safe no-op, not a duplicate-key crash.
+    await sql`
+      insert into a2a_proposals (id, task_id, from_repo, to_repo, kind, ask, status)
+      values (${proposalId}, ${ask.taskId}, ${fromRepo}, ${toRepo}, 'request', ${ask}, 'proposed')
+      on conflict (id) do nothing
+    `;
+    return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'proposed' } };
+  };
+
+  /** accept (kind='accept'): materializes the referenced proposal's ask, or rejects it. */
+  const acceptProposal = async (actorRepoId: string, rpcId: string | number | null, proposalId: string): Promise<NegotiationResponse> => {
+    const rows = (await sql`select task_id, from_repo, to_repo, ask, status from a2a_proposals where id = ${proposalId}`) as Array<{
+      task_id: string;
+      from_repo: string;
+      to_repo: string;
+      ask: unknown;
+      status: string;
+    }>;
+    const proposal = rows[0];
+    if (!proposal) {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${proposalId} not found`);
+    }
+    if (proposal.status === 'accepted') {
+      // B7: a re-accept of an ALREADY-accepted proposal (different messageId — the same messageId
+      // never reaches here, a2a_inbox already sealed it). insertJob has no upsert, so re-running
+      // materialize isn't safe; this is the "존재 검사" the spec calls for instead.
+      return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'accepted', alreadyAccepted: true } };
+    }
+    if (proposal.status !== 'proposed') {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${proposalId} is ${proposal.status}, not acceptable`);
+    }
+    if (actorRepoId !== proposal.to_repo) {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `${actorRepoId} is not the provider of proposal ${proposalId}`);
+    }
+    const ask = parseJson(proposal.ask, {}) as NegotiationAsk;
+    try {
+      const materialized = await materializeAsk(actorRepoId, ask);
+      await sql`update a2a_proposals set status = 'accepted' where id = ${proposalId}`;
+      return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId, status: 'accepted', ...materialized } };
+    } catch (err) {
+      if (err instanceof WriteAclError || err instanceof TerminalTaskError || err instanceof SliceSealedError || err instanceof DepCycleError) {
+        // B6: materializeAsk's own transaction already rolled back — this is a SEPARATE statement
+        // recording the rejection, not part of that rolled-back transaction.
+        await sql`update a2a_proposals set status = 'rejected' where id = ${proposalId}`;
+        return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, err.message);
+      }
+      throw err; // unexpected failure: NOT stored in a2a_inbox either (A5 semantics) — retryable
+    }
+  };
+
+  /** counter (kind='counter'): the original proposal -> 'countered'; a NEW, direction-reversed proposal is recorded (not materialized). */
+  const counterProposal = async (
+    requesterRepoId: string,
+    rpcId: string | number | null,
+    originalProposalId: string,
+    ask: NegotiationAsk | undefined,
+  ): Promise<NegotiationResponse> => {
+    const rows = (await sql`select task_id, from_repo, to_repo, status from a2a_proposals where id = ${originalProposalId}`) as Array<{
+      task_id: string;
+      from_repo: string;
+      to_repo: string;
+      status: string;
+    }>;
+    const original = rows[0];
+    if (!original) {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${originalProposalId} not found`);
+    }
+    if (original.status !== 'proposed') {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `proposal ${originalProposalId} is ${original.status}, not counterable`);
+    }
+    // :projectId (URL) is "whoever must decide next" — for a counter, that's the ORIGINAL
+    // requester (roles reversed), so the call must land at THEIR endpoint.
+    if (requesterRepoId !== original.from_repo) {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `${requesterRepoId} did not originate proposal ${originalProposalId}`);
+    }
+    if (!ask || !ask.taskId) {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, 'ask is required for a counter');
+    }
+    const counterProposalId = newId();
+    await sql.begin(async (tx) => {
+      await tx`update a2a_proposals set status = 'countered' where id = ${originalProposalId}`;
+      await tx`
+        insert into a2a_proposals (id, task_id, from_repo, to_repo, kind, ask, status)
+        values (${counterProposalId}, ${ask.taskId}, ${original.to_repo}, ${original.from_repo}, 'counter', ${ask}, 'proposed')
+      `;
+    });
+    return { jsonrpc: '2.0', id: rpcId, result: { kind: 'negotiation', proposalId: originalProposalId, status: 'countered', counterProposalId } };
+  };
+
+  /**
+   * P3 migration 10/11 (harness/job-graph.md), rule 8's negotiation half: routed here INSTEAD of
+   * dispatchTask when message.metadata.negotiation is present (F2 — the intent path is untouched,
+   * this never creates a work_item). At most one round-trip per the frozen protocol decision — no
+   * FSM, a counter is just a direction-reversed new request.
+   *
+   * fromRepo (judgment call, not among the wire shape's shown fields): the endpoint's URL
+   * :projectId only ever identifies the PROVIDER — the recipient for 'request', the acting party
+   * for 'accept', and (roles reversed) the ORIGINAL requester for 'counter'. Nothing else in the
+   * message identifies the OTHER side of a brand-new request, so 'request' alone carries it
+   * explicitly; 'accept'/'counter' both derive it from the already-stored proposal row instead.
+   */
+  const handleNegotiation = async (
+    providerRepoId: string,
+    rpcId: string | number | null,
+    negotiation: { kind?: unknown; proposalId?: unknown; fromRepo?: unknown; ask?: unknown },
+  ): Promise<NegotiationResponse> => {
+    const { kind, proposalId } = negotiation;
+    if (typeof proposalId !== 'string' || !proposalId) {
+      return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, 'negotiation.proposalId is required');
+    }
+    const fromRepo = typeof negotiation.fromRepo === 'string' ? negotiation.fromRepo : undefined;
+    const ask = negotiation.ask as NegotiationAsk | undefined;
+    if (kind === 'request') return requestProposal(providerRepoId, rpcId, proposalId, fromRepo, ask);
+    if (kind === 'accept') return acceptProposal(providerRepoId, rpcId, proposalId);
+    if (kind === 'counter') return counterProposal(providerRepoId, rpcId, proposalId, ask);
+    return errorResponse(rpcId, JSON_RPC_ERRORS.INVALID_PARAMS, `unknown negotiation.kind: ${String(kind)}`);
+  };
+
   /** Resolve a project's served Agent Card (stored domain card, or a name-derived fallback). */
   const serveCard = async (projectId: string, set: { status?: number | string }) => {
     const rows = (await sql`select id, name, card from projects where id = ${projectId}`) as Array<Record<string, unknown>>;
@@ -493,7 +695,9 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           set.status = 404;
           return errorResponse(req.id ?? null, A2A_ERRORS.TASK_NOT_FOUND ?? -32001, 'unknown project');
         }
-        const message = (req.params as { message?: { messageId?: string; contextId?: string; parts?: Array<{ kind: string; text?: string }>; metadata?: Record<string, unknown> } } | undefined)?.message;
+        const message = (req.params as
+          | { message?: { messageId?: string; contextId?: string; parts?: Array<{ kind: string; text?: string }>; metadata?: { flowType?: unknown; negotiation?: Record<string, unknown> } } }
+          | undefined)?.message;
         // messageId idempotency (harness/job-graph.md P3 migration 10, rule 8): required, not
         // just conventional — the A2A spec's MessageDto already declares it a mandatory field,
         // and every real caller in this codebase (dispatchViaA2A + every live test) already sends
@@ -515,12 +719,20 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         if (seen.length > 0) {
           return { ...(parseJson(seen[0]!.response, {}) as Record<string, unknown>), id: req.id ?? null };
         }
-        const intent = message?.parts?.find((p) => p.kind === 'text')?.text ?? '';
-        // Trust boundary: only an enum-valid carried flowType is honored; anything else falls back.
-        const rawFlow = message?.metadata?.flowType;
-        const carried = typeof rawFlow === 'string' && (FLOW_TYPES as readonly string[]).includes(rawFlow) ? (rawFlow as FlowType) : undefined;
-        const taskId = dispatchTask(params.projectId, intent, message?.contextId, carried);
-        const response = { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
+        // Negotiation routing (F2): metadata.negotiation present -> the negotiation handler
+        // INSTEAD of dispatchTask. The intent path below is otherwise completely untouched (F1).
+        const negotiation = message?.metadata?.negotiation;
+        let response: NegotiationResponse;
+        if (negotiation && typeof negotiation === 'object') {
+          response = await handleNegotiation(params.projectId, req.id ?? null, negotiation);
+        } else {
+          const intent = message?.parts?.find((p) => p.kind === 'text')?.text ?? '';
+          // Trust boundary: only an enum-valid carried flowType is honored; anything else falls back.
+          const rawFlow = message?.metadata?.flowType;
+          const carried = typeof rawFlow === 'string' && (FLOW_TYPES as readonly string[]).includes(rawFlow) ? (rawFlow as FlowType) : undefined;
+          const taskId = dispatchTask(params.projectId, intent, message?.contextId, carried);
+          response = { jsonrpc: '2.0', id: req.id ?? null, result: { kind: 'task', id: taskId, status: { state: 'working' } } };
+        }
         // Plain object, NOT JSON.stringify'd — bun's SQL driver double-encodes a string parameter
         // into a jsonb column as a jsonb STRING SCALAR (see graph/wake.ts's raiseWake for the full
         // story); a plain object binds correctly as a genuine jsonb object. on conflict do nothing:

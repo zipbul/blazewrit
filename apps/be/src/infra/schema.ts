@@ -199,6 +199,21 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     response jsonb not null,
     created_at timestamptz not null default now()
   )`;
+  // A2A negotiation (harness/job-graph.md P3 migration 11, rule 8): one round-trip, request ->
+  // (accept | counter) — no FSM, a counter is just a direction-reversed new request. `ask` carries
+  // WHAT is being asked for (job/dep/gate) as a plain object (jsonb — see a2a_inbox's own note on
+  // double-encoding, same trap). Materialize only ever happens on accept, in one DB transaction;
+  // request/counter only ever write this table.
+  await sql`create table if not exists a2a_proposals (
+    id text primary key,
+    task_id text not null references tasks(id),
+    from_repo text not null,
+    to_repo text not null,
+    kind text not null check (kind in ('request', 'counter')),
+    ask jsonb not null,
+    status text not null default 'proposed' check (status in ('proposed', 'accepted', 'countered', 'rejected')),
+    created_at timestamptz not null default now()
+  )`;
 
   // Backfill (harness/job-graph.md migration step 2): mirror projects → repos 1:1, with a
   // single placeholder product for repos that don't belong to one yet. Read-verification
