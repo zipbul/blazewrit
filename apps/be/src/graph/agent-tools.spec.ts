@@ -10,6 +10,7 @@ import {
   TASK_SEAL_TOOL,
   TASK_UNSEAL_TOOL,
   A2A_REQUEST_TOOL,
+  GRAPH_READ_TOOL,
   type GraphToolContext,
   type GraphToolDef,
 } from './agent-tools';
@@ -87,10 +88,12 @@ afterAll(async () => {
 });
 
 describe('buildGraphTools (harness/job-graph.md 그래프 관리 배선 decisions 1-4)', () => {
-  test('exposes exactly the six shape-only tools and no state-transition tool (decision 3)', () => {
+  test('exposes exactly the six shape-only tools plus graph_read, and no state-transition tool (decision 3)', () => {
     const tools = buildGraphTools(ctxFor('irrelevant-task', 'irrelevant-repo'));
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual([A2A_REQUEST_TOOL, DEP_DECLARE_TOOL, DEP_RETRACT_TOOL, JOB_ADD_TOOL, TASK_SEAL_TOOL, TASK_UNSEAL_TOOL].sort());
+    expect(names).toEqual(
+      [A2A_REQUEST_TOOL, DEP_DECLARE_TOOL, DEP_RETRACT_TOOL, GRAPH_READ_TOOL, JOB_ADD_TOOL, TASK_SEAL_TOOL, TASK_UNSEAL_TOOL].sort(),
+    );
     for (const forbidden of ['job_set_done', 'job_set_failed', 'job_cancel', 'job_ready', 'task_set_done', 'task_cancel']) {
       expect(names).not.toContain(forbidden);
     }
@@ -281,5 +284,87 @@ describe('buildGraphTools (harness/job-graph.md 그래프 관리 배선 decision
     const res = await call(tools, A2A_REQUEST_TOOL, { toRepo: repoQ, ask: { job: { title: 'help me' } } });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain('TaskNotOpenError');
+  });
+
+  test("graph_read returns only THIS ctx.taskId's jobs, excluding another task's", async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    await call(tools, JOB_ADD_TOOL, { title: 'a' });
+    await call(tools, JOB_ADD_TOOL, { title: 'b' });
+
+    const otherTaskId = id('other-task');
+    await sql`insert into tasks (id, title, status) values (${otherTaskId}, ${otherTaskId}, 'open')`;
+    await sql`insert into jobs (id, task_id, repo_id, title, status, generation)
+      values (${id('other-job')}, ${otherTaskId}, ${repoP}, 'elsewhere', 'pending', 1)`;
+
+    const res = await call(tools, GRAPH_READ_TOOL, {});
+    expect(res.isError).toBeUndefined();
+    const { jobs } = payload(res) as { jobs: Array<{ title: string }> };
+    expect(jobs.map((j) => j.title).sort()).toEqual(['a', 'b']);
+  });
+
+  test('graph_read returns cross-repo jobs both, flagging mine=true for ctx.actorRepoId and mine=false for the other repo', async () => {
+    const { taskId, repoP, repoQ } = await makeTwoRepoTask();
+    const toolsP = buildGraphTools(ctxFor(taskId, repoP));
+    const toolsQ = buildGraphTools(ctxFor(taskId, repoQ));
+    const { jobId: jobPId } = payload(await call(toolsP, JOB_ADD_TOOL, { title: 'p-job' })) as { jobId: string };
+    const { jobId: jobQId } = payload(await call(toolsQ, JOB_ADD_TOOL, { title: 'q-job' })) as { jobId: string };
+
+    const res = await call(toolsP, GRAPH_READ_TOOL, {});
+    const { jobs } = payload(res) as { jobs: Array<{ id: string; mine: boolean }> };
+    const mineById = new Map(jobs.map((j) => [j.id, j.mine]));
+    expect(mineById.get(jobPId)).toBe(true);
+    expect(mineById.get(jobQId)).toBe(false);
+  });
+
+  test('graph_read returns a dep_declare-created dep alongside its members (waiterJobId, targetId, outcome)', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const { jobId: waiterJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'waiter' })) as { jobId: string };
+    const { jobId: targetJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'target' })) as { jobId: string };
+    const { depId } = payload(await call(tools, DEP_DECLARE_TOOL, { waiterJobId, targetType: 'job', targetId: targetJobId })) as {
+      depId: string;
+    };
+
+    const res = await call(tools, GRAPH_READ_TOOL, {});
+    const { deps } = payload(res) as {
+      deps: Array<{
+        id: string;
+        waiterJobId: string;
+        predicate: string;
+        status: string;
+        members: Array<{ targetType: string; targetId: string; outcome: string; acceptable: string[] }>;
+      }>;
+    };
+    const dep = deps.find((d) => d.id === depId);
+    expect(dep).toMatchObject({ waiterJobId, predicate: 'all', status: 'active' });
+    expect(dep!.members).toEqual([{ targetType: 'job', targetId: targetJobId, outcome: 'pending', acceptable: ['satisfied'] }]);
+  });
+
+  test('graph_read on a task with no jobs returns { jobs: [], deps: [] }', async () => {
+    const emptyTaskId = id('empty-task');
+    await sql`insert into tasks (id, title, status) values (${emptyTaskId}, ${emptyTaskId}, 'open')`;
+    const tools = buildGraphTools(ctxFor(emptyTaskId, 'irrelevant-repo'));
+    const res = await call(tools, GRAPH_READ_TOOL, {});
+    expect(payload(res)).toEqual({ taskId: emptyTaskId, jobs: [], deps: [] });
+  });
+
+  test('graph_read is read-only — job/dep row counts are unchanged after calling it', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const { jobId: waiterJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'waiter' })) as { jobId: string };
+    const { jobId: targetJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'target' })) as { jobId: string };
+    await call(tools, DEP_DECLARE_TOOL, { waiterJobId, targetType: 'job', targetId: targetJobId });
+
+    const jobsBefore = (await sql`select count(*)::int as n from jobs where task_id = ${taskId}`) as Array<{ n: number }>;
+    const depsBefore = (await sql`select count(*)::int as n from deps`) as Array<{ n: number }>;
+
+    await call(tools, GRAPH_READ_TOOL, {});
+    await call(tools, GRAPH_READ_TOOL, {});
+
+    const jobsAfter = (await sql`select count(*)::int as n from jobs where task_id = ${taskId}`) as Array<{ n: number }>;
+    const depsAfter = (await sql`select count(*)::int as n from deps`) as Array<{ n: number }>;
+    expect(jobsAfter[0]!.n).toBe(jobsBefore[0]!.n);
+    expect(depsAfter[0]!.n).toBe(depsBefore[0]!.n);
   });
 });

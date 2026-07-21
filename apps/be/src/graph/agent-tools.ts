@@ -14,10 +14,12 @@ import { insertProposal, type NegotiationAsk } from './negotiation';
  *   2. `repoId`/`taskId` are NEVER a tool input — GraphToolContext binds them (the harness's job,
  *      not shown here: whichever repo's wake session this is). No input schema below has a repoId
  *      or taskId field, so an agent has no field to spoof even if it tried.
- *   3. No state-transition tool exists (no job_set_done/job_cancel/job_ready/…) — every tool here
- *      changes the graph's SHAPE only (add a job, declare/retract a dep, seal/unseal a slice,
+ *   3. No state-transition tool exists (no job_set_done/job_cancel/job_ready/…) — every WRITE tool
+ *      here changes the graph's SHAPE only (add a job, declare/retract a dep, seal/unseal a slice,
  *      request from another repo). done/failed only ever come from flow-execution results;
- *      ready only ever comes from reconcile.
+ *      ready only ever comes from reconcile. graph_read (task#29) is the one exception to "write
+ *      tool" in that sentence — it changes nothing at all, so it can't violate decision 3 either.
+
  *   4. (Not this module's concern — wiring these into a live wake session's `options.mcpServers`
  *      is P4-2.)
  */
@@ -47,6 +49,7 @@ export const DEP_RETRACT_TOOL = 'dep_retract';
 export const TASK_SEAL_TOOL = 'task_seal';
 export const TASK_UNSEAL_TOOL = 'task_unseal';
 export const A2A_REQUEST_TOOL = 'a2a_request';
+export const GRAPH_READ_TOOL = 'graph_read';
 
 /** Fully-qualified tool names an agent must be allow-listed for (mirrors triage/*.tool.ts's own *_FQN convention). */
 export const JOB_ADD_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${JOB_ADD_TOOL}`;
@@ -55,6 +58,7 @@ export const DEP_RETRACT_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${DEP_RETRACT_TOO
 export const TASK_SEAL_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${TASK_SEAL_TOOL}`;
 export const TASK_UNSEAL_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${TASK_UNSEAL_TOOL}`;
 export const A2A_REQUEST_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${A2A_REQUEST_TOOL}`;
+export const GRAPH_READ_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${GRAPH_READ_TOOL}`;
 
 const DEP_TARGET_TYPES = ['job', 'task', 'external'] as const;
 const DEP_PREDICATES = ['all', 'any'] as const;
@@ -230,6 +234,80 @@ function buildTaskUnsealTool(ctx: GraphToolContext): GraphToolDef {
 }
 
 /**
+ * graph_read() — the ONE read tool in this module (task#29, live discovery: a wake session's other
+ * six tools are all writes, so an agent had no way to learn an existing job's real id and resorted
+ * to brute-force guessing it before calling dep_declare/dep_retract). Scoped to ctx.taskId, same as
+ * every write tool here, but NOT scoped to ctx.actorRepoId the way writes are — an agent needs to
+ * see the WHOLE task's graph (every repo's jobs) to make a sound dep_declare/dep_retract call,
+ * since a dep's target need not be its own repo's job (buildDepDeclareTool's own docstring: "대상은
+ * 네 것이 아니어도 되지만"). Each returned job carries `mine` (repoId === ctx.actorRepoId) precisely
+ * so the agent can tell which jobs it's allowed to act on (job_add/dep_declare's waiter) from which
+ * it can only read.
+ *
+ * Read-only — decision 3 ("no state-transition tool") governs tools that change status; this
+ * changes nothing at all, so it isn't a decision-3 violation by construction, not by exception.
+ * deps are the ones whose waiter is one of THIS task's jobs (mirrors load-task-graph.ts's own
+ * join, scoped down to one task instead of the whole graph), grouped with their dep_members.
+ */
+function buildGraphReadTool(ctx: GraphToolContext): GraphToolDef {
+  return tool(
+    GRAPH_READ_TOOL,
+    '이번 태스크의 현재 그래프(잡·의존)를 조회한다. dep를 걸거나 철회하기 전에 이걸로 실제 잡 ID와 ' +
+      '상태를 확인하라. mine=true인 잡만 네가 바꿀 수 있다(다른 잡은 볼 수만).',
+    {},
+    async () => {
+      try {
+        const jobRows = (await ctx.sql`
+          select id, repo_id, title, status, generation from jobs where task_id = ${ctx.taskId} order by created_at
+        `) as Array<{ id: string; repo_id: string; title: string; status: string; generation: number }>;
+        const jobs = jobRows.map((j) => ({
+          id: j.id,
+          repoId: j.repo_id,
+          title: j.title,
+          status: j.status,
+          generation: j.generation,
+          mine: j.repo_id === ctx.actorRepoId,
+        }));
+
+        const depRows = (await ctx.sql`
+          select d.id, d.waiter_job, d.predicate, d.status, dm.target_type, dm.target_id, dm.outcome, dm.acceptable
+          from deps d
+          join dep_members dm on dm.dep_id = d.id
+          where d.waiter_job in (select id from jobs where task_id = ${ctx.taskId})
+          order by d.id
+        `) as Array<{
+          id: string;
+          waiter_job: string;
+          predicate: string;
+          status: string;
+          target_type: string;
+          target_id: string;
+          outcome: string;
+          acceptable: string[];
+        }>;
+
+        const depsById = new Map<
+          string,
+          { id: string; waiterJobId: string; predicate: string; status: string; members: Array<{ targetType: string; targetId: string; outcome: string; acceptable: string[] }> }
+        >();
+        for (const row of depRows) {
+          let dep = depsById.get(row.id);
+          if (!dep) {
+            dep = { id: row.id, waiterJobId: row.waiter_job, predicate: row.predicate, status: row.status, members: [] };
+            depsById.set(row.id, dep);
+          }
+          dep.members.push({ targetType: row.target_type, targetId: row.target_id, outcome: row.outcome, acceptable: row.acceptable });
+        }
+
+        return okResult({ taskId: ctx.taskId, jobs, deps: [...depsById.values()] });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+}
+
+/**
  * a2a_request(toRepo, ask) — issues a P3 negotiation request to another repo, internally (a direct
  * DB write via insertProposal, graph/negotiation.ts — not a real network round-trip through our
  * own /a2a endpoint; that HTTP hop is what a genuinely cross-process repo would need, not what an
@@ -272,12 +350,15 @@ function buildA2aRequestTool(ctx: GraphToolContext): GraphToolDef {
 
 /**
  * The full P4 graph toolset for one wake session, bound to `ctx` (harness/job-graph.md decision 2
- * — repoId/taskId live in ctx, never in a tool's input schema). Deliberately six tools, no more:
- * job_add, dep_declare, dep_retract, task_seal, task_unseal, a2a_request. NO state-transition tool
- * (decision 3) — grep this list for job_set_done/job_cancel/job_ready and you will not find them.
+ * — repoId/taskId live in ctx, never in a tool's input schema). Deliberately seven tools, no more:
+ * graph_read (the one read tool — task#29) plus job_add, dep_declare, dep_retract, task_seal,
+ * task_unseal, a2a_request (the six shape-only writes). NO state-transition tool (decision 3) —
+ * grep this list for job_set_done/job_cancel/job_ready and you will not find them. graph_read is
+ * listed first so an agent's tool-choice reasoning sees "look before you leap" as the natural order.
  */
 export function buildGraphTools(ctx: GraphToolContext): GraphToolDef[] {
   return [
+    buildGraphReadTool(ctx),
     buildJobAddTool(ctx),
     buildDepDeclareTool(ctx),
     buildDepRetractTool(ctx),

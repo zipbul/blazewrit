@@ -11,6 +11,7 @@ import {
   TASK_SEAL_TOOL_FQN,
   TASK_UNSEAL_TOOL_FQN,
   A2A_REQUEST_TOOL_FQN,
+  GRAPH_READ_TOOL_FQN,
 } from './agent-tools';
 
 /** The full graph MCP toolset's fully-qualified names — the ONLY tools a wake session may call. */
@@ -21,6 +22,7 @@ const GRAPH_TOOL_FQNS = [
   TASK_SEAL_TOOL_FQN,
   TASK_UNSEAL_TOOL_FQN,
   A2A_REQUEST_TOOL_FQN,
+  GRAPH_READ_TOOL_FQN,
 ];
 
 /** WORKING-agent identity (harness/mindset.ts's constitution applies — a wake session reshapes
@@ -73,8 +75,10 @@ export function buildWakePrompt(ctx: Pick<WakeSessionCtx, 'actorRepoId' | 'reaso
  * Tool restriction (job-graph.md 그래프 관리 배선 decision 3's spirit extended to the SESSION
  * layer, not just the tool list): a wake session must never run arbitrary Bash or touch files —
  * `tools: []` removes every BUILT-IN tool (Bash/Read/Write/Edit/Grep/Glob/...) from what the model
- * is even offered, and `allowedTools` is narrowed to exactly the six graph MCP tool FQNs so nothing
- * else gets auto-approved either. `permissionMode` deliberately does NOT default to
+ * is even offered, and `allowedTools` is narrowed to exactly the seven graph MCP tool FQNs (six
+ * writes + graph_read, task#29 — without it here, 'dontAsk' below would deny even that READ call,
+ * leaving an agent no way to see real job ids and forcing it to brute-force-guess dep targets) so
+ * nothing else gets auto-approved either. `permissionMode` deliberately does NOT default to
  * 'bypassPermissions' despite that reading as the "obvious" unattended-session choice — this
  * codebase already learned that lesson the hard way (harness/step-agents.ts's own comment:
  * "allowedTools does NOT bind under bypassPermissions — observed live: ground ran Bash despite an

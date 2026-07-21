@@ -12,12 +12,14 @@ import {
   TASK_SEAL_TOOL,
   TASK_UNSEAL_TOOL,
   A2A_REQUEST_TOOL,
+  GRAPH_READ_TOOL,
   JOB_ADD_TOOL_FQN,
   DEP_DECLARE_TOOL_FQN,
   DEP_RETRACT_TOOL_FQN,
   TASK_SEAL_TOOL_FQN,
   TASK_UNSEAL_TOOL_FQN,
   A2A_REQUEST_TOOL_FQN,
+  GRAPH_READ_TOOL_FQN,
 } from './agent-tools';
 import type { QueryFn } from '../orchestrator/infra/agent-step-executor';
 
@@ -103,25 +105,35 @@ describe('runWakeSession (P4-2a)', () => {
     }
   });
 
-  test('the toolset has no state-transition tool (P4-1 decision 3, mirrored) — only shape-changing graph tools', () => {
+  test('the toolset has no state-transition tool (P4-1 decision 3, mirrored) — only shape-changing graph tools plus the read tool', () => {
     // Confirms the session's OWN toolset is exactly buildGraphTools' output, not a hand-rolled
     // alternative — agent-tools.spec.ts is the authority on decision 2/3's guarantees themselves.
     const tools = buildGraphTools({ sql, actorRepoId: 'irrelevant-repo', taskId: 'irrelevant-task', newId: () => id('gen') });
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual([A2A_REQUEST_TOOL, DEP_DECLARE_TOOL, DEP_RETRACT_TOOL, JOB_ADD_TOOL, TASK_SEAL_TOOL, TASK_UNSEAL_TOOL].sort());
+    expect(names).toEqual(
+      [A2A_REQUEST_TOOL, DEP_DECLARE_TOOL, DEP_RETRACT_TOOL, GRAPH_READ_TOOL, JOB_ADD_TOOL, TASK_SEAL_TOOL, TASK_UNSEAL_TOOL].sort(),
+    );
     for (const forbidden of ['job_set_done', 'job_set_failed', 'job_cancel', 'job_ready', 'task_set_done', 'task_cancel']) {
       expect(names).not.toContain(forbidden);
     }
   });
 
-  test('restricts to graph MCP tools only — no built-in tools offered, allowedTools scoped to exactly the six FQNs', async () => {
+  test('restricts to graph MCP tools only — no built-in tools offered, allowedTools scoped to exactly the seven FQNs', async () => {
     const captured: Array<{ prompt: string; options?: Options }> = [];
     await runWakeSession(baseCtx({ queryFn: capturingSuccess(captured) }));
 
     const { options } = captured[0]!;
     expect(options?.tools).toEqual([]); // no built-in tool (Bash/Read/Write/Edit/Grep/Glob/...) offered at all
     expect((options?.allowedTools ?? []).slice().sort()).toEqual(
-      [JOB_ADD_TOOL_FQN, DEP_DECLARE_TOOL_FQN, DEP_RETRACT_TOOL_FQN, TASK_SEAL_TOOL_FQN, TASK_UNSEAL_TOOL_FQN, A2A_REQUEST_TOOL_FQN].sort(),
+      [
+        JOB_ADD_TOOL_FQN,
+        DEP_DECLARE_TOOL_FQN,
+        DEP_RETRACT_TOOL_FQN,
+        TASK_SEAL_TOOL_FQN,
+        TASK_UNSEAL_TOOL_FQN,
+        A2A_REQUEST_TOOL_FQN,
+        GRAPH_READ_TOOL_FQN,
+      ].sort(),
     );
     for (const fqn of options!.allowedTools!) {
       expect(fqn.startsWith(`mcp__${GRAPH_MCP_SERVER}__`)).toBe(true); // every allowed name is graph-namespaced, none built-in
