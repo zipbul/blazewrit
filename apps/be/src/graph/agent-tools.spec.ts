@@ -341,12 +341,70 @@ describe('buildGraphTools (harness/job-graph.md 그래프 관리 배선 decision
     expect(dep!.members).toEqual([{ targetType: 'job', targetId: targetJobId, outcome: 'pending', acceptable: ['satisfied'] }]);
   });
 
-  test('graph_read on a task with no jobs returns { jobs: [], deps: [] }', async () => {
+  test('graph_read on a task with no jobs returns { jobs: [], deps: [], taskStatus, seals: [] }', async () => {
     const emptyTaskId = id('empty-task');
     await sql`insert into tasks (id, title, status) values (${emptyTaskId}, ${emptyTaskId}, 'open')`;
     const tools = buildGraphTools(ctxFor(emptyTaskId, 'irrelevant-repo'));
     const res = await call(tools, GRAPH_READ_TOOL, {});
-    expect(payload(res)).toEqual({ taskId: emptyTaskId, jobs: [], deps: [] });
+    expect(payload(res)).toEqual({ taskId: emptyTaskId, jobs: [], deps: [], taskStatus: 'open', seals: [] });
+  });
+
+  test('N2: graph_read reports a job-target member as live-satisfied once the target job is done, even though dep_members.outcome (dead column, never UPDATEd) is still pending in the DB', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const { jobId: waiterJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'waiter' })) as { jobId: string };
+    const { jobId: targetJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'target' })) as { jobId: string };
+    const { depId } = payload(await call(tools, DEP_DECLARE_TOOL, { waiterJobId, targetType: 'job', targetId: targetJobId })) as {
+      depId: string;
+    };
+    await sql`update jobs set status = 'done' where id = ${targetJobId}`; // no reconcile pass run
+
+    const dbMemberRows = (await sql`select outcome from dep_members where dep_id = ${depId}`) as Array<{ outcome: string }>;
+    expect(dbMemberRows[0]!.outcome).toBe('pending'); // confirms the dead column really never updates on its own
+
+    const res = await call(tools, GRAPH_READ_TOOL, {});
+    const { deps } = payload(res) as { deps: Array<{ id: string; members: Array<{ targetId: string; outcome: string }> }> };
+    const dep = deps.find((d) => d.id === depId)!;
+    expect(dep.members.find((m) => m.targetId === targetJobId)!.outcome).toBe('satisfied');
+  });
+
+  test('N2: graph_read reports live-satisfied members for an already-released dep too, so a released dep never shows a self-contradictory pending member', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const { jobId: waiterJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'waiter' })) as { jobId: string };
+    const { jobId: targetJobId } = payload(await call(tools, JOB_ADD_TOOL, { title: 'target' })) as { jobId: string };
+    const { depId } = payload(await call(tools, DEP_DECLARE_TOOL, { waiterJobId, targetType: 'job', targetId: targetJobId })) as {
+      depId: string;
+    };
+    await sql`update jobs set status = 'done' where id = ${targetJobId}`;
+    await sql`update deps set status = 'released' where id = ${depId}`; // as reconcile would leave it — dep_members.outcome untouched
+
+    const res = await call(tools, GRAPH_READ_TOOL, {});
+    const { deps } = payload(res) as { deps: Array<{ id: string; status: string; members: Array<{ targetId: string; outcome: string }> }> };
+    const dep = deps.find((d) => d.id === depId)!;
+    expect(dep.status).toBe('released');
+    expect(dep.members.find((m) => m.targetId === targetJobId)!.outcome).toBe('satisfied');
+  });
+
+  test("N7: graph_read exposes taskStatus and the acting repo's own seal once it has sealed its slice", async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    await call(tools, JOB_ADD_TOOL, { title: 'still-pending' }); // keeps the task 'open' through the seal
+    const sealRes = await call(tools, TASK_SEAL_TOOL, {});
+    expect(sealRes.isError).toBeUndefined();
+
+    const dbTaskRows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;
+    const dbSealRows = (await sql`select repo_id, sealed_at from task_seals where task_id = ${taskId}`) as Array<{
+      repo_id: string;
+      sealed_at: Date;
+    }>;
+
+    const res = await call(tools, GRAPH_READ_TOOL, {});
+    const { taskStatus, seals } = payload(res) as { taskStatus: string; seals: Array<{ repoId: string; sealedAt: string }> };
+    expect(taskStatus).toBe(dbTaskRows[0]!.status);
+    expect(seals.map((s) => s.repoId).sort()).toEqual(dbSealRows.map((s) => s.repo_id).sort());
+    const mySeal = seals.find((s) => s.repoId === repoP);
+    expect(typeof mySeal?.sealedAt).toBe('string');
   });
 
   test('graph_read is read-only — job/dep row counts are unchanged after calling it', async () => {

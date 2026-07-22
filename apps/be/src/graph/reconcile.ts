@@ -52,8 +52,19 @@ interface DepMemberRow {
  * external_gates evaluation is out of scope (harness/job-graph.md P3): no write path creates an
  * 'external' dep_member yet, so it conservatively reads its provider status directly (never
  * satisfied until fired) instead of inventing gate-specific logic here.
+ *
+ * Exported (3자 리뷰 메타리뷰 N2) — dep_members.outcome is never UPDATEd anywhere in src (only this
+ * function's live computation + deps.status get persisted, rule 11's latch lives on deps.status, not
+ * here), so it reads as permanently 'pending' from the DB. agent-tools.ts's graph_read reuses THIS
+ * function instead of returning that dead column, so a released dep never shows a self-contradictory
+ * 'pending' member next to it. Parameter narrowed to just the two fields this actually reads (not the
+ * full DepMemberRow) so a caller building its own row shape from a different query doesn't need to
+ * fake expected_gen/acceptable just to call this.
  */
-async function liveMemberOutcome(sql: SQL, member: DepMemberRow): Promise<{ outcome: DepOutcome; actualGen?: number }> {
+export async function liveMemberOutcome(
+  sql: SQL,
+  member: Pick<DepMemberRow, 'target_type' | 'target_id'>,
+): Promise<{ outcome: DepOutcome; actualGen?: number }> {
   if (member.target_type === 'job') {
     const rows = (await sql`select status, generation from jobs where id = ${member.target_id}`) as Array<{ status: JobStatus; generation: number }>;
     const target = rows[0];

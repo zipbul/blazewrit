@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { SQL } from 'bun';
 import { insertJob, insertDepTx, sealTaskSliceAndDerive, unsealTaskSlice, WriteAclError } from './store';
 import { insertProposal, type NegotiationAsk } from './negotiation';
+import { liveMemberOutcome } from './reconcile';
+import type { DepTargetType } from './types';
 
 /**
  * harness/job-graph.md "그래프 관리 배선" (2026-07-12 확정), decisions 1/2/3/4 — the ONLY way a
@@ -248,12 +250,25 @@ function buildTaskUnsealTool(ctx: GraphToolContext): GraphToolDef {
  * changes nothing at all, so it isn't a decision-3 violation by construction, not by exception.
  * deps are the ones whose waiter is one of THIS task's jobs (mirrors load-task-graph.ts's own
  * join, scoped down to one task instead of the whole graph), grouped with their dep_members.
+ *
+ * 3자 리뷰 메타리뷰 N2: each member's `outcome` is NOT read off dep_members.outcome — that column is
+ * a dead persisted field (never UPDATEd anywhere in src; reconcile.ts only ever persists deps.status,
+ * see reconcile.ts's liveMemberOutcome docstring), so a released dep would otherwise show its own
+ * members as permanently 'pending' — self-contradictory to an agent reading it. Instead this reuses
+ * reconcile.ts's own liveMemberOutcome per member (no second implementation of rule 5/6). The dead
+ * column itself is left alone (out of scope) — this only stops trusting it.
+ *
+ * 3자 리뷰 메타리뷰 N7: also surfaces `taskStatus` (tasks.status) and `seals` (every task_seals row
+ * for this task, task-wide like `jobs` — not just ctx.actorRepoId's own) so an agent can check
+ * whether a slice (its own or another repo's) is already sealed BEFORE calling job_add/task_seal,
+ * instead of only ever discovering a seal via that write's own rejection.
  */
 function buildGraphReadTool(ctx: GraphToolContext): GraphToolDef {
   return tool(
     GRAPH_READ_TOOL,
     '이번 태스크의 현재 그래프(잡·의존)를 조회한다. dep를 걸거나 철회하기 전에 이걸로 실제 잡 ID와 ' +
-      '상태를 확인하라. mine=true인 잡만 네가 바꿀 수 있다(다른 잡은 볼 수만).',
+      '상태를 확인하라. mine=true인 잡만 네가 바꿀 수 있다(다른 잡은 볼 수만). job_add/task_seal을 ' +
+      '호출하기 전에 seals와 taskStatus로 네(또는 다른 레포의) 슬라이스가 이미 봉인됐는지부터 확인하라.',
     {},
     async () => {
       try {
@@ -270,7 +285,7 @@ function buildGraphReadTool(ctx: GraphToolContext): GraphToolDef {
         }));
 
         const depRows = (await ctx.sql`
-          select d.id, d.waiter_job, d.predicate, d.status, dm.target_type, dm.target_id, dm.outcome, dm.acceptable
+          select d.id, d.waiter_job, d.predicate, d.status, dm.target_type, dm.target_id, dm.acceptable
           from deps d
           join dep_members dm on dm.dep_id = d.id
           where d.waiter_job in (select id from jobs where task_id = ${ctx.taskId})
@@ -282,7 +297,6 @@ function buildGraphReadTool(ctx: GraphToolContext): GraphToolDef {
           status: string;
           target_type: string;
           target_id: string;
-          outcome: string;
           acceptable: string[];
         }>;
 
@@ -296,10 +310,22 @@ function buildGraphReadTool(ctx: GraphToolContext): GraphToolDef {
             dep = { id: row.id, waiterJobId: row.waiter_job, predicate: row.predicate, status: row.status, members: [] };
             depsById.set(row.id, dep);
           }
-          dep.members.push({ targetType: row.target_type, targetId: row.target_id, outcome: row.outcome, acceptable: row.acceptable });
+          const { outcome } = await liveMemberOutcome(ctx.sql, {
+            target_type: row.target_type as DepTargetType,
+            target_id: row.target_id,
+          });
+          dep.members.push({ targetType: row.target_type, targetId: row.target_id, outcome, acceptable: row.acceptable });
         }
 
-        return okResult({ taskId: ctx.taskId, jobs, deps: [...depsById.values()] });
+        const taskRows = (await ctx.sql`select status from tasks where id = ${ctx.taskId}`) as Array<{ status: string }>;
+        const taskStatus = taskRows[0]?.status ?? null;
+
+        const sealRows = (await ctx.sql`
+          select repo_id, sealed_at from task_seals where task_id = ${ctx.taskId} order by sealed_at
+        `) as Array<{ repo_id: string; sealed_at: Date }>;
+        const seals = sealRows.map((s) => ({ repoId: s.repo_id, sealedAt: s.sealed_at }));
+
+        return okResult({ taskId: ctx.taskId, jobs, deps: [...depsById.values()], taskStatus, seals });
       } catch (err) {
         return errorResult(err);
       }
