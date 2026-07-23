@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { SQL } from 'bun';
 import { ensureSchema } from '../infra/schema';
 import { reconcileTask, type ReconcileJob } from './reconcile';
+import { insertDepTx } from './store';
 import type { JobStatus } from './types';
 
 // Integration test: exercises reconcile against a live Postgres (harness/job-graph.md migration step 8).
@@ -250,5 +251,58 @@ describe('reconcileTask — not-ready blocked-write CAS (3자 리뷰 수정 C1, 
 
     const rows = (await sql`select status from jobs where id = ${jobId}`) as Array<{ status: string }>;
     expect(rows[0]!.status).toBe('running'); // must NOT be clobbered back to 'blocked'
+  });
+});
+
+describe('reconcileTask — claim vs. concurrent dep_declare TOCTOU (harness handoff round-simv2-takeover.md W3)', () => {
+  /**
+   * Deterministic reproduction of the race the claim transaction's `for update` + re-check block
+   * (reconcile.ts's own long comment right above `sql.begin`) exists to close: jobIsReady's own
+   * "no unmet dep" read is a separate, non-locking SELECT — a dep_declare landing in the gap
+   * between that read and the claim used to still let the claim through unconditionally (the
+   * original claim UPDATE only ever checked `jobs.status`), permanently stranding the newly
+   * attached dep on a job that had already left the pending/blocked set this function scans.
+   *
+   * Constructed the SAME way as the C1/F-A2 races above (real lock, not timing luck): insertDepTx
+   * itself takes `for update` on the waiter row as its OWN first statement (store.ts) — the exact
+   * same row reconcile's claim also locks. Held open here (via a real insertDepTx call inside
+   * `sql.begin`, commit deferred until a signal) so reconcileTask's claim genuinely BLOCKS on it,
+   * then resumes AFTER the dep has committed — proving the claim's post-lock re-check actually
+   * observes it, not just that the two happen to interleave in the right order by chance.
+   */
+  test('a dep_declare landing between jobIsReady and claim makes the claim lose the race (job stays pending, dep untouched)', async () => {
+    const { repoId, taskId } = await makeChain();
+    // Deliberately NOT pending/blocked (same reasoning as the "unmet dep" test above): a 'pending'
+    // target would itself be independently claimed and dispatched by this SAME reconcileTask call
+    // (it has no deps of its own) — 'running' keeps it out of that scan entirely, so the only
+    // dispatch this test could possibly see is for `jobId` itself.
+    const targetJobId = await seedJob(taskId, repoId, 'running');
+    const jobId = await seedJob(taskId, repoId, 'pending'); // no deps YET — jobIsReady reads it as ready until the race lands
+    const depId = id('dep');
+    const dispatch = mock(async (_job: ReconcileJob) => {});
+
+    let releaseLock!: () => void;
+    const continueSignal = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const insertTxDone = sql.begin(async (tx) => {
+      await insertDepTx(tx, { id: depId, waiterJobId: jobId, targetType: 'job', targetId: targetJobId });
+      await continueSignal; // hold insertDepTx's own `for update` lock on the waiter row open — don't commit yet
+    });
+    await new Promise((r) => setTimeout(r, 50)); // let insertDepTx actually acquire that lock first
+
+    const p = reconcileTask(sql, taskId, dispatch);
+    // jobIsReady's own SELECT runs here and sees ZERO deps (insertDepTx hasn't committed yet) —
+    // ready=true — so the claim proceeds into its own `for update` on the SAME row and blocks.
+    await new Promise((r) => setTimeout(r, 100)); // let reconcileTask reach (and block on) that lock
+
+    releaseLock();
+    await insertTxDone; // commits the dep — now visible to any NEW statement issued after this
+    await p; // reconcileTask's claim resumes, re-checks deps under its own fresh lock, sees it, backs off
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await jobStatus(jobId)).toBe('pending'); // never claimed — the claim UPDATE matched 0 rows
+    const depRows = (await sql`select status from deps where id = ${depId}`) as Array<{ status: string }>;
+    expect(depRows[0]!.status).toBe('active'); // the dep itself is untouched — nothing raced it either
   });
 });

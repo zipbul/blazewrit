@@ -156,7 +156,31 @@ export async function reconcileTask(
 
     // A1: the claim's ready→running step is where a lease is first granted — same transaction as
     // the CAS itself, so a job can never observably be 'running' without one.
+    //
+    // graph-chaos.sim harness finding (v2): jobIsReady's own "no unmet dep" read above is a
+    // SEPARATE, non-locking SELECT — a dep_declare call landing in the gap between that read and
+    // this claim (both legitimate, unguarded against each other) used to still let the claim
+    // through unconditionally, since the original claim UPDATE only ever checked `jobs.status`.
+    // Once claimed, the job leaves the `pending`/`blocked` set this function scans, so nothing
+    // would EVER re-evaluate that freshly-attached dep again — it would sit 'active' forever even
+    // after the waiter reaches 'done'. A `not exists` subquery folded into the claim UPDATE's own
+    // WHERE clause does NOT close this: Postgres read-committed re-evaluates a concurrently-locked
+    // row via EvalPlanQual once the lock releases, but subqueries against OTHER tables (deps) still
+    // read the UPDATE statement's ORIGINAL per-statement snapshot, not a fresh one — a dep
+    // committed by the unblocking transaction stays invisible to that subquery regardless. Closing
+    // it for real needs a genuinely NEW statement (own fresh snapshot) issued AFTER the row lock is
+    // actually held: `for update` here serializes against insertDepTx's own `for update` lock on
+    // this SAME waiter row (its first statement) — once acquired, insertDepTx has either already
+    // committed (its dep now visible to the very next, separate SELECT below) or never started
+    // (nothing to race). A dep landing in that gap now correctly loses this job's claim (0 rows
+    // affected, same "lost the claim race" no-op path below) instead of the claim silently winning.
     const runningRows = (await sql.begin(async (tx) => {
+      const lockedRows = (await tx`select status from jobs where id = ${job.id} for update`) as Array<{ status: JobStatus }>;
+      const current = lockedRows[0];
+      if (!current || (current.status !== 'pending' && current.status !== 'blocked')) return [] as Array<{ id: string }>;
+      const unresolvedDeps = (await tx`select 1 from deps where waiter_job = ${job.id} and status <> 'released'`) as unknown[];
+      if (unresolvedDeps.length > 0) return [] as Array<{ id: string }>;
+
       const toReady = (await tx`update jobs set status = 'ready' where id = ${job.id} and status in ('pending', 'blocked') returning id`) as Array<{
         id: string;
       }>;
