@@ -7,6 +7,7 @@ import {
   buildGraphTools,
   GRAPH_MCP_SERVER,
   JOB_ADD_TOOL,
+  JOB_RERUN_TOOL,
   DEP_DECLARE_TOOL,
   DEP_RETRACT_TOOL,
   TASK_SEAL_TOOL,
@@ -14,6 +15,7 @@ import {
   A2A_REQUEST_TOOL,
   GRAPH_READ_TOOL,
   JOB_ADD_TOOL_FQN,
+  JOB_RERUN_TOOL_FQN,
   DEP_DECLARE_TOOL_FQN,
   DEP_RETRACT_TOOL_FQN,
   TASK_SEAL_TOOL_FQN,
@@ -111,14 +113,14 @@ describe('runWakeSession (P4-2a)', () => {
     const tools = buildGraphTools({ sql, actorRepoId: 'irrelevant-repo', taskId: 'irrelevant-task', newId: () => id('gen') });
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual(
-      [A2A_REQUEST_TOOL, DEP_DECLARE_TOOL, DEP_RETRACT_TOOL, GRAPH_READ_TOOL, JOB_ADD_TOOL, TASK_SEAL_TOOL, TASK_UNSEAL_TOOL].sort(),
+      [A2A_REQUEST_TOOL, DEP_DECLARE_TOOL, DEP_RETRACT_TOOL, GRAPH_READ_TOOL, JOB_ADD_TOOL, JOB_RERUN_TOOL, TASK_SEAL_TOOL, TASK_UNSEAL_TOOL].sort(),
     );
     for (const forbidden of ['job_set_done', 'job_set_failed', 'job_cancel', 'job_ready', 'task_set_done', 'task_cancel']) {
       expect(names).not.toContain(forbidden);
     }
   });
 
-  test('restricts to graph MCP tools only — no built-in tools offered, allowedTools scoped to exactly the seven FQNs', async () => {
+  test('restricts to graph MCP tools only — no built-in tools offered, allowedTools scoped to exactly the eight FQNs', async () => {
     const captured: Array<{ prompt: string; options?: Options }> = [];
     await runWakeSession(baseCtx({ queryFn: capturingSuccess(captured) }));
 
@@ -127,6 +129,7 @@ describe('runWakeSession (P4-2a)', () => {
     expect((options?.allowedTools ?? []).slice().sort()).toEqual(
       [
         JOB_ADD_TOOL_FQN,
+        JOB_RERUN_TOOL_FQN,
         DEP_DECLARE_TOOL_FQN,
         DEP_RETRACT_TOOL_FQN,
         TASK_SEAL_TOOL_FQN,

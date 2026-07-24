@@ -1,7 +1,7 @@
 import { tool, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { SQL } from 'bun';
-import { insertJob, insertDepTx, sealTaskSliceAndDerive, unsealTaskSlice, WriteAclError } from './store';
+import { insertJob, insertDepTx, sealTaskSliceAndDerive, unsealTaskSlice, bumpJobGeneration, WriteAclError } from './store';
 import { insertProposal, type NegotiationAsk } from './negotiation';
 import { liveMemberOutcome } from './reconcile';
 import type { DepTargetType } from './types';
@@ -11,17 +11,20 @@ import type { DepTargetType } from './types';
  * repo agent manages its own slice of the graph is through these MCP tools:
  *
  *   1. Every handler here IS the rule-1 write path — it reuses graph/store.ts (insertJob,
- *      insertDepTx, sealTaskSliceAndDerive, unsealTaskSlice) and graph/negotiation.ts
- *      (insertProposal), never touching the DB directly.
+ *      insertDepTx, sealTaskSliceAndDerive, unsealTaskSlice, bumpJobGeneration) and
+ *      graph/negotiation.ts (insertProposal), never touching the DB directly.
  *   2. `repoId`/`taskId` are NEVER a tool input — GraphToolContext binds them (the harness's job,
  *      not shown here: whichever repo's wake session this is). No input schema below has a repoId
  *      or taskId field, so an agent has no field to spoof even if it tried.
  *   3. No state-transition tool exists (no job_set_done/job_cancel/job_ready/…) — every WRITE tool
  *      here changes the graph's SHAPE only (add a job, declare/retract a dep, seal/unseal a slice,
- *      request from another repo). done/failed only ever come from flow-execution results;
- *      ready only ever comes from reconcile. graph_read (task#29) is the one exception to "write
- *      tool" in that sentence — it changes nothing at all, so it can't violate decision 3 either.
-
+ *      request from another repo), OR — job_rerun's own case — records a re-run REQUEST fact
+ *      (job_events, via bumpJobGeneration) that a separate consumer applies later, never a status
+ *      write of its own. done/failed only ever come from flow-execution results; ready only ever
+ *      comes from reconcile; a job's pending/generation++ on re-run only ever comes from
+ *      reconcile.ts's consumeOneEvent. graph_read (task#29, changes nothing) and job_rerun (only
+ *      ever requests, never itself flips a status) are the two exceptions to "write tool" in that
+ *      sentence — neither can violate decision 3 by construction.
  *   4. (Not this module's concern — wiring these into a live wake session's `options.mcpServers`
  *      is P4-2.)
  */
@@ -46,6 +49,7 @@ export interface GraphToolDef extends SdkMcpToolDefinition<any> {}
 export const GRAPH_MCP_SERVER = 'bw_graph';
 
 export const JOB_ADD_TOOL = 'job_add';
+export const JOB_RERUN_TOOL = 'job_rerun';
 export const DEP_DECLARE_TOOL = 'dep_declare';
 export const DEP_RETRACT_TOOL = 'dep_retract';
 export const TASK_SEAL_TOOL = 'task_seal';
@@ -55,6 +59,7 @@ export const GRAPH_READ_TOOL = 'graph_read';
 
 /** Fully-qualified tool names an agent must be allow-listed for (mirrors triage/*.tool.ts's own *_FQN convention). */
 export const JOB_ADD_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${JOB_ADD_TOOL}`;
+export const JOB_RERUN_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${JOB_RERUN_TOOL}`;
 export const DEP_DECLARE_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${DEP_DECLARE_TOOL}`;
 export const DEP_RETRACT_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${DEP_RETRACT_TOOL}`;
 export const TASK_SEAL_TOOL_FQN = `mcp__${GRAPH_MCP_SERVER}__${TASK_SEAL_TOOL}`;
@@ -105,6 +110,50 @@ export function buildJobAddTool(ctx: GraphToolContext) {
           description: args.description,
         });
         return okResult({ jobId });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+}
+
+/**
+ * job_rerun(jobId) — requests a same-job re-run: bumps generation on one of THIS session's OWN
+ * terminal jobs (done/failed/cancelled) so it runs again from pending, instead of the agent
+ * fabricating a brand-new job for the same work. Reuses bumpJobGeneration (graph/store.ts)
+ * verbatim, ctx-bound exactly like every other tool here — `jobId` is the only input, `repo_id`
+ * is never on the wire (decision 2), so ACL is enforced by bumpJobGeneration itself comparing
+ * ctx.actorRepoId against the job's OWN repo_id, not by anything this handler asserts. Every guard
+ * (WriteAclError, TerminalTaskError, NotRerunnableError, JobNotFoundError) already lives in that
+ * one function; this is only the MCP wrapper, same shape as job_add above.
+ *
+ * Decision 3 ("no state-transition tool") is NOT violated despite the name reading like a
+ * transition: bumpJobGeneration does not flip jobs.status at all (단일 기록자 통합 Phase 2 — see its
+ * own docstring in store.ts) — it only inserts a `rerun_requested` job_events fact, a REQUEST, the
+ * same shape as a job's own succeeded/failed facts from flow execution. The actual
+ * terminal->pending, generation+1 write happens later and elsewhere, in graph/reconcile.ts's
+ * consumeOneEvent, under its own rule-9 revalidation lock — the SAME single consumer every other
+ * status-changing fact in this codebase already funnels through ("상태전이는 reconcile만" stays
+ * true). So okResult below reports `requested: true`, never `rerunning`/`pending` — the request
+ * was accepted, not yet applied.
+ *
+ * job-graph.md rule 4 hands a stalled/failed job's disposition TO the agent ("명시 취소/gen++/신규
+ * 잡 중 택1") — job_add already covers "신규 잡"; this tool is the missing gen++ half. Before this
+ * tool, that judgment had no way to reach the DB at all (0 production call sites), so a failed job
+ * stayed failed forever.
+ */
+function buildJobRerunTool(ctx: GraphToolContext): GraphToolDef {
+  return tool(
+    JOB_RERUN_TOOL,
+    '네 레포의 terminal 잡(done/failed/cancelled)을 제자리에서 재실행 요청한다(세대(generation) 증가). ' +
+      '실패한 잡을 다시 시도하거나 완료된 잡을 새 접근으로 다시 돌리고 싶을 때 호출하라 — 새 잡을 만들지 ' +
+      '말고 이걸 써라(재실행은 새 잡이 아니라 같은 잡의 다음 세대다). graph_read로 실제 잡 ID와 상태를 ' +
+      '먼저 확인하라. 네 레포 소유 잡만 재실행할 수 있다.',
+    { jobId: z.string() },
+    async (args) => {
+      try {
+        await bumpJobGeneration(ctx.sql, ctx.actorRepoId, args.jobId);
+        return okResult({ jobId: args.jobId, requested: true });
       } catch (err) {
         return errorResult(err);
       }
@@ -376,16 +425,19 @@ function buildA2aRequestTool(ctx: GraphToolContext): GraphToolDef {
 
 /**
  * The full P4 graph toolset for one wake session, bound to `ctx` (harness/job-graph.md decision 2
- * — repoId/taskId live in ctx, never in a tool's input schema). Deliberately seven tools, no more:
- * graph_read (the one read tool — task#29) plus job_add, dep_declare, dep_retract, task_seal,
- * task_unseal, a2a_request (the six shape-only writes). NO state-transition tool (decision 3) —
- * grep this list for job_set_done/job_cancel/job_ready and you will not find them. graph_read is
- * listed first so an agent's tool-choice reasoning sees "look before you leap" as the natural order.
+ * — repoId/taskId live in ctx, never in a tool's input schema). Deliberately eight tools, no more:
+ * graph_read (the one read tool — task#29) plus job_add, job_rerun, dep_declare, dep_retract,
+ * task_seal, task_unseal, a2a_request (the six shape-only writes, plus job_rerun's request-only
+ * write — see its own docstring for why that doesn't reopen decision 3). NO state-transition tool
+ * (decision 3) — grep this list for job_set_done/job_cancel/job_ready and you will not find them.
+ * graph_read is listed first so an agent's tool-choice reasoning sees "look before you leap" as
+ * the natural order.
  */
 export function buildGraphTools(ctx: GraphToolContext): GraphToolDef[] {
   return [
     buildGraphReadTool(ctx),
     buildJobAddTool(ctx),
+    buildJobRerunTool(ctx),
     buildDepDeclareTool(ctx),
     buildDepRetractTool(ctx),
     buildTaskSealTool(ctx),

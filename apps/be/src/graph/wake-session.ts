@@ -6,6 +6,7 @@ import {
   buildGraphTools,
   GRAPH_MCP_SERVER,
   JOB_ADD_TOOL_FQN,
+  JOB_RERUN_TOOL_FQN,
   DEP_DECLARE_TOOL_FQN,
   DEP_RETRACT_TOOL_FQN,
   TASK_SEAL_TOOL_FQN,
@@ -14,9 +15,16 @@ import {
   GRAPH_READ_TOOL_FQN,
 } from './agent-tools';
 
-/** The full graph MCP toolset's fully-qualified names — the ONLY tools a wake session may call. */
+/** The full graph MCP toolset's fully-qualified names — the ONLY tools a wake session may call.
+ * Includes JOB_RERUN_TOOL_FQN (재실행 트리거 배선, 티어1): job_rerun only ever records a re-run
+ * REQUEST fact (job_events via bumpJobGeneration) — reconcile.ts's consumeOneEvent is still the
+ * only place a job's status/generation actually changes, so allow-listing it here does not hand
+ * this session any new state-transition power (decision 3 stays intact). Omitting an FQN here
+ * would silently deny that tool under 'dontAsk' below even though buildGraphTools still builds it
+ * (graph_read's own history — a tool exists but is unreachable from a live session without this). */
 const GRAPH_TOOL_FQNS = [
   JOB_ADD_TOOL_FQN,
+  JOB_RERUN_TOOL_FQN,
   DEP_DECLARE_TOOL_FQN,
   DEP_RETRACT_TOOL_FQN,
   TASK_SEAL_TOOL_FQN,
@@ -75,10 +83,11 @@ export function buildWakePrompt(ctx: Pick<WakeSessionCtx, 'actorRepoId' | 'reaso
  * Tool restriction (job-graph.md 그래프 관리 배선 decision 3's spirit extended to the SESSION
  * layer, not just the tool list): a wake session must never run arbitrary Bash or touch files —
  * `tools: []` removes every BUILT-IN tool (Bash/Read/Write/Edit/Grep/Glob/...) from what the model
- * is even offered, and `allowedTools` is narrowed to exactly the seven graph MCP tool FQNs (six
- * writes + graph_read, task#29 — without it here, 'dontAsk' below would deny even that READ call,
- * leaving an agent no way to see real job ids and forcing it to brute-force-guess dep targets) so
- * nothing else gets auto-approved either. `permissionMode` deliberately does NOT default to
+ * is even offered, and `allowedTools` is narrowed to exactly the eight graph MCP tool FQNs (seven
+ * writes — including job_rerun, 재실행 트리거 배선 티어1: request-only, see GRAPH_TOOL_FQNS's own
+ * comment — + graph_read, task#29 — without graph_read here, 'dontAsk' below would deny even that
+ * READ call, leaving an agent no way to see real job ids and forcing it to brute-force-guess dep
+ * targets) so nothing else gets auto-approved either. `permissionMode` deliberately does NOT default to
  * 'bypassPermissions' despite that reading as the "obvious" unattended-session choice — this
  * codebase already learned that lesson the hard way (harness/step-agents.ts's own comment:
  * "allowedTools does NOT bind under bypassPermissions — observed live: ground ran Bash despite an

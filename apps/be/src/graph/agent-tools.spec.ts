@@ -5,6 +5,7 @@ import {
   buildGraphTools,
   buildJobAddTool,
   JOB_ADD_TOOL,
+  JOB_RERUN_TOOL,
   DEP_DECLARE_TOOL,
   DEP_RETRACT_TOOL,
   TASK_SEAL_TOOL,
@@ -14,6 +15,8 @@ import {
   type GraphToolContext,
   type GraphToolDef,
 } from './agent-tools';
+import { consumeJobEvents } from './reconcile';
+import type { JobStatus } from './types';
 
 /**
  * P4-1 (harness/job-graph.md "그래프 관리 배선", decisions 1-4): pure module test of the agent
@@ -70,6 +73,15 @@ async function jobRepoId(jobId: string): Promise<string> {
   return rows[0]!.repo_id;
 }
 
+/** Raw fixture insert (mirrors store.spec.ts's own seedJob) — bypasses the tool layer so job_rerun's
+ * arrange steps can seed a job at an arbitrary status/generation directly. */
+async function seedJob(taskId: string, repoId: string, status: JobStatus, generation = 1): Promise<string> {
+  const jobId = id('job');
+  await sql`insert into jobs (id, task_id, repo_id, title, status, generation)
+    values (${jobId}, ${taskId}, ${repoId}, 'x', ${status}, ${generation})`;
+  return jobId;
+}
+
 beforeAll(async () => {
   await ensureSchema(sql);
 });
@@ -89,11 +101,11 @@ afterAll(async () => {
 });
 
 describe('buildGraphTools (harness/job-graph.md 그래프 관리 배선 decisions 1-4)', () => {
-  test('exposes exactly the six shape-only tools plus graph_read, and no state-transition tool (decision 3)', () => {
+  test('exposes exactly the six shape-only tools plus graph_read and job_rerun, and no state-transition tool (decision 3)', () => {
     const tools = buildGraphTools(ctxFor('irrelevant-task', 'irrelevant-repo'));
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual(
-      [A2A_REQUEST_TOOL, DEP_DECLARE_TOOL, DEP_RETRACT_TOOL, GRAPH_READ_TOOL, JOB_ADD_TOOL, TASK_SEAL_TOOL, TASK_UNSEAL_TOOL].sort(),
+      [A2A_REQUEST_TOOL, DEP_DECLARE_TOOL, DEP_RETRACT_TOOL, GRAPH_READ_TOOL, JOB_ADD_TOOL, JOB_RERUN_TOOL, TASK_SEAL_TOOL, TASK_UNSEAL_TOOL].sort(),
     );
     for (const forbidden of ['job_set_done', 'job_set_failed', 'job_cancel', 'job_ready', 'task_set_done', 'task_cancel']) {
       expect(names).not.toContain(forbidden);
@@ -425,5 +437,77 @@ describe('buildGraphTools (harness/job-graph.md 그래프 관리 배선 decision
     const depsAfter = (await sql`select count(*)::int as n from deps`) as Array<{ n: number }>;
     expect(jobsAfter[0]!.n).toBe(jobsBefore[0]!.n);
     expect(depsAfter[0]!.n).toBe(depsBefore[0]!.n);
+  });
+});
+
+describe('job_rerun (재실행 트리거 배선, 티어1) — thin wrapper over store.bumpJobGeneration', () => {
+  test('requests a rerun on a failed job: inserts rerun_requested, and consumeJobEvents applies gen++ end-to-end', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const jobId = await seedJob(taskId, repoP, 'failed', 1);
+
+    const res = await call(tools, JOB_RERUN_TOOL, { jobId });
+    expect(res.isError).toBeUndefined();
+    expect(payload(res)).toEqual({ jobId, requested: true });
+
+    const eventRows = (await sql`select generation, kind from job_events where job_id = ${jobId}`) as Array<{
+      generation: number;
+      kind: string;
+    }>;
+    expect(eventRows).toEqual([{ generation: 1, kind: 'rerun_requested' }]);
+
+    // Not yet applied — the tool only records the request (decision 3: no state-transition tool).
+    const beforeConsume = (await sql`select status, generation from jobs where id = ${jobId}`) as Array<{
+      status: string;
+      generation: number;
+    }>;
+    expect(beforeConsume[0]).toMatchObject({ status: 'failed', generation: 1 });
+
+    await consumeJobEvents(sql, taskId);
+    const afterConsume = (await sql`select status, generation from jobs where id = ${jobId}`) as Array<{
+      status: string;
+      generation: number;
+    }>;
+    expect(afterConsume[0]).toMatchObject({ status: 'pending', generation: 2 });
+  });
+
+  test('rejects a job owned by another repo with WriteAclError', async () => {
+    const { taskId, repoP, repoQ } = await makeTwoRepoTask();
+    const toolsP = buildGraphTools(ctxFor(taskId, repoP));
+    const jobId = await seedJob(taskId, repoQ, 'failed', 1);
+
+    const res = await call(toolsP, JOB_RERUN_TOOL, { jobId });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('WriteAclError');
+  });
+
+  test('rejects a non-terminal (running) job with NotRerunnableError', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const jobId = await seedJob(taskId, repoP, 'running', 1);
+
+    const res = await call(tools, JOB_RERUN_TOOL, { jobId });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('NotRerunnableError');
+  });
+
+  test("rejects once the job's task is terminal with TerminalTaskError", async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const jobId = await seedJob(taskId, repoP, 'done', 1);
+    await sql`update tasks set status = 'done' where id = ${taskId}`;
+
+    const res = await call(tools, JOB_RERUN_TOOL, { jobId });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('TerminalTaskError');
+  });
+
+  test('rejects a nonexistent jobId with JobNotFoundError', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+
+    const res = await call(tools, JOB_RERUN_TOOL, { jobId: id('nonexistent-job') });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('JobNotFoundError');
   });
 });
