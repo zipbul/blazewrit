@@ -28,6 +28,8 @@ afterAll(async () => {
   await sql`delete from dep_members where dep_id like ${PREFIX + '%'}`;
   await sql`delete from external_gates where task_id like ${PREFIX + '%'}`;
   await sql`delete from deps where id like ${PREFIX + '%'}`;
+  await sql`delete from job_events where job_id like ${PREFIX + '%'}`;
+
   await sql`delete from jobs where id like ${PREFIX + '%'}`;
   await sql`delete from task_seals where task_id like ${PREFIX + '%'}`;
   await sql`delete from tasks where id like ${PREFIX + '%'}`;
@@ -105,5 +107,76 @@ describe('job-graph schema (harness/job-graph.md)', () => {
     await sql`insert into jobs (id, task_id, repo_id, title, status) values (${jobId}, ${taskId}, ${repoId}, 'x', 'pending')`;
     const rows = (await sql`select generation from jobs where id = ${jobId}`) as Array<{ generation: number }>;
     expect(rows[0]!.generation).toBe(1);
+  });
+
+  /**
+   * R2 (3자 리뷰 수정 라운드, Codex 재검증): `create unique index job_events_one_terminal` runs on
+   * EVERY boot (ensureSchema) — a database that already holds a conflicting (succeeded, failed)
+   * pair for the same (job, generation) (pre-existing data from before this index existed, or a bug
+   * this round is closing) would make that CREATE UNIQUE INDEX itself fail, taking the whole boot
+   * down with it. Reproduced by dropping the index (simulating "this row predates it"), seeding a
+   * conflicting pair with explicit `created_at` values, then re-running ensureSchema and asserting
+   * it survives, the deterministic winner is the one left standing, and the index exists again.
+   */
+  describe('job_events_one_terminal — tolerant of pre-existing conflicting data (R2)', () => {
+    test('a conflicting pair with different created_at: the EARLIER row survives, ensureSchema does not fail', async () => {
+      const { repoId, taskId } = await makeChain();
+      const jobId = id('job');
+      await sql`insert into jobs (id, task_id, repo_id, title, status) values (${jobId}, ${taskId}, ${repoId}, 'x', 'running')`;
+
+      await sql`drop index if exists job_events_one_terminal`;
+      const earlier = new Date(Date.now() - 60_000);
+      const later = new Date();
+      await sql`insert into job_events (job_id, generation, kind, created_at) values (${jobId}, 1, 'failed', ${later})`;
+      await sql`insert into job_events (job_id, generation, kind, created_at) values (${jobId}, 1, 'succeeded', ${earlier})`;
+
+      await expect(ensureSchema(sql)).resolves.toBeUndefined();
+
+      const rows = (await sql`select kind from job_events where job_id = ${jobId} and generation = 1`) as Array<{ kind: string }>;
+      expect(rows.map((r) => r.kind)).toEqual(['succeeded']); // the earlier one survived, regardless of kind
+
+      const idxRows = (await sql`select 1 from pg_indexes where indexname = 'job_events_one_terminal'`) as unknown[];
+      expect(idxRows).toHaveLength(1);
+    });
+
+    test('a conflicting pair with the SAME created_at (an exact tie): failed wins, not succeeded', async () => {
+      const { repoId, taskId } = await makeChain();
+      const jobId = id('job');
+      await sql`insert into jobs (id, task_id, repo_id, title, status) values (${jobId}, ${taskId}, ${repoId}, 'x', 'running')`;
+
+      await sql`drop index if exists job_events_one_terminal`;
+      const tie = new Date();
+      await sql`insert into job_events (job_id, generation, kind, created_at) values (${jobId}, 1, 'succeeded', ${tie})`;
+      await sql`insert into job_events (job_id, generation, kind, created_at) values (${jobId}, 1, 'failed', ${tie})`;
+
+      await expect(ensureSchema(sql)).resolves.toBeUndefined();
+
+      const rows = (await sql`select kind from job_events where job_id = ${jobId} and generation = 1`) as Array<{ kind: string }>;
+      expect(rows.map((r) => r.kind)).toEqual(['failed']);
+
+      const idxRows = (await sql`select 1 from pg_indexes where indexname = 'job_events_one_terminal'`) as unknown[];
+      expect(idxRows).toHaveLength(1);
+    });
+
+    test('a job_events row targeting a DIFFERENT generation is untouched by the cleanup', async () => {
+      const { repoId, taskId } = await makeChain();
+      const jobId = id('job');
+      await sql`insert into jobs (id, task_id, repo_id, title, status) values (${jobId}, ${taskId}, ${repoId}, 'x', 'running')`;
+
+      await sql`drop index if exists job_events_one_terminal`;
+      await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'succeeded')`;
+      await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 2, 'failed')`; // different generation — not a real conflict
+
+      await ensureSchema(sql);
+
+      const rows = (await sql`select generation, kind from job_events where job_id = ${jobId} order by generation`) as Array<{
+        generation: number;
+        kind: string;
+      }>;
+      expect(rows).toEqual([
+        { generation: 1, kind: 'succeeded' },
+        { generation: 2, kind: 'failed' },
+      ]);
+    });
   });
 });

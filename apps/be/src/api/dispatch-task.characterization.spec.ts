@@ -107,6 +107,8 @@ beforeAll(async () => {
 afterAll(async () => {
   // Dispatch now dual-writes into the job-graph mirror (migration step 6) — clean those up too,
   // in FK order (jobs reference tasks/repos before either can be deleted).
+  await sql`delete from job_events where job_id like ${MARK + '%'}`;
+
   await sql`delete from jobs where id like ${MARK + '%'}`;
   await sql`delete from tasks where id like ${MARK + '%'}`;
   await sql`delete from repos where id like ${MARK + '%'}`;

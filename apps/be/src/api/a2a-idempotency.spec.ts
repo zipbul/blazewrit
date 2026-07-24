@@ -77,6 +77,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await sql`delete from a2a_inbox where message_id like ${MARK + '%'}`;
+  await sql`delete from job_events where job_id like ${MARK + '%'}`;
+
   await sql`delete from jobs where id like ${MARK + '%'}`;
   await sql`delete from tasks where id like ${MARK + '%'}`;
   await sql`delete from repos where id like ${MARK + '%'}`;

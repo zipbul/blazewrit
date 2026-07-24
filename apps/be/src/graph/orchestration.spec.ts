@@ -172,6 +172,7 @@ async function cleanupGraph(taskIds: string[], repoIds: string[], productIds: st
     await sql`delete from dep_members where dep_id in (select id from deps where waiter_job in (select id from jobs where task_id = ${taskId}))`;
     await sql`delete from deps where waiter_job in (select id from jobs where task_id = ${taskId})`;
     await sql`delete from task_seals where task_id = ${taskId}`;
+    await sql`delete from job_events where job_id in (select id from jobs where task_id = ${taskId})`;
     await sql`delete from jobs where task_id = ${taskId}`;
     await sql`delete from tasks where id = ${taskId}`;
   }
@@ -241,7 +242,7 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
       expect(callIds(calls).filter((x) => myIds.has(x))).toEqual([a, b, c]);
       expect(await jobStatus(c)).toBe('running');
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });
@@ -263,7 +264,7 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
       expect(await jobStatus(a)).toBe('running');
       expect(await jobStatus(b)).toBe('running');
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });
@@ -308,7 +309,7 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
       await drainUntil(controller, async () => callIds(calls).includes(d));
       expect(await jobStatus(d)).toBe('running');
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });
@@ -343,7 +344,7 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
       expect(await jobStatus(d)).toBe('running');
       expect(await jobStatus(c)).toBe('running'); // untouched, still not done
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });
@@ -375,7 +376,7 @@ describe('S1-S5: ordering, parallelism, join, OR, cross-repo', () => {
       expect(bCall.repoId).toBe(repo2);
       expect(await jobStatus(b)).toBe('running');
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repo1, repo2], [productId]);
     }
   });
@@ -423,7 +424,7 @@ describe('S6-S8: task-target dep, acceptable extension, failure + stall', () => 
       await drainUntil(controller, async () => callIds(calls).includes(x));
       expect(await jobStatus(x)).toBe('running');
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([t1, t2], [repo1, repo2], [productId]);
     }
   });
@@ -450,7 +451,7 @@ describe('S6-S8: task-target dep, acceptable extension, failure + stall', () => 
       expect(await jobStatus(bPrime)).toBe('blocked'); // default acceptable rejects 'cancelled'
       expect(callIds(calls).filter((x) => x === bPrime)).toEqual([]);
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });
@@ -483,7 +484,7 @@ describe('S6-S8: task-target dep, acceptable extension, failure + stall', () => 
       });
       expect(await jobStatus(b)).toBe('blocked'); // no auto-resolution (rule 4 / C3)
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });
@@ -528,7 +529,7 @@ describe('S9-S10: generation bump + latch + stale, mid-flight graph edit', () =>
       `) as unknown[];
       expect(wakeRows.length).toBe(1);
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });
@@ -555,7 +556,7 @@ describe('S9-S10: generation bump + latch + stale, mid-flight graph edit', () =>
       await drainUntil(controller, async () => callIds(calls).includes(c));
       expect(await jobStatus(c)).toBe('running');
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });
@@ -582,7 +583,7 @@ describe('S11: terminal latch E2E', () => {
 
       await expect(insertJob(sql, repoId, { id: id('late-job'), taskId, repoId, title: 'late' })).rejects.toThrow(TerminalTaskError);
     } finally {
-      controller.stop();
+      await controller.stop();
       await cleanupGraph([taskId], [repoId], [productId]);
     }
   });

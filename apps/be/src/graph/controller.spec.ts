@@ -98,6 +98,8 @@ afterAll(async () => {
   await sql`delete from dep_members where dep_id like ${PREFIX + '%'}`;
   await sql`delete from deps where id like ${PREFIX + '%'}`;
   await sql`delete from task_seals where task_id like ${PREFIX + '%'}`;
+  await sql`delete from job_events where job_id like ${PREFIX + '%'}`;
+
   await sql`delete from jobs where id like ${PREFIX + '%'}`;
   await sql`delete from tasks where id like ${PREFIX + '%'}`;
   await sql`delete from repos where id like ${PREFIX + '%'}`;
@@ -116,7 +118,7 @@ describe('startGraphController — restart + periodic reconcile (harness/job-gra
       await waitFor(async () => ((await jobStatus(jobId)) === 'running' ? true : undefined));
       expect(dispatch.mock.calls.some(([job]) => job.id === jobId)).toBe(true);
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -136,7 +138,7 @@ describe('startGraphController — restart + periodic reconcile (harness/job-gra
       await waitFor(async () => (dispatch.mock.calls.some(([job]) => job.id === jobId) ? true : undefined));
       expect(await jobStatus(jobId)).toBe('pending');
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -152,7 +154,7 @@ describe('startGraphController — restart + periodic reconcile (harness/job-gra
       await waitFor(async () => ((await jobStatus(jobId)) !== 'pending' ? true : undefined));
       expect(dispatch.mock.calls.some(([job]) => job.id === jobId)).toBe(true);
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -179,7 +181,7 @@ describe('startGraphController — restart + periodic reconcile (harness/job-gra
       await waitFor(async () => (dispatch.mock.calls.some(([job]) => job.id === jobId) ? true : undefined));
       expect(dispatch.mock.calls.some(([job]) => job.id === jobId)).toBe(true);
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -187,11 +189,72 @@ describe('startGraphController — restart + periodic reconcile (harness/job-gra
     const { repoId, taskId } = await makeChain();
     const dispatch = mock(async (_job: ReconcileJob) => {});
     const controller = startGraphController(sql, dispatch, { tickMs: 30 });
-    controller.stop(); // stop right away — only the auto-initial pass (B1) may still complete
+    // F4 (3자 리뷰 수정 라운드): stop() now itself awaits the auto-initial pass (B1) to fully
+    // finish before resolving — the settle-then-check shape below no longer needs to guess at
+    // that timing, but it's kept regardless as a margin against the periodic timer specifically
+    // (this test's actual subject).
+    await controller.stop();
     await new Promise((r) => setTimeout(r, 150));
     const jobId = await seedJob(taskId, repoId, 'pending');
     await new Promise((r) => setTimeout(r, 200)); // several tickMs multiples, had the timer survived
     expect(await jobStatus(jobId)).toBe('pending'); // never auto-reconciled after stop
+  });
+
+  /**
+   * F4 (3자 리뷰 수정 라운드, Codex+Grok 수렴): reproduces graph-chaos.sim.spec.ts's own cross-seed
+   * contamination root cause directly — before this fix, stop() only cleared the FUTURE timer, so
+   * a caller who called stop() while a tick was still mid-flight (gated dispatch below) got back
+   * a resolved promise while that tick kept running in the background; since tick()'s own task-
+   * scan is GLOBAL (every open task, not scoped to this controller's own creator), that still-
+   * running pass could go on to claim and dispatch a job under a task created AFTER stop() was
+   * called — through THIS controller's own (by-then-stale) dispatch callback.
+   */
+  test('F4: stop() awaits the in-flight tick before resolving — no stray claim of a task created after stop() returns', async () => {
+    const { repoId, taskId: taskA } = await makeChain();
+    const jobA = await seedJob(taskA, repoId, 'pending');
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const dispatchA = mock(async (job: ReconcileJob) => {
+      if (job.id === jobA) await gateA;
+    });
+
+    const controllerA = startGraphController(sql, dispatchA, { tickMs: 999_999 });
+    // The auto-initial tick claims jobA -> running and calls dispatchA(jobA), which is now
+    // blocked on gateA — that tick is genuinely still in flight.
+    await waitFor(async () => (dispatchA.mock.calls.some(([job]) => job.id === jobA) ? true : undefined));
+
+    const stopPromise = controllerA.stop();
+    let stopSettled = false;
+    void stopPromise.then(() => {
+      stopSettled = true;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stopSettled).toBe(false); // must NOT resolve while the tick it's draining is still blocked
+
+    // A new task appears WHILE controllerA's stop() is still waiting on its stuck tick — exactly
+    // the "next seed's fresh task" shape from the sim's own contamination scenario.
+    const { repoId: repoB, taskId: taskB } = await makeChain();
+    const jobB = await seedJob(taskB, repoB, 'pending');
+
+    releaseA(); // let the stuck dispatch (and therefore the stuck tick) finish
+    await stopPromise; // now resolves
+
+    // controllerA's own dispatch must never have touched jobB — its task-scan ran before taskB
+    // existed, and stop() draining the tick (rather than abandoning it) is what makes "before
+    // taskB existed" a guarantee instead of a race.
+    expect(dispatchA.mock.calls.some(([job]) => job.id === jobB)).toBe(false);
+
+    // A brand-new, independent controller reconciles jobB normally — no lingering contention.
+    const dispatchB = mock(async (_job: ReconcileJob) => {});
+    const controllerB = startGraphController(sql, dispatchB, { tickMs: 999_999 });
+    try {
+      await waitFor(async () => (dispatchB.mock.calls.some(([job]) => job.id === jobB) ? true : undefined));
+      expect(dispatchB.mock.calls.some(([job]) => job.id === jobB)).toBe(true);
+    } finally {
+      await controllerB.stop();
+    }
   });
 });
 
@@ -213,7 +276,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       await waitFor(async () => ((await openWakeCount('lease_expired', taskId)) > 0 ? true : undefined));
       expect(await openWakeCount('lease_expired', taskId)).toBe(1);
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -228,7 +291,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       await new Promise((r) => setTimeout(r, 100)); // let the auto-initial pass settle
       expect(await jobStatus(jobId)).toBe('running');
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -243,7 +306,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       await new Promise((r) => setTimeout(r, 100));
       expect(await jobStatus(jobId)).toBe('done');
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -269,7 +332,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       await waitFor(async () => ((await openWakeCount('orphaned_ready', taskId)) > 0 ? true : undefined));
       expect(await jobStatus(jobId)).toBe('running'); // never auto-failed -- a human decides (rule 4 spirit)
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -284,7 +347,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       expect(await jobStatus(jobId)).toBe('running');
       expect(await openWakeCount('orphaned_ready', taskId)).toBe(0);
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -320,7 +383,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       expect(await openWakeCount('orphaned_ready', taskId)).toBe(0);
       expect(await jobStatus(jobId)).toBe('running'); // untouched either way
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -346,7 +409,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
       await waitFor(async () => ((await openWakeCount('orphaned_ready', taskId)) > 0 ? true : undefined));
       expect(await jobStatus(jobId)).toBe('running'); // never auto-failed -- a human decides (rule 4 spirit)
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -361,7 +424,7 @@ describe('startGraphController — lease-expiry scan (harness/job-graph.md P2 sp
     try {
       await waitFor(async () => ((await openWakeCount('orphaned_ready', taskId)) > 0 ? true : undefined));
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 });
@@ -390,7 +453,7 @@ describe('startGraphController — wake records (harness/job-graph.md P2 round 2
       await controller.tick();
       expect(await openWakeCount('stalled', taskId)).toBe(1);
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -407,7 +470,7 @@ describe('startGraphController — wake records (harness/job-graph.md P2 round 2
       const taskRows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;
       expect(taskRows[0]!.status).toBe('open'); // never auto-resolved to done/failed/cancelled
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -434,7 +497,7 @@ describe('startGraphController — wake records (harness/job-graph.md P2 round 2
       // the done/cancelled-mix case C2's OWN wake exists for.
       expect(await openWakeCount('unresolvable_task', taskId)).toBe(0);
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -451,7 +514,7 @@ describe('startGraphController — wake records (harness/job-graph.md P2 round 2
       const taskRows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;
       expect(taskRows[0]!.status).toBe('open'); // never rederived — no seal means no candidate
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 
@@ -471,7 +534,7 @@ describe('startGraphController — wake records (harness/job-graph.md P2 round 2
       const depRows = (await sql`select status from deps where id = ${depId}`) as Array<{ status: string }>;
       expect(depRows[0]!.status).toBe('stale'); // D2: no auto-resolution
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   });
 });

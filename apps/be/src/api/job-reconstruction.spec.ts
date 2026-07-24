@@ -109,6 +109,8 @@ afterAll(async () => {
   await sql`delete from decisions where id like ${MARK + '%'}`;
   await sql`delete from step_runs where flow_id like ${MARK + '%'}`;
   await sql`delete from flows where id like ${MARK + '%'}`;
+  await sql`delete from job_events where job_id like ${MARK + '%'}`;
+
   await sql`delete from jobs where id like ${MARK + '%'}`;
   await sql`delete from tasks where id like ${MARK + '%'}`;
   await sql`delete from work_items where id like ${MARK + '%'}`;
@@ -237,7 +239,7 @@ describe('runRegisteredJob registry-miss -> DB reconstruction (P4-2b)', () => {
       expect(await openWakeCount('lease_expired', jobId)).toBe(0);
       expect((await jobRow(jobId))?.status).toBe('failed'); // never resurrected by either scan
     } finally {
-      controller.stop();
+      await controller.stop();
     }
   }, 15000);
 

@@ -1,6 +1,6 @@
 import type { SQL } from 'bun';
 import { computeReady, evaluateDep, isStaleMember, jobTargetOutcome, taskTargetOutcome, type DepMemberEval } from './deps';
-import { canTransitionJob } from './transitions';
+import { canTransitionJob, isTerminalJobStatus } from './transitions';
 import { DEFAULT_LEASE_TTL_MS } from './lease';
 import type { DepOutcome, DepPredicate, DepStatus, DepTargetType, JobStatus, TaskStatus } from './types';
 
@@ -115,6 +115,130 @@ async function jobIsReady(sql: SQL, jobId: string): Promise<boolean> {
   return computeReady(depStatuses.map((status) => ({ status })));
 }
 
+interface JobEventRow {
+  job_id: string;
+  generation: number;
+  kind: 'succeeded' | 'failed' | 'rerun_requested';
+}
+
+/**
+ * F2 (3자 리뷰 수정 라운드): claims AND applies exactly ONE job_events row inside a single
+ * transaction — the claim (`processed_at is null` -> `now()`) and the jobs/work_items application
+ * are now one atomicity unit, closing two holes the earlier 3-separate-statements shape had:
+ *
+ *  - Non-atomic apply-then-mark: a crash (or any thrown error) between "applied the jobs CAS" and
+ *    "marked processed_at" used to leave the event LOOKING unprocessed on a retry, but the retry's
+ *    OWN jobs CAS would then find the row already at its target status (0 rows affected) and skip
+ *    deriving work_items — permanently stranding the mirror at 'in_flow' under an already-terminal
+ *    job. Now: either this whole transaction commits (claim + apply + mirror, all together) or it
+ *    rolls back IN FULL (claim included) — there is no reachable "applied but not marked" state to
+ *    retry into.
+ *  - Concurrent consumption: two callers processing the SAME event (reconcileTask's inline call and
+ *    controller.ts's periodic sweep are NOT mutually exclusive) both used to attempt the jobs CAS
+ *    and the mark independently. Now the claim UPDATE's own `processed_at is null` guard is the
+ *    single point of serialization: Postgres blocks the second transaction on the row lock until
+ *    the first resolves, then re-evaluates the guard against the now-committed (or rolled-back) row
+ *    — a genuine single winner per event, not a best-effort race that happens to converge.
+ *
+ * Reinforcement (still F2): work_items is derived from the job's CURRENT status/generation, not
+ * from whether THIS transaction's own jobs CAS affected a row — a retry of an event whose jobs CAS
+ * already applied on an earlier pass (the crash-recovery case above, or simply a second consumer
+ * that lost the claim race) still finds the job already at the matching terminal status and derives
+ * the mirror anyway. No path is left where jobs reaches its terminal status while work_items stays
+ * permanently stuck at 'in_flow'.
+ */
+async function consumeOneEvent(sql: SQL, ev: JobEventRow): Promise<void> {
+  await sql.begin(async (tx) => {
+    const claimed = (await tx`
+      update job_events set processed_at = now()
+      where job_id = ${ev.job_id} and generation = ${ev.generation} and kind = ${ev.kind} and processed_at is null
+      returning job_id
+    `) as unknown[];
+    if (claimed.length === 0) return; // already consumed by a concurrently-committed pass — nothing left to do
+
+    if (ev.kind === 'succeeded' || ev.kind === 'failed') {
+      const newStatus = ev.kind === 'succeeded' ? 'done' : 'failed';
+      await tx`
+        update jobs set status = ${newStatus}, status_changed_at = now(), lease_expires_at = null
+        where id = ${ev.job_id} and status = 'running' and generation = ${ev.generation}
+      `;
+      const jobRows = (await tx`select status, generation from jobs where id = ${ev.job_id}`) as Array<{ status: JobStatus; generation: number }>;
+      const job = jobRows[0];
+      if (job && job.generation === ev.generation && job.status === newStatus) {
+        // work_items mirror (jobId === workItemId, dispatchTask's own 1:1 convention) — only
+        // derived here now (formerly makeJobFlow's own dual-write); still best-effort/soft, same
+        // as every other work_items mirror write in this codebase.
+        await tx`
+          update work_items set state = ${newStatus === 'done' ? 'done' : 'blocked'} where id = ${ev.job_id} and state = 'in_flow'
+        `;
+      }
+    } else {
+      // rerun_requested (Phase 2's own producer isn't wired yet — store.bumpJobGeneration still
+      // writes directly — but the consumer is ready for it): gen++ only if still terminal at
+      // exactly this event's generation. `for update` locks the row for the rest of this
+      // transaction — harmless (nothing else in this same transaction touches it again) and
+      // consistent with this function's other branch reading un-locked (the claim UPDATE above
+      // already serializes concurrent consumers of THIS event; a different event racing THIS job
+      // is store.ts's own bumpJobGeneration concern, unchanged this round).
+      const rows = (await tx`select status, generation from jobs where id = ${ev.job_id} for update`) as Array<{ status: JobStatus; generation: number }>;
+      const job = rows[0];
+      if (job && job.generation === ev.generation && isTerminalJobStatus(job.status)) {
+        await tx`update jobs set status = 'pending', generation = generation + 1 where id = ${ev.job_id} and generation = ${ev.generation}`;
+      }
+    }
+  });
+}
+
+/**
+ * 단일 기록자 통합 Phase 1 (job-graph.md C1): the ONLY place a job_events row ever turns into a
+ * jobs.status write. Execution (api/rest.ts's makeJobFlow) no longer writes jobs/work_items status
+ * at all — it just inserts an append-only fact ("this generation ended succeeded/failed/wants a
+ * rerun"); this is the state-machine side of that split. Each event is claimed and applied in its
+ * OWN transaction (consumeOneEvent, see its own doc comment for the atomicity/concurrency story).
+ *
+ * `taskId` given: scopes to job_events whose job belongs to that task — this is reconcileTask's own
+ * inline call, for immediacy (don't make a job's completion wait for the next periodic controller
+ * tick). `taskId` omitted: every unprocessed event, any task — this is controller.ts's tick(), the
+ * crash/restart net for an event whose inline consumer never got to run (e.g. the process died
+ * before its own reconcileTask call).
+ *
+ * Per event: 'succeeded'/'failed' apply done/failed ONLY if the job is still 'running' at exactly
+ * that event's generation — a stale gen-1 event arriving after a gen-2 re-claim (or after some
+ * other path already failed the job) finds its precondition already false and is consumed as a
+ * no-op, never clobbering whatever the row moved on to. 'rerun_requested' gen++'s a job that's
+ * still terminal at that event's generation (the same precondition bumpJobGeneration itself
+ * enforces) — a no-op once the job has already moved on (re-run via a different path, or a second
+ * rerun_requested event for the same generation already consumed). Every event is marked
+ * `processed_at` regardless of whether it applied — the event's OWN fact was still successfully
+ * consumed either way; "did nothing because it no longer applies" is a valid, final outcome, not a
+ * reason to leave it to be re-read forever.
+ *
+ * One event's transaction failing (deadlock, transient connection error) does not stop the rest of
+ * this pass — F2's own atomicity guarantee means it simply stays unprocessed (its transaction rolled
+ * back in full, `processed_at` still null) and is retried whole-cloth by the next consumeJobEvents
+ * call, same as any other transient failure elsewhere in this codebase's reconcile paths. Logged,
+ * not silently dropped — this is durable state, not a fire-and-forget notification.
+ */
+export async function consumeJobEvents(sql: SQL, taskId?: string): Promise<void> {
+  const events = (taskId
+    ? await sql`
+        select je.job_id, je.generation, je.kind from job_events je
+        join jobs j on j.id = je.job_id
+        where j.task_id = ${taskId} and je.processed_at is null
+        order by je.created_at
+      `
+    : await sql`select job_id, generation, kind from job_events where processed_at is null order by created_at`) as JobEventRow[];
+
+  for (const ev of events) {
+    try {
+      await consumeOneEvent(sql, ev);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[consumeJobEvents] failed to consume job_events (job=${ev.job_id} generation=${ev.generation} kind=${ev.kind}):`, err);
+    }
+  }
+}
+
 /**
  * Reconcile controller (harness/job-graph.md migration step 8): finds every ready pending/blocked
  * job under `taskId` and hands it to `dispatch`. This is the ONLY place ready→running happens —
@@ -136,6 +260,11 @@ export async function reconcileTask(
 ): Promise<ReconcileResult> {
   const leaseTtlMs = opts.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
   const claimed: string[] = [];
+  // Single-writer round (job-graph.md C1): consume this task's own pending execution facts FIRST —
+  // a job this pass is about to read as 'running' below may actually have just finished (its
+  // job_events row inserted, but not yet applied), and a waiter's dep on it needs the live
+  // post-consumption status, not a stale 'running' snapshot.
+  await consumeJobEvents(sql, taskId);
   const jobs = (await sql`select id, repo_id, title, status from jobs where task_id = ${taskId} order by created_at`) as JobRow[];
 
   for (const job of jobs) {

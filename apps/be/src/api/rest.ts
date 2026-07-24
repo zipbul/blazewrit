@@ -36,7 +36,7 @@ import {
 import { assembleJobs, validateAssembly } from '../graph/assemble-jobs';
 import { loadTaskGraph } from '../graph/load-task-graph';
 import { insertProposal, materializeAskTx, TaskNotOpenError, EmptyAskError, ProposalIdConflictError, type NegotiationAsk } from '../graph/negotiation';
-import { reconcileTask, type ReconcileJob } from '../graph/reconcile';
+import { consumeJobEvents, reconcileTask, type ReconcileJob } from '../graph/reconcile';
 import { withLeaseHeartbeat, renewLease, DEFAULT_LEASE_TTL_MS } from '../graph/lease';
 import type { StepExecutor } from '../orchestrator/types';
 
@@ -100,6 +100,61 @@ export async function resolveRepoCwd(sql: SQL, repoId: string): Promise<string> 
   return rows[0]?.cwd ?? '.';
 }
 
+/** Short, fixed backoff between job_events insert retries (F1, 3자 리뷰 수정 라운드) — this is a
+ * local transient-error retry, not a long-horizon recovery mechanism (the periodic controller tick
+ * already provides that safety net via consumeJobEvents' global sweep), so the total added latency
+ * stays small. */
+export const DEFAULT_RECORD_OUTCOME_RETRY_DELAYS_MS = [50, 100];
+
+export type InsertJobEventResult = { ok: true } | { ok: false; error: unknown };
+
+/**
+ * F1 (3자 리뷰 수정 라운드): the durable-fact insert must never be silently swallowed — a job_events
+ * row IS the only record this generation's outcome will ever get (the CAS/generation guards that
+ * used to live on the completion WRITE are gone; there is nothing else to fall back on). Retries a
+ * bounded number of times against transient failures (connection blip, deadlock) before giving up;
+ * `on conflict do nothing`'s own duplicate-suppression never throws, so every caught error here is
+ * a REAL failure, not a normal "someone else already recorded this" outcome.
+ *
+ * Module-level (not a createRestApi closure), same reasoning as resolveRepoCwd right above: unit
+ * testable with a bare fake `sql` that injects a failure, no live Postgres required. The caller
+ * (createRestApi's recordJobOutcome) is what turns `{ ok: false }` into the actual
+ * console.error + flow-error publish — this function only owns the retry loop itself, so a test can
+ * assert the retry COUNT and the returned error without needing a real flowHub/publish wiring.
+ */
+export async function insertJobEventWithRetry(
+  sql: SQL,
+  workItemId: string,
+  jobGeneration: number,
+  kind: 'succeeded' | 'failed',
+  retryDelaysMs: number[] = DEFAULT_RECORD_OUTCOME_RETRY_DELAYS_MS,
+): Promise<InsertJobEventResult> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+    try {
+      await sql`insert into job_events (job_id, generation, kind) values (${workItemId}, ${jobGeneration}, ${kind}) on conflict do nothing`;
+      return { ok: true };
+    } catch (err) {
+      lastErr = err;
+      const delay = retryDelaysMs[attempt];
+      if (delay !== undefined) await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  return { ok: false, error: lastErr };
+}
+
+/** Whether `job_events`'s row for this exact (job, generation, kind) fact has been consumed
+ * (`processed_at` set) — R1's own verification point: reconcileTask's inline consumeJobEvents call
+ * can fail on THIS specific event's own transaction (logged internally, not rethrown — see
+ * consumeJobEvents' own doc comment) and still let reconcileTask resolve normally, so a caller that
+ * only checked "did reconcileTask throw" would miss it entirely. */
+async function isJobEventProcessed(sql: SQL, workItemId: string, jobGeneration: number, kind: 'succeeded' | 'failed'): Promise<boolean> {
+  const rows = (await sql`
+    select 1 from job_events where job_id = ${workItemId} and generation = ${jobGeneration} and kind = ${kind} and processed_at is not null
+  `) as unknown[];
+  return rows.length > 0;
+}
+
 /** REST + SSE surface the Angular UI consumes (DECISIONS §13), backed by Postgres. */
 export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const flowHub = new FlowHub();
@@ -123,6 +178,112 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
 
   /**
+   * 단일 기록자 통합 Phase 1 (job-graph.md C1): execution never writes jobs/work_items status
+   * directly anymore — reconcile's serial loop (graph/reconcile.ts's consumeJobEvents) is the only
+   * writer of a jobs status transition. This records the fact ("this generation ended succeeded/
+   * failed") as an append-only `job_events` row — the PK (job_id, generation, kind) makes a
+   * duplicate report of the SAME fact a safe no-op (`on conflict do nothing`), which is what lets
+   * every CAS/generation guard that used to live on the completion WRITE itself (3자 리뷰 수정
+   * A라운드 A1, E1) disappear: there is no longer a write here for a late/stale report to clobber
+   * anything with.
+   *
+   * F3 (3자 리뷰 수정 라운드): reconcileTask is AWAITED here, not fire-and-forget — so a caller that
+   * only publishes 'flow-finished'/'flow-error' AFTER this returns is publishing it once the state
+   * this event describes has actually been (attempted to be) applied, not merely recorded. This is
+   * safe for controller.tick()'s own non-blocking contract (3자 리뷰 수정 B1-2b): makeJobFlow's
+   * returned closure is ALWAYS run fire-and-forget one layer up (runRegisteredJob's `void exec()` /
+   * `void reconstructed()`), so awaiting inside it never blocks tick() itself.
+   *
+   * R1 (3자 리뷰 수정 라운드, Codex 재검증): a failure INSIDE reconcileTask's own consumeJobEvents
+   * call is caught and logged AT THAT LEVEL, not rethrown (consumeJobEvents' own per-event try/catch
+   * — see its doc comment) — so `await reconcileTask(...)` above resolving without throwing does NOT
+   * mean THIS event was actually applied; it could have failed its own claim/apply transaction and
+   * simply moved on to the next event. Checking `processed_at` explicitly (isJobEventProcessed) is
+   * what catches that gap — without it, a caller would report 'flow-finished' while the job sits
+   * 'running' forever, a false success. Retries a short, bounded number of times (2, 100ms apart) by
+   * calling consumeJobEvents directly — a transient failure (lock contention, a momentary connection
+   * blip) often clears within that window. If it's STILL unprocessed after that, this is NOT a lost
+   * fact (the job_events row is durably committed; the next periodic controller tick's global sweep
+   * will still apply it eventually) — only the IMMEDIATE report is downgraded from success to
+   * flow-error, so nothing downstream is told "done" before the DB agrees.
+   *
+   * Falls back to the LEGACY direct work_items write only when no jobs row was ever mirrored for
+   * this id at all (dispatchTask's own "legacy path survives a dead graph" carve-out — e.g.
+   * insertJob rejected the dispatch's ctx as already-terminal, so `graphWriteOk` stayed false and
+   * this ran through executeJobFlow() directly, never through reconcile). A job_events row would
+   * violate its own FK (job_id references jobs(id)) in that case, and even if it didn't, reconcile
+   * has no jobs row to reconcile FOR this id — nothing would ever consume the event and work_items
+   * would sit 'in_flow' forever. This is the one remaining raw work_items write in this file.
+   *
+   * R3 (3자 리뷰 수정 라운드, Codex 재검증): that legacy write used to be `.catch(() => undefined)` —
+   * for a job the graph never knew about, THIS write is the only record its outcome will ever get
+   * (there is no job_events fallback to fall back on a second time), so swallowing its failure was
+   * exactly F1's original bug in a different guise. Same surfacing pattern: console.error + a
+   * flow-error publish + false, never silent.
+   *
+   * Returns whether the outcome is now durably recorded AND (for the graph-backed path) actually
+   * applied — callers use this to decide whether their OWN completion event ('flow-finished'/
+   * 'flow-error') is safe to publish. When it isn't, THIS function has already surfaced why —
+   * console.error + a flow-error publish of its own — never silently.
+   */
+  const recordJobOutcome = async (workItemId: string, taskId: string, jobGeneration: number, kind: 'succeeded' | 'failed'): Promise<boolean> => {
+    const mirrored = ((await sql`select 1 from jobs where id = ${workItemId}`) as unknown[]).length > 0;
+    if (!mirrored) {
+      try {
+        await sql`update work_items set state = ${kind === 'succeeded' ? 'done' : 'blocked'} where id = ${workItemId} and state = 'in_flow'`;
+        return true;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`legacy work_items completion write failed (job=${workItemId} kind=${kind}) — this job has no jobs-graph mirror, so there is nothing else to fall back on:`, err);
+        flowHub.publish({
+          type: 'flow-error',
+          workItemId,
+          message: `legacy work_items completion write failed — outcome (${kind}) was NOT recorded: ${String(err)}`,
+        });
+        return false;
+      }
+    }
+    const inserted = await insertJobEventWithRetry(sql, workItemId, jobGeneration, kind);
+    if (!inserted.ok) {
+      // eslint-disable-next-line no-console
+      console.error(`job_events insert failed after retries (job=${workItemId} generation=${jobGeneration} kind=${kind}):`, inserted.error);
+      flowHub.publish({
+        type: 'flow-error',
+        workItemId,
+        message: `job_events insert failed after retries — outcome (${kind}) for generation ${jobGeneration} was NOT durably recorded: ${String(inserted.error)}`,
+      });
+      return false;
+    }
+    try {
+      await reconcileTask(sql, taskId, runRegisteredJob, { leaseTtlMs });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`inline reconcileTask failed after recording job=${workItemId} generation=${jobGeneration} kind=${kind} — the fact is durable, the next controller tick will still consume it:`, err);
+    }
+
+    let processed = await isJobEventProcessed(sql, workItemId, jobGeneration, kind);
+    for (let attempt = 0; !processed && attempt < 2; attempt++) {
+      await new Promise((r) => setTimeout(r, 100));
+      await consumeJobEvents(sql, taskId).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error(`retry consumeJobEvents failed (job=${workItemId} generation=${jobGeneration} kind=${kind}, attempt ${attempt + 1}):`, err);
+      });
+      processed = await isJobEventProcessed(sql, workItemId, jobGeneration, kind);
+    }
+    if (!processed) {
+      // eslint-disable-next-line no-console
+      console.error(`job_events row for job=${workItemId} generation=${jobGeneration} kind=${kind} is durable but still unprocessed after retries — not reporting success; the next controller tick's global sweep will still apply it.`);
+      flowHub.publish({
+        type: 'flow-error',
+        workItemId,
+        message: `outcome (${kind}) for generation ${jobGeneration} is durably recorded but not yet applied — the state transition is delayed, not lost; the next controller tick will apply it.`,
+      });
+      return false;
+    }
+    return true;
+  };
+
+  /**
    * Builds one job's runnable flow-to-completion closure (harness/job-graph.md migration step 8)
    * — a factory (P4-2b), not a plain closure, so the exact same terminal-write/heartbeat contract
    * can be built from TWO different origins: `dispatchTask` below builds one bound to the job it
@@ -134,18 +295,18 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
    * process restart. That reconstruction path passes the row's REAL `generation`, not a guess —
    * closing 3자 리뷰 수정 E1's `jobGeneration = 1` constant, which was only ever an approximation
    * true for the one caller (dispatchTask) that existed until now; a reconstructed gen>1 job
-   * (re-run via bumpJobGeneration, then reclaimed) now completes with a CAS write that actually
-   * matches its own row instead of losing the race by construction.
+   * (re-run via bumpJobGeneration, then reclaimed) now records its outcome fact tagged with the
+   * generation it actually ran at, instead of one that would never match by construction.
    *
-   * Self-contained — catches its OWN errors and marks both work_items and jobs terminal on
-   * failure — because reconcileTask's own dispatch try/catch only marks the jobs-table row
-   * 'failed' on a thrown error; if this let an exception escape instead of handling it here, the
-   * legacy work_items row would be left stuck at 'in_flow' forever when run through reconcile.
-   * Direct-call and reconcile-call must behave identically either way, so all terminal
-   * bookkeeping lives here, not in either caller.
+   * Self-contained — catches its OWN errors and records the outcome fact (recordJobOutcome, see
+   * its own doc comment above) on failure — because reconcileTask's own dispatch try/catch only
+   * marks the jobs-table row 'failed' on a thrown error; if this let an exception escape instead
+   * of handling it here, the legacy work_items row would be left stuck at 'in_flow' forever when
+   * run through reconcile. Direct-call and reconcile-call must behave identically either way, so
+   * all terminal bookkeeping lives here, not in either caller.
    */
-  const makeJobFlow = (p: { workItemId: string; projectId: string; request: string; flowType: FlowType; jobGeneration: number }) => async (): Promise<void> => {
-    const { workItemId, projectId, request, flowType, jobGeneration } = p;
+  const makeJobFlow = (p: { workItemId: string; projectId: string; request: string; flowType: FlowType; jobGeneration: number; taskId: string }) => async (): Promise<void> => {
+    const { workItemId, projectId, request, flowType, jobGeneration, taskId } = p;
     try {
       // TWO-PHASE AGENT-ASSEMBLED flow: with an assembler injected, seed ground-only and compose
       // the rest AFTER ground runs — the agent picks steps from ground's real output, not just the
@@ -206,32 +367,17 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
           flowHub.publish({ type: 'learning', flowId: l.flowId });
         },
       });
-      // CAS-guarded (3자 리뷰 수정 A라운드 A1; generation-guarded since E1, Fable M1): a
-      // lease-expiry scan or a gen++ may have already moved this row on to a DIFFERENT
-      // terminal/regenerated state by the time this (possibly slow) flow finally finishes — an
-      // unconditional write here would clobber that newer, more authoritative state with a
-      // stale "yes I completed" that has nothing to do with it. `status = 'running'` alone
-      // catches a terminal/pending move; `generation = ${jobGeneration}` additionally catches
-      // the case where the row was ALSO re-claimed back to 'running' at a NEWER generation
-      // before this stale write arrives — the status guard alone would then wrongly match.
-      // work_items itself carries no generation column (Codex task#23): it's a soft, best-effort
-      // mirror — jobs is the authoritative row (E-round's A3 scan already CAS-guards its own
-      // work_items write the same status-only way), so a matching guard here would add no real
-      // protection beyond what's already true in practice.
-      await sql`update work_items set state = ${result.status === 'completed' ? 'done' : 'blocked'} where id = ${workItemId} and state = 'in_flow'`;
-      // Job-graph mirror: a raw status update, not the state-machine (canTransitionJob /
-      // bumpJobGeneration) — routing this through the proper transition machinery is P2
-      // reconcile's job. This is best-effort bookkeeping so the mirror doesn't silently drift
-      // while dispatch predates reconcile; a failure here must not affect the legacy path above.
-      await sql`
-        update jobs set status = ${result.status === 'completed' ? 'done' : 'failed'}, status_changed_at = now(), lease_expires_at = null
-        where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}
-      `.catch(() => undefined);
-      flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
+      // Single-writer round (job-graph.md C1): record the fact, don't write the state — see
+      // recordJobOutcome's own doc comment above for why the CAS/generation guard that used to
+      // live on this write is gone (there's no longer a write here for a stale report to clobber).
+      // F1/F3: only publish 'flow-finished' once the outcome is durably recorded — recordJobOutcome
+      // itself already published a flow-error (and logged) when it isn't, so this must not ALSO
+      // claim success on top of that.
+      const durable = await recordJobOutcome(workItemId, taskId, jobGeneration, result.status === 'completed' ? 'succeeded' : 'failed');
+      if (durable) flowHub.publish({ type: 'flow-finished', workItemId, flowId: result.flowId, status: result.status });
     } catch (err) {
-      await sql`update work_items set state = 'blocked' where id = ${workItemId} and state = 'in_flow'`.catch(() => undefined);
-      await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}`.catch(() => undefined);
-      flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
+      const durable = await recordJobOutcome(workItemId, taskId, jobGeneration, 'failed');
+      if (durable) flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
     }
   };
 
@@ -281,6 +427,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         // job (re-run via bumpJobGeneration, then reclaimed) now completes with a CAS write that
         // actually matches its own row instead of losing the race by construction.
         jobGeneration: row.generation,
+        taskId: row.task_id,
       });
       void reconstructed().catch(() => undefined); // fire-and-forget — same contract as the registered-closure branch below
       return;
@@ -384,7 +531,7 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
     // reconcileTask as its dispatch callback instead of only ever running inline. Self-contained:
     // catches its own errors and marks both work_items and jobs terminal on failure (see
     // makeJobFlow's own doc comment above for why that bookkeeping has to live there, not here).
-    const executeJobFlow = makeJobFlow({ workItemId, projectId, request, flowType, jobGeneration });
+    const executeJobFlow = makeJobFlow({ workItemId, projectId, request, flowType, jobGeneration, taskId: ctx });
     // Registered synchronously, before any await below — so if another dispatch under the SAME
     // ctx wins the reconcile claim race on THIS job (see jobExecutors above), it can still find
     // and run this exact closure the instant the row it's looking up could possibly exist.
@@ -465,12 +612,12 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         }
       } catch (err) {
         jobExecutors.delete(workItemId);
-        // CAS-guarded (A1) + generation-guarded (E1) — same rationale as executeJobFlow's own
-        // catch above; a jobs row for workItemId, if it exists at all at this point, was only
-        // ever created by THIS dispatch's own graph write above, at generation 1.
-        await sql`update work_items set state = 'blocked' where id = ${workItemId} and state = 'in_flow'`.catch(() => undefined);
-        await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId} and status = 'running' and generation = ${jobGeneration}`.catch(() => undefined);
-        flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
+        // recordJobOutcome (single-writer round, job-graph.md C1) — same rationale as
+        // executeJobFlow's own catch above; a jobs row for workItemId, if it exists at all at
+        // this point, was only ever created by THIS dispatch's own graph write above, at
+        // generation 1. F1/F3: only publish once the outcome is durably recorded.
+        const durable = await recordJobOutcome(workItemId, ctx, jobGeneration, 'failed');
+        if (durable) flowHub.publish({ type: 'flow-error', workItemId, message: String(err) });
       }
     })();
     return workItemId;

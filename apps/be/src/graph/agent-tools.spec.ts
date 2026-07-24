@@ -79,6 +79,7 @@ afterAll(async () => {
   await sql`delete from a2a_proposals where task_id like ${PREFIX + '%'}`;
   await sql`delete from dep_members where dep_id like ${PREFIX + '%'}`;
   await sql`delete from deps where id like ${PREFIX + '%'}`;
+  await sql`delete from job_events where job_id in (select id from jobs where task_id like ${PREFIX + '%'})`;
   await sql`delete from jobs where task_id like ${PREFIX + '%'}`;
   await sql`delete from task_seals where task_id like ${PREFIX + '%'}`;
   await sql`delete from tasks where id like ${PREFIX + '%'}`;

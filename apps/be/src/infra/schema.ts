@@ -224,6 +224,52 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     created_at timestamptz not null default now()
   )`;
 
+  // 단일 기록자 통합 Phase 1 (job-graph.md C1): append-only execution facts. Execution
+  // (api/rest.ts's makeJobFlow) inserts one of these instead of writing jobs/work_items status
+  // directly — graph/reconcile.ts's consumeJobEvents is the only thing that ever turns a row here
+  // into a jobs.status write, making reconcile the sole state-machine writer again. The PK is the
+  // whole idempotency story: a late-arriving duplicate report of the SAME (job, generation, kind)
+  // fact is a safe `on conflict do nothing`, which is what lets the completion-write CAS/generation
+  // guards that used to live in rest.ts disappear — there is no longer a write there for a stale
+  // report to race against. `processed_at` marks consumption (null = still pending); it does NOT
+  // gate re-processing on its own (consumeJobEvents' own `processed_at is null` filter does that).
+  await sql`create table if not exists job_events (
+    job_id text not null references jobs(id),
+    generation int not null,
+    kind text not null check (kind in ('succeeded', 'failed', 'rerun_requested')),
+    created_at timestamptz not null default now(),
+    processed_at timestamptz,
+    primary key (job_id, generation, kind)
+  )`;
+  // R2 (3자 리뷰 수정 라운드, Codex 재검증): the unique index below rejects any EXISTING conflicting
+  // pair outright — a database that already holds both a 'succeeded' and a 'failed' row for the
+  // same (job, generation) (from before this round, or from a bug this round is closing) would make
+  // the CREATE UNIQUE INDEX itself fail at boot, taking ensureSchema (and the whole boot) down with
+  // it. Deterministic pre-cleanup, run every boot (idempotent — a no-op once no conflicts remain):
+  // keep the EARLIER `created_at` (whichever actually happened first is the real outcome); on an
+  // exact tie, keep 'failed' (a conservative default — a rerun is always possible from 'failed', not
+  // from a wrongly-kept 'succeeded'). Scoped to only ('succeeded','failed') pairs, matching the
+  // index's own predicate — 'rerun_requested' rows are never touched.
+  await sql`
+    delete from job_events a
+    using job_events b
+    where a.job_id = b.job_id
+      and a.generation = b.generation
+      and a.kind in ('succeeded', 'failed')
+      and b.kind in ('succeeded', 'failed')
+      and a.kind <> b.kind
+      and (a.created_at > b.created_at or (a.created_at = b.created_at and a.kind = 'succeeded'))
+  `;
+  // F5 (3자 리뷰 수정 라운드): the PK alone allows BOTH a 'succeeded' and a 'failed' row to coexist
+  // for the same (job, generation) — two different kinds are two different PK values, so `on
+  // conflict do nothing` never catches that combination. Today's only producer (recordJobOutcome)
+  // ever writes exactly one kind per generation, so this never fires in practice — but the schema
+  // itself allowed a non-deterministic outcome (which kind "wins" would depend on read order) for
+  // any future/buggy caller that raced both. This closes it structurally: one terminal outcome per
+  // (job, generation), full stop — a second kind's insert hits this index instead and is absorbed
+  // by the SAME `on conflict do nothing`, the first-committed kind deterministically winning.
+  await sql`create unique index if not exists job_events_one_terminal on job_events (job_id, generation) where kind in ('succeeded', 'failed')`;
+
   // Backfill (harness/job-graph.md migration step 2): mirror projects → repos 1:1, with a
   // single placeholder product for repos that don't belong to one yet. Read-verification
   // only — the legacy write paths (projects/work_items) are untouched by this backfill.

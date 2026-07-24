@@ -16,6 +16,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // FK-reverse order. 'legacy' product is shared state (other suites/boots rely on it) — never delete it.
+  await sql`delete from job_events where job_id like ${PREFIX + '%'}`;
+
   await sql`delete from jobs where id like ${PREFIX + '%'}`;
   await sql`delete from tasks where id like ${PREFIX + '%'}`;
   await sql`delete from repos where id like ${PREFIX + '%'}`;

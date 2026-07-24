@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { SQL } from 'bun';
 import { ensureSchema } from '../infra/schema';
-import { reconcileTask, type ReconcileJob } from './reconcile';
+import { consumeJobEvents, reconcileTask, type ReconcileJob } from './reconcile';
 import { insertDepTx } from './store';
 import type { JobStatus } from './types';
 
@@ -45,6 +45,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // FK-reverse order.
+  await sql`delete from job_events where job_id like ${PREFIX + '%'}`;
+  await sql`delete from work_items where id like ${PREFIX + '%'}`;
   await sql`delete from dep_members where dep_id like ${PREFIX + '%'}`;
   await sql`delete from deps where id like ${PREFIX + '%'}`;
   await sql`delete from jobs where id like ${PREFIX + '%'}`;
@@ -304,5 +306,223 @@ describe('reconcileTask — claim vs. concurrent dep_declare TOCTOU (harness han
     expect(await jobStatus(jobId)).toBe('pending'); // never claimed — the claim UPDATE matched 0 rows
     const depRows = (await sql`select status from deps where id = ${depId}`) as Array<{ status: string }>;
     expect(depRows[0]!.status).toBe('active'); // the dep itself is untouched — nothing raced it either
+  });
+});
+
+/**
+ * 단일 기록자 통합 Phase 1 (job-graph.md C1): consumeJobEvents is the ONLY thing that ever turns a
+ * job_events row into a jobs.status write — execution (api/rest.ts) just records the fact.
+ * api/dispatch-terminal-cas.spec.ts covers the full integration (real A2A dispatch racing a
+ * stale/duplicate event through the real wiring); these tests exercise the consumer directly
+ * against fixture rows, including the one path nothing in this codebase produces yet
+ * (rerun_requested — store.bumpJobGeneration still writes directly; Phase 2 wires its producer).
+ */
+describe('consumeJobEvents (single-writer round, job-graph.md C1)', () => {
+  async function jobGenStatus(jobId: string): Promise<{ status: string; generation: number }> {
+    const rows = (await sql`select status, generation from jobs where id = ${jobId}`) as Array<{ status: string; generation: number }>;
+    return rows[0]!;
+  }
+
+  async function eventProcessedAt(jobId: string, generation: number, kind: string): Promise<Date | null> {
+    const rows = (await sql`
+      select processed_at from job_events where job_id = ${jobId} and generation = ${generation} and kind = ${kind}
+    `) as Array<{ processed_at: Date | null }>;
+    return rows[0]?.processed_at ?? null;
+  }
+
+  test("a 'succeeded' event for a job still running at that generation applies done + marks processed", async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`insert into work_items (id, project_id, type, state, title) values (${jobId}, ${repoId}, 'task', 'in_flow', 'x')`;
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'succeeded')`;
+
+    await consumeJobEvents(sql, taskId);
+
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'done', generation: 1 });
+    const wiRows = (await sql`select state from work_items where id = ${jobId}`) as Array<{ state: string }>;
+    expect(wiRows[0]!.state).toBe('done');
+    expect(await eventProcessedAt(jobId, 1, 'succeeded')).not.toBeNull();
+  });
+
+  test("a 'failed' event for a job still running at that generation applies failed + blocks the work_items mirror", async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`insert into work_items (id, project_id, type, state, title) values (${jobId}, ${repoId}, 'task', 'in_flow', 'x')`;
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'failed')`;
+
+    await consumeJobEvents(sql, taskId);
+
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'failed', generation: 1 });
+    const wiRows = (await sql`select state from work_items where id = ${jobId}`) as Array<{ state: string }>;
+    expect(wiRows[0]!.state).toBe('blocked');
+  });
+
+  test("a stale event whose generation no longer matches the running row is a no-op consumption", async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`update jobs set generation = 2 where id = ${jobId}`;
+    // A gen-1 event arrives for a job that's since moved on to generation 2 (re-claimed after a
+    // gen++) — the event's own generation no longer matches the live row.
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'succeeded')`;
+
+    await consumeJobEvents(sql, taskId);
+
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'running', generation: 2 }); // untouched
+    expect(await eventProcessedAt(jobId, 1, 'succeeded')).not.toBeNull(); // still consumed, just a no-op
+  });
+
+  test("an event for a job that is no longer 'running' at all (already terminal via another path) is a no-op consumption", async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'failed'); // some other path already terminated it
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'succeeded')`;
+
+    await consumeJobEvents(sql, taskId);
+
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'failed', generation: 1 }); // must NOT be clobbered to 'done'
+    expect(await eventProcessedAt(jobId, 1, 'succeeded')).not.toBeNull();
+  });
+
+  test("'rerun_requested' gen++s a job that is still terminal at that event's generation (Phase 2's consumer, wired ahead of its producer)", async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'failed');
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'rerun_requested')`;
+
+    await consumeJobEvents(sql, taskId);
+
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'pending', generation: 2 });
+  });
+
+  test("'rerun_requested' is a no-op once the job has already moved on from that event's generation", async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'failed');
+    await sql`update jobs set generation = 2 where id = ${jobId}`; // already rewound past generation 1
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'rerun_requested')`;
+
+    await consumeJobEvents(sql, taskId);
+
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'failed', generation: 2 }); // untouched
+  });
+
+  test('an already-processed event is never re-applied on a second consumeJobEvents pass', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'succeeded')`;
+    await consumeJobEvents(sql, taskId);
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'done', generation: 1 });
+
+    // Something else re-runs this exact job under a NEW generation — a second pass over the SAME
+    // (now already-processed) event row must never touch it again.
+    await sql`update jobs set status = 'running', generation = 2 where id = ${jobId}`;
+    await consumeJobEvents(sql, taskId);
+
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'running', generation: 2 }); // untouched by the stale event's second pass
+  });
+
+  test('omitting taskId consumes every unprocessed event across every task (the controller-tick crash net)', async () => {
+    const chainA = await makeChain();
+    const chainB = await makeChain();
+    const jobA = await seedJob(chainA.taskId, chainA.repoId, 'running');
+    const jobB = await seedJob(chainB.taskId, chainB.repoId, 'running');
+    await sql`insert into job_events (job_id, generation, kind) values (${jobA}, 1, 'succeeded'), (${jobB}, 1, 'failed')`;
+
+    await consumeJobEvents(sql); // no taskId — global sweep
+
+    expect((await jobGenStatus(jobA)).status).toBe('done');
+    expect((await jobGenStatus(jobB)).status).toBe('failed');
+  });
+
+  test('scoping to one taskId leaves an unprocessed event under a DIFFERENT task untouched', async () => {
+    const chainA = await makeChain();
+    const chainB = await makeChain();
+    const jobA = await seedJob(chainA.taskId, chainA.repoId, 'running');
+    const jobB = await seedJob(chainB.taskId, chainB.repoId, 'running');
+    await sql`insert into job_events (job_id, generation, kind) values (${jobA}, 1, 'succeeded'), (${jobB}, 1, 'succeeded')`;
+
+    await consumeJobEvents(sql, chainA.taskId);
+
+    expect((await jobGenStatus(jobA)).status).toBe('done');
+    expect((await jobGenStatus(jobB)).status).toBe('running'); // out of scope for this call — left for a later pass
+    expect(await eventProcessedAt(jobB, 1, 'succeeded')).toBeNull();
+  });
+
+  /**
+   * F2 (3자 리뷰 수정 라운드, Codex+Grok 수렴): the earlier (pre-fix) shape applied the jobs CAS and
+   * marked processed_at as two SEPARATE statements, then derived work_items ONLY `if (applied.length
+   * > 0)` — a crash between "applied" and "marked" left the event looking unprocessed, but a RETRY's
+   * own CAS would then find the job already at its target status (0 rows) and skip the work_items
+   * derive, permanently stranding it at 'in_flow'. This reproduces exactly that intermediate state
+   * by hand (jobs already done, work_items still in_flow, event still unprocessed — precisely what a
+   * crash between those two old statements would have left behind) and proves the FIXED consumer
+   * converges it correctly: work_items derivation now reads the job's CURRENT status, not whether
+   * THIS call's own CAS affected a row.
+   */
+  test('F2 reinforcement: work_items still derives even when jobs is ALREADY at the target status (crash-recovery convergence)', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'done'); // as if an earlier (interrupted) pass already applied the CAS
+    await sql`insert into work_items (id, project_id, type, state, title) values (${jobId}, ${repoId}, 'task', 'in_flow', 'x')`; // but never got to mirror it
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'succeeded')`; // and never got to mark it processed either
+
+    await consumeJobEvents(sql, taskId);
+
+    const wiRows = (await sql`select state from work_items where id = ${jobId}`) as Array<{ state: string }>;
+    expect(wiRows[0]!.state).toBe('done'); // no longer permanently stranded at 'in_flow'
+    expect(await eventProcessedAt(jobId, 1, 'succeeded')).not.toBeNull();
+  });
+
+  /**
+   * F2: proves the ATOMICITY claim itself, not just the reinforcement — a genuine failure partway
+   * through the claim+apply transaction must roll back IN FULL (the claim included), leaving
+   * NOTHING for a subsequent pass to trip over. Constructed with Postgres's own real rollback
+   * semantics (the same guarantee consumeOneEvent's `sql.begin` relies on): a transaction that
+   * claims the event, applies the jobs CAS, then deliberately throws before committing.
+   */
+  test('F2 atomicity: a mid-transaction failure rolls back the claim AND the jobs CAS together, and a later pass still converges cleanly', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'succeeded')`;
+
+    // Simulates a crash partway through consumeOneEvent's own transaction shape (claim -> apply ->
+    // [crash before the mirror/commit]) using the SAME statements it would run, then a forced abort.
+    await expect(
+      sql.begin(async (tx) => {
+        await tx`
+          update job_events set processed_at = now()
+          where job_id = ${jobId} and generation = 1 and kind = 'succeeded' and processed_at is null
+        `;
+        await tx`update jobs set status = 'done', status_changed_at = now(), lease_expires_at = null where id = ${jobId} and status = 'running'`;
+        throw new Error('simulated crash before commit');
+      }),
+    ).rejects.toThrow('simulated crash before commit');
+
+    // Rolled back IN FULL — nothing partial persisted. This is the class of bug F2 closes: the OLD
+    // 3-separate-statement shape could not express this guarantee at all.
+    expect((await jobGenStatus(jobId)).status).toBe('running');
+    expect(await eventProcessedAt(jobId, 1, 'succeeded')).toBeNull();
+
+    // A later, unobstructed pass still converges cleanly through the REAL consumer.
+    await consumeJobEvents(sql, taskId);
+    expect((await jobGenStatus(jobId)).status).toBe('done');
+    expect(await eventProcessedAt(jobId, 1, 'succeeded')).not.toBeNull();
+  });
+
+  /**
+   * F2: two consumers racing the SAME event (reconcileTask's inline call and controller.ts's
+   * periodic sweep are NOT mutually exclusive) must serialize on the claim, not both apply it —
+   * proven by running two consumeJobEvents passes truly concurrently (Promise.all, not sequential
+   * awaits) against ONE unprocessed event and asserting a single, deterministic outcome with no
+   * thrown errors from either side.
+   */
+  test('F2 concurrency: two concurrent consumeJobEvents passes racing the SAME event converge to exactly one applied outcome', async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'running');
+    await sql`insert into work_items (id, project_id, type, state, title) values (${jobId}, ${repoId}, 'task', 'in_flow', 'x')`;
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'succeeded')`;
+
+    await Promise.all([consumeJobEvents(sql, taskId), consumeJobEvents(sql, taskId)]);
+
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'done', generation: 1 }); // applied exactly once, not double-toggled
+    const wiRows = (await sql`select state from work_items where id = ${jobId}`) as Array<{ state: string }>;
+    expect(wiRows[0]!.state).toBe('done');
+    expect(await eventProcessedAt(jobId, 1, 'succeeded')).not.toBeNull();
   });
 });

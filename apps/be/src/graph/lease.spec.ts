@@ -42,6 +42,8 @@ afterAll(async () => {
   // mid-flight when stop() returns (stop() only clears the FUTURE timer); give it a moment to
   // settle before closing the connection out from under it (same fix as controller.spec.ts).
   await new Promise((r) => setTimeout(r, 500));
+  await sql`delete from job_events where job_id like ${PREFIX + '%'}`;
+
   await sql`delete from jobs where id like ${PREFIX + '%'}`;
   await sql`delete from tasks where id like ${PREFIX + '%'}`;
   await sql`delete from repos where id like ${PREFIX + '%'}`;
@@ -217,7 +219,7 @@ describe('withLeaseHeartbeat — setStatus (3자 리뷰 수정 A라운드 A2: HI
       `) as unknown[];
       expect(wakeRows.length).toBe(0);
     } finally {
-      controller.stop();
+      await controller.stop();
       await sql`delete from decisions where request_type = 'agent_wake' and meta->>'jobId' = ${jobId}`;
     }
   });

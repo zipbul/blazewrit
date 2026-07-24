@@ -1031,8 +1031,12 @@ async function runSeed(sql: SQL, seed: number): Promise<SeedStats> {
 
   answering = false;
   await answerLoop;
-  controller.stop();
-  await sleep(300); // let the controller's own in-flight tick (if any) settle before assertions/cleanup
+  // F4 (3자 리뷰 수정 라운드): controller.stop() now itself awaits whatever tick is currently in
+  // flight before resolving — the extra sleep(300) that used to paper over an in-flight tick still
+  // running past stop() is no longer needed (and was the root cause of this file's own cross-seed
+  // contamination: a straggler tick from THIS seed's controller reconciling into the NEXT seed's
+  // freshly-created task via a GLOBAL, unscoped scan).
+  await controller.stop();
 
   // ---- 9. Assertions -------------------------------------------------------------------------
 
@@ -1103,6 +1107,7 @@ async function runSeed(sql: SQL, seed: number): Promise<SeedStats> {
   await sql`delete from deps where waiter_job in (select id from jobs where task_id = ${taskId})`;
   await sql`delete from work_items where id in (select id from jobs where task_id = ${taskId})`;
   await sql`delete from task_seals where task_id = ${taskId}`;
+  await sql`delete from job_events where job_id in (select id from jobs where task_id = ${taskId})`;
   await sql`delete from jobs where task_id = ${taskId}`;
   await sql`delete from tasks where id = ${taskId}`;
   for (const r of repoIds) await sql`delete from repos where id = ${r}`;
