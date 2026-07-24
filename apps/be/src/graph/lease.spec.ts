@@ -38,10 +38,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // The integration test below starts a controller — its own auto-initial tick can still be
-  // mid-flight when stop() returns (stop() only clears the FUTURE timer); give it a moment to
-  // settle before closing the connection out from under it (same fix as controller.spec.ts).
-  await new Promise((r) => setTimeout(r, 500));
+  // F4: the integration test below awaits controller.stop() in its own finally, and stop() now
+  // itself awaits the in-flight tick before resolving — so no settle delay is needed here
+  // (same fix as controller.spec.ts).
   await sql`delete from job_events where job_id like ${PREFIX + '%'}`;
 
   await sql`delete from jobs where id like ${PREFIX + '%'}`;

@@ -86,11 +86,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Each test's stop() only clears the FUTURE periodic timer, never an already-in-flight tick —
-  // and now that tick() also does the C1/C2/D1 wake scans (global, not scoped to this file's own
-  // fixtures), a straggler auto-initial tick from an earlier test can still be mid-flight when
-  // this runs. Give it a moment to settle before closing the connection out from under it.
-  await new Promise((r) => setTimeout(r, 500));
+  // F4: every test above awaits controller.stop() (directly or in a finally), and stop() now
+  // itself awaits the in-flight tick before resolving — so by the time this runs, no tick from
+  // this file's own controllers can still be touching the DB. No settle delay needed.
   await sql`delete from decisions where request_type = 'agent_wake' and meta->>'taskId' like ${PREFIX + '%'}`;
   await sql`delete from decisions where id like ${PREFIX + '%'}`; // F-round: seedDecision's HITL rows
   await sql`delete from flows where id like ${PREFIX + '%'}`;

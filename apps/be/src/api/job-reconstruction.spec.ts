@@ -100,11 +100,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // Test 5 starts a graph controller — its own auto-initial tick can still be mid-flight when
-  // stop() returns (stop() only clears the FUTURE timer, same documented gotcha as lease.spec.ts/
-  // controller.spec.ts) — give it a moment to settle before closing the connection out from
-  // under it.
-  await new Promise((r) => setTimeout(r, 500));
+  // F4: Test 5 awaits controller.stop() in its own finally, and stop() now itself awaits the
+  // in-flight tick before resolving — so no settle delay is needed here (same fix as
+  // lease.spec.ts/controller.spec.ts).
   await sql`delete from decisions where request_type = 'agent_wake' and meta->>'jobId' like ${MARK + '%'}`;
   await sql`delete from decisions where id like ${MARK + '%'}`;
   await sql`delete from step_runs where flow_id like ${MARK + '%'}`;

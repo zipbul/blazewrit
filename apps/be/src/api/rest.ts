@@ -12,7 +12,7 @@ import { reAskSession } from '../harness/reask-session';
 import { gatherFacts } from '../harness/gather-facts';
 import type { TriageAgent } from '../triage/triage-agent';
 import { recordTurn, isValidScope } from '../triage/chat/turns';
-import { runTriageTurn, assembleHistory } from '../triage/chat/turn-runner';
+import { runTriageTurn } from '../triage/chat/turn-runner';
 import { maybeSummarize, makeLlmSummarizer, type Summarizer } from '../triage/chat/summarize';
 import { ScopeQueue } from '../triage/chat/scope-queue';
 import { seedProjectCard } from '../a2a/agent-card';
