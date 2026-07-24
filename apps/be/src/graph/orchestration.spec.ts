@@ -6,7 +6,7 @@ import { insertJob, bumpJobGeneration, sealTaskSliceAndDerive, TerminalTaskError
 import { canTransitionJob } from './transitions';
 import { validateAssembly } from './assemble-jobs';
 import { loadTaskGraph } from './load-task-graph';
-import type { ReconcileJob } from './reconcile';
+import { consumeJobEvents, type ReconcileJob } from './reconcile';
 import type { JobStatus } from './types';
 
 /**
@@ -510,7 +510,11 @@ describe('S9-S10: generation bump + latch + stale, mid-flight graph edit', () =>
       await completeJob(b); // B releases and completes, well before A ever regenerates
       expect(await depStatus(bDepId)).toBe('released');
 
-      await bumpJobGeneration(sql, repoId, a); // A: gen 1 -> 2, status -> pending
+      // Phase 2 (job-graph.md): bumpJobGeneration only records a rerun_requested fact now — consume
+      // it explicitly so A is ACTUALLY at gen 2/pending before C is declared below (this test's own
+      // point is C's dep evaluating against A's post-bump generation).
+      await bumpJobGeneration(sql, repoId, a); // A: records "bump from gen 1" — not yet applied
+      await consumeJobEvents(sql, taskId); // A: gen 1 -> 2, status -> pending, now actually applied
 
       // C is declared AFTER the bump, still (mistakenly) expecting generation 1 -- its very first
       // evaluation finds A has already moved on to generation 2.

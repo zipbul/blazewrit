@@ -202,37 +202,59 @@ export async function insertDep(sql: SQL, dep: NewDepInput): Promise<void> {
 }
 
 /**
- * Rule 9 (terminal task immutable) + the F-group transition guard, enforced again at the write
- * boundary: gen++ an existing terminal job in place (same row, generation+1, status→pending).
- * `actorRepoId` must equal the job's repo_id (rule 1, else WriteAclError) — sealing the task does
- * NOT block this (rule 2: re-run is not an insert). Rejected with TerminalTaskError once the
- * job's task is terminal.
+ * Rule 9 (terminal task immutable) + the F-group transition guard, checked up front exactly as
+ * before — `actorRepoId` must equal the job's repo_id (rule 1, else WriteAclError; sealing the task
+ * does NOT block this — rule 2: re-run is not an insert), rejected with TerminalTaskError once the
+ * job's task is terminal, rejected with NotRerunnableError once the job itself isn't terminal.
+ *
+ * 단일 기록자 통합 Phase 2 (job-graph.md, 락 역전 쌍 소멸): the actual gen++ no longer happens HERE —
+ * this only records a `rerun_requested` job_events fact (graph/reconcile.ts's consumeOneEvent is the
+ * one place that ever turns it into a `jobs` write, reusing the SAME consumer Phase 1 already built
+ * for succeeded/failed). Immediately after this returns, the job is STILL at its old terminal
+ * status/generation — only once the event is consumed (the next reconcileTask/controller tick pass,
+ * or an explicit consumeJobEvents call) does it actually flip to pending at generation+1.
+ *
+ * This is what closes the lock-order inversion: the OLD implementation locked jobs THEN tasks (`for
+ * update` on jobs, then on tasks, in one multi-row transaction) to make its own check-and-write
+ * atomic — negotiation's materializeAskTx locks tasks THEN (via insertDepTx, when the ask includes a
+ * dep on an existing job) jobs, the exact REVERSE order, a genuine deadlock hazard between the two
+ * paths. This function itself takes NO lock at all now (the validation reads below are plain,
+ * unlocked SELECTs) — there is nothing left here to invert against anything.
+ *
+ * 3자 리뷰 수정 라운드 (Codex+Grok 수렴, 규칙9): the terminal-task check right below is a REQUEST-TIME
+ * fact only, not a durable guarantee — the bump/consume split this Phase introduced means the task
+ * can legitimately go terminal (sealed+derived, or another repo's own path) in the real gap between
+ * this call returning and the event actually being consumed, arbitrarily later. Rule 9's actual,
+ * final defense line — "this job must not gen++ under a task that is ALREADY terminal" — therefore
+ * lives in the CONSUMER (consumeOneEvent's rerun_requested branch), which re-validates task-open
+ * AND job-generation/terminal under its own locks (tasks first, then jobs — matching negotiation's
+ * own order) immediately before ever writing. This function's own check is a courtesy: it rejects
+ * an obviously-already-terminal request immediately (a real UX win, no need to wait for consumption
+ * just to learn what was already true), not the thing that actually keeps rule 9 intact.
  */
 export async function bumpJobGeneration(sql: SQL, actorRepoId: string, jobId: string): Promise<void> {
-  await sql.begin(async (tx) => {
-    const jobRows = (await tx`select status, generation, repo_id, task_id from jobs where id = ${jobId} for update`) as Array<{
-      status: JobStatus;
-      generation: number;
-      repo_id: string;
-      task_id: string;
-    }>;
-    const job = jobRows[0];
-    if (!job) throw new JobNotFoundError(`job ${jobId} not found`);
-    if (actorRepoId !== job.repo_id) {
-      throw new WriteAclError(`actor ${actorRepoId} cannot write job ${jobId} owned by repo ${job.repo_id}`);
-    }
+  const jobRows = (await sql`select status, generation, repo_id, task_id from jobs where id = ${jobId}`) as Array<{
+    status: JobStatus;
+    generation: number;
+    repo_id: string;
+    task_id: string;
+  }>;
+  const job = jobRows[0];
+  if (!job) throw new JobNotFoundError(`job ${jobId} not found`);
+  if (actorRepoId !== job.repo_id) {
+    throw new WriteAclError(`actor ${actorRepoId} cannot write job ${jobId} owned by repo ${job.repo_id}`);
+  }
 
-    const taskRows = (await tx`select status from tasks where id = ${job.task_id} for update`) as Array<{ status: TaskStatus }>;
-    const task = taskRows[0];
-    if (task && task.status !== 'open') {
-      throw new TerminalTaskError(`task ${job.task_id} is terminal (${task.status})`);
-    }
+  const taskRows = (await sql`select status from tasks where id = ${job.task_id}`) as Array<{ status: TaskStatus }>;
+  const task = taskRows[0];
+  if (task && task.status !== 'open') {
+    throw new TerminalTaskError(`task ${job.task_id} is terminal (${task.status})`);
+  }
 
-    const result = bumpGeneration({ status: job.status, generation: job.generation });
-    if (!result.ok) throw new NotRerunnableError(result.reason);
+  const result = bumpGeneration({ status: job.status, generation: job.generation });
+  if (!result.ok) throw new NotRerunnableError(result.reason);
 
-    await tx`update jobs set status = ${result.job.status}, generation = ${result.job.generation} where id = ${jobId}`;
-  });
+  await sql`insert into job_events (job_id, generation, kind) values (${jobId}, ${job.generation}, 'rerun_requested') on conflict do nothing`;
 }
 
 /**

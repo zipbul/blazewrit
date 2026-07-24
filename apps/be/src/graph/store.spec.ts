@@ -13,6 +13,7 @@ import {
   sealTaskSliceAndDerive,
   unsealTaskSlice,
 } from './store';
+import { consumeJobEvents } from './reconcile';
 import type { JobStatus, TaskStatus } from './types';
 
 // Integration test: exercises the graph write path (harness/job-graph.md rules 1/2/3/9) against a live Postgres.
@@ -86,13 +87,24 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     expect(rows.length).toBe(1);
   });
 
-  test('C3: repo P sealed can still gen++ its own terminal job (re-run is not an insert)', async () => {
+  /**
+   * 단일 기록자 통합 Phase 2: bumpJobGeneration itself only records a `rerun_requested` job_events
+   * fact now — the actual gen++ happens later, in graph/reconcile.ts's consumeOneEvent (the same
+   * consumer Phase 1 already built). Right after bumpJobGeneration returns, the row is STILL exactly
+   * what it was before the call; only consuming the event flips it to pending at generation+1.
+   */
+  test('C3: repo P sealed can still gen++ its own terminal job (re-run is not an insert) — bump records the fact, consume applies it', async () => {
     const { taskId, repoP } = await makeTwoRepoTask();
     const jobId = await seedJob(taskId, repoP, 'done', 1);
     await sealDirect(taskId, repoP);
+
     await bumpJobGeneration(sql, repoP, jobId);
-    const rows = (await sql`select status, generation from jobs where id = ${jobId}`) as Array<{ status: string; generation: number }>;
-    expect(rows[0]).toMatchObject({ status: 'pending', generation: 2 });
+    const beforeConsume = (await sql`select status, generation from jobs where id = ${jobId}`) as Array<{ status: string; generation: number }>;
+    expect(beforeConsume[0]).toMatchObject({ status: 'done', generation: 1 }); // NOT yet bumped — the fact is durable, not yet applied
+
+    await consumeJobEvents(sql, taskId);
+    const afterConsume = (await sql`select status, generation from jobs where id = ${jobId}`) as Array<{ status: string; generation: number }>;
+    expect(afterConsume[0]).toMatchObject({ status: 'pending', generation: 2 });
   });
 
   test('F5: gen++ on a missing job id throws JobNotFoundError', async () => {

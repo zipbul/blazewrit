@@ -133,6 +133,12 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     card jsonb not null default '{}',
     created_at timestamptz not null default now()
   )`;
+  // 단일 기록자 통합 Phase 3 (job-graph.md P4/P5): per-repo autonomy toggle, replacing the process-wide
+  // env var this codebase used to gate wake sessions on — a project's decision to let wake sessions
+  // run autonomously is now DB state (read fresh per wake, per repo — graph/wake-consumer.ts), not a
+  // boot-time-only, all-or-nothing env flag. Defaults to false (the same safe-by-default the env
+  // var's own truthiness check gave).
+  await sql`alter table repos add column if not exists autonomy boolean not null default false`;
   await sql`create table if not exists tasks (
     id text primary key,
     title text not null,

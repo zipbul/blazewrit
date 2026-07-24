@@ -60,17 +60,18 @@ createRestApi(sql, {
 console.log(`blazewrit REST API on 127.0.0.1:${port} (Postgres-backed, executor=${real ? 'agent-sdk' : 'paced'}, triage=agent-sdk, assembler=${real ? 'agent-sdk' : 'curated'})`);
 
 // P4-2c: onWake wiring — a raised wake (dedup-filtered, spec E2) kicks off a runWakeSession
-// (P4-2a) for the woken job's own repo, but ONLY once a project opts in. BW_AUTONOMY!=='1' is the
-// default (autonomyEnabled=()=>false), which makes wake-consumer.ts's handler a pure no-op — the
-// human drawer inbox (raiseWake's decisions row) stays the ONLY consumer, unchanged from before
-// this round. Read fresh per call (not captured once) so a future P5 toggle UI can flip this live.
-// A full per-project toggle + task-level (no jobId) support + explicit wake-record lifecycle are
-// P5 (harness/job-graph.md:175-176 — P4 = 배선/이유전달, 자율모드 토글 UI = P5).
+// (P4-2a) for the woken job's own repo, but ONLY once that REPO opts in (repos.autonomy, read
+// fresh per wake by wake-consumer.ts itself — single 기록자 통합 Phase 3). Defaults to false
+// (schema.ts), which makes wake-consumer.ts's handler a pure no-op for a repo that hasn't opted
+// in — the human drawer inbox (raiseWake's decisions row) stays the ONLY consumer for it, same as
+// before this round. The PATCH /api/repos/:id/autonomy route (api/rest.ts) is the P5 toggle UI's
+// backend — flipping it takes effect on the very next wake, no restart needed. Task-level (no
+// jobId) wakes + explicit wake-record lifecycle are still P5 (harness/job-graph.md:175-176 — P4 =
+// 배선/이유전달, 자율모드 토글 UI = P5).
 const wakeConsumer = makeWakeConsumer({
   sql,
   queryFn: query as QueryFn,
   newId: () => crypto.randomUUID(),
-  autonomyEnabled: () => process.env.BW_AUTONOMY === '1',
 });
 
 // F1: always-on reconcile controller (harness/job-graph.md P2) — restart recovery + periodic

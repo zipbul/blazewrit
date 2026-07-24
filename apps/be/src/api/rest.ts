@@ -917,6 +917,26 @@ export function createRestApi(sql: SQL, deps: RestDeps = {}) {
         activeCount: p.active as number,
       }));
     })
+    // 단일 기록자 통합 Phase 3 (job-graph.md P4/P5): the P5 autonomy-toggle UI's backend — flips
+    // repos.autonomy, which graph/wake-consumer.ts reads fresh on every wake (per repo), so this
+    // takes effect on the very next wake for this repo, no restart needed and no effect on any
+    // other repo.
+    .patch('/api/repos/:id/autonomy', async ({ params, body, set }) => {
+      const enabled = typeof body === 'object' && body && 'enabled' in body ? (body as { enabled: unknown }).enabled : undefined;
+      if (typeof enabled !== 'boolean') {
+        set.status = 400;
+        return { error: 'body.enabled must be a boolean' };
+      }
+      const rows = (await sql`update repos set autonomy = ${enabled} where id = ${params.id} returning id, autonomy`) as Array<{
+        id: string;
+        autonomy: boolean;
+      }>;
+      if (!rows[0]) {
+        set.status = 404;
+        return { error: 'repo not found' };
+      }
+      return { id: rows[0].id, autonomy: rows[0].autonomy };
+    })
     // A2A Agent Card discovery (spec §5). Standard path is agent-card.json; agent.json kept as a legacy alias.
     .get('/agents/:projectId/.well-known/agent-card.json', ({ params, set }) => serveCard(params.projectId, set))
     .get('/agents/:projectId/.well-known/agent.json', ({ params, set }) => serveCard(params.projectId, set))

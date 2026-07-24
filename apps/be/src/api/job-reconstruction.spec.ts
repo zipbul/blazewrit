@@ -4,7 +4,7 @@ import { createRestApi } from './rest';
 import { ensureSchema } from '../infra/schema';
 import { bumpJobGeneration } from '../graph/store';
 import { startGraphController } from '../graph/controller';
-import type { ReconcileJob } from '../graph/reconcile';
+import { consumeJobEvents, type ReconcileJob } from '../graph/reconcile';
 import type { StepExecutor } from '../orchestrator/types';
 
 /**
@@ -157,7 +157,10 @@ describe('runRegisteredJob registry-miss -> DB reconstruction (P4-2b)', () => {
     // then re-claimed to running at the new generation — exactly what a reclaimed A2A/job_add job
     // looks like after one failed attempt.
     await sql`insert into jobs (id, task_id, repo_id, title, status) values (${jobId}, ${taskId}, ${repoId}, 'x', 'failed')`;
-    await bumpJobGeneration(sql, repoId, jobId); // gen 1 -> 2, status -> pending
+    // Phase 2 (job-graph.md): bumpJobGeneration only records a rerun_requested fact now — consume
+    // it explicitly so the row is ACTUALLY at gen 2/pending before the manual re-claim below.
+    await bumpJobGeneration(sql, repoId, jobId); // records "bump from gen 1" — not yet applied
+    await consumeJobEvents(sql, taskId); // gen 1 -> 2, status -> pending, now applied
     await sql`update jobs set status = 'running' where id = ${jobId} and status = 'pending'`;
 
     await dispatch!({ id: jobId, repoId, taskId, title: 'x' });

@@ -403,6 +403,37 @@ describe('consumeJobEvents (single-writer round, job-graph.md C1)', () => {
     expect(await jobGenStatus(jobId)).toEqual({ status: 'failed', generation: 2 }); // untouched
   });
 
+  /**
+   * 3자 리뷰 수정 라운드 (Codex+Grok 수렴, 규칙9): store.bumpJobGeneration's own up-front terminal-
+   * task check is only a REQUEST-TIME fact (Phase 2's bump/consume split made it a plain, unlocked
+   * SELECT) — the task can legitimately go terminal in the real gap between that request and this
+   * consumption (sealed+derived, or another repo's own path). Without re-validating task-open HERE,
+   * under lock, this job would gen++ to pending under an already-terminal task — rule 9 (terminal
+   * task immutable) and done-atomicity both broken at once. RED (before the fix): removing the
+   * task-open re-check made this assert fail (generation moved to 2, status 'pending').
+   */
+  test("'rerun_requested' is absorbed as a no-op when the task went terminal AFTER the request but BEFORE consumption (rule 9)", async () => {
+    const { repoId, taskId } = await makeChain();
+    const jobId = await seedJob(taskId, repoId, 'failed');
+    await sql`insert into job_events (job_id, generation, kind) values (${jobId}, 1, 'rerun_requested')`;
+
+    // Simulates the real gap Phase 2's non-atomic bump/consume split opened up: the task became
+    // terminal (e.g. sealed+derived, or a sibling repo's own path) strictly AFTER the rerun request
+    // was recorded, strictly BEFORE it's consumed here.
+    await sql`update tasks set status = 'done' where id = ${taskId}`;
+
+    await consumeJobEvents(sql, taskId);
+
+    // The job must NOT have been resurrected to pending under a task that's already done — rule 9
+    // and done-atomicity both intact.
+    expect(await jobGenStatus(jobId)).toEqual({ status: 'failed', generation: 1 });
+    // The event is still consumed (not left to be retried forever) — a stale request, absorbed.
+    expect(await eventProcessedAt(jobId, 1, 'rerun_requested')).not.toBeNull();
+    // The task itself is untouched by this consumption (reconcile only reads tasks.status here).
+    const taskRows = (await sql`select status from tasks where id = ${taskId}`) as Array<{ status: string }>;
+    expect(taskRows[0]!.status).toBe('done');
+  });
+
   test('an already-processed event is never re-applied on a second consumeJobEvents pass', async () => {
     const { repoId, taskId } = await makeChain();
     const jobId = await seedJob(taskId, repoId, 'running');

@@ -173,17 +173,39 @@ async function consumeOneEvent(sql: SQL, ev: JobEventRow): Promise<void> {
         `;
       }
     } else {
-      // rerun_requested (Phase 2's own producer isn't wired yet — store.bumpJobGeneration still
-      // writes directly — but the consumer is ready for it): gen++ only if still terminal at
-      // exactly this event's generation. `for update` locks the row for the rest of this
-      // transaction — harmless (nothing else in this same transaction touches it again) and
-      // consistent with this function's other branch reading un-locked (the claim UPDATE above
-      // already serializes concurrent consumers of THIS event; a different event racing THIS job
-      // is store.ts's own bumpJobGeneration concern, unchanged this round).
-      const rows = (await tx`select status, generation from jobs where id = ${ev.job_id} for update`) as Array<{ status: JobStatus; generation: number }>;
-      const job = rows[0];
-      if (job && job.generation === ev.generation && isTerminalJobStatus(job.status)) {
-        await tx`update jobs set status = 'pending', generation = generation + 1 where id = ${ev.job_id} and generation = ${ev.generation}`;
+      // rerun_requested (Phase 2, job-graph.md: store.bumpJobGeneration's own producer). Rule 9's
+      // (terminal task immutable) FINAL defense line lives HERE, not in bumpJobGeneration's own
+      // up-front validation — that producer-side check is only a plain (unlocked) SELECT recording
+      // "the task was open at REQUEST time", which the bump/consume split (Phase 2) made
+      // deliberately non-atomic against the outside world: the task can legitimately go terminal
+      // (sealed+derived, or another repo's own path) in the gap between that request and this
+      // consumption. Re-validating "is the task STILL open" here, under a real lock, right before
+      // gen++, is what actually enforces rule 9 rather than merely checking it once and trusting
+      // that nothing changed.
+      //
+      // 3자 리뷰 수정 라운드 (Codex+Grok 수렴, 규칙9): locks tasks FIRST, jobs SECOND — the SAME
+      // order negotiation's materializeAskTx/insertJobTx/seal*/rederiveTask already use everywhere
+      // else in this file's sibling module (store.ts). Locking jobs first here would silently
+      // reintroduce the exact jobs→tasks inversion Phase 2 eliminated (the old bumpJobGeneration's
+      // own multi-row transaction) — the ordering is load-bearing, not stylistic.
+      const lookupRows = (await tx`select task_id from jobs where id = ${ev.job_id}`) as Array<{ task_id: string }>;
+      const taskId = lookupRows[0]?.task_id;
+      if (taskId) {
+        const taskRows = (await tx`select status from tasks where id = ${taskId} for update`) as Array<{ status: TaskStatus }>;
+        const taskOpen = !taskRows[0] || taskRows[0].status === 'open';
+        if (taskOpen) {
+          const jobRows = (await tx`select status, generation from jobs where id = ${ev.job_id} for update`) as Array<{
+            status: JobStatus;
+            generation: number;
+          }>;
+          const job = jobRows[0];
+          if (job && job.generation === ev.generation && isTerminalJobStatus(job.status)) {
+            await tx`update jobs set status = 'pending', generation = generation + 1 where id = ${ev.job_id} and generation = ${ev.generation}`;
+          }
+        }
+        // else: the task went terminal after the bump request but before this consumption — a
+        // stale rerun request, absorbed as a no-op (the event below is still marked processed; the
+        // job stays exactly as terminal as it already was — rule 9 and done-atomicity both intact).
       }
     }
   });
@@ -206,12 +228,15 @@ async function consumeOneEvent(sql: SQL, ev: JobEventRow): Promise<void> {
  * that event's generation — a stale gen-1 event arriving after a gen-2 re-claim (or after some
  * other path already failed the job) finds its precondition already false and is consumed as a
  * no-op, never clobbering whatever the row moved on to. 'rerun_requested' gen++'s a job that's
- * still terminal at that event's generation (the same precondition bumpJobGeneration itself
- * enforces) — a no-op once the job has already moved on (re-run via a different path, or a second
- * rerun_requested event for the same generation already consumed). Every event is marked
- * `processed_at` regardless of whether it applied — the event's OWN fact was still successfully
- * consumed either way; "did nothing because it no longer applies" is a valid, final outcome, not a
- * reason to leave it to be re-read forever.
+ * still terminal at that event's generation AND whose task is STILL open — the task-open half is
+ * re-checked here, under lock, not just once by bumpJobGeneration's own request-time (unlocked)
+ * validation, since Phase 2's bump/consume split makes the gap between them a real window for the
+ * task to go terminal (rule 9's actual defense line lives in this consumer, see consumeOneEvent's
+ * own doc comment) — a no-op either way once the job has already moved on (re-run via a different
+ * path, a second rerun_requested event for the same generation already consumed, or its task went
+ * terminal in the meantime). Every event is marked `processed_at` regardless of whether it applied
+ * — the event's OWN fact was still successfully consumed either way; "did nothing because it no
+ * longer applies" is a valid, final outcome, not a reason to leave it to be re-read forever.
  *
  * One event's transaction failing (deadlock, transient connection error) does not stop the rest of
  * this pass — F2's own atomicity guarantee means it simply stays unprocessed (its transaction rolled
