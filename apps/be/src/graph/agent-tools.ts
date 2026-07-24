@@ -122,10 +122,14 @@ export function buildJobAddTool(ctx: GraphToolContext) {
  * terminal jobs (done/failed/cancelled) so it runs again from pending, instead of the agent
  * fabricating a brand-new job for the same work. Reuses bumpJobGeneration (graph/store.ts)
  * verbatim, ctx-bound exactly like every other tool here — `jobId` is the only input, `repo_id`
- * is never on the wire (decision 2), so ACL is enforced by bumpJobGeneration itself comparing
- * ctx.actorRepoId against the job's OWN repo_id, not by anything this handler asserts. Every guard
- * (WriteAclError, TerminalTaskError, NotRerunnableError, JobNotFoundError) already lives in that
- * one function; this is only the MCP wrapper, same shape as job_add above.
+ * and `taskId` are never on the wire (decision 2), so both ACL AND task-scope are enforced by
+ * bumpJobGeneration itself: comparing ctx.actorRepoId against the job's OWN repo_id, and (3자 리뷰
+ * 확정, job_rerun task-scope gap) ctx.taskId against the job's OWN task_id. Without the latter, a
+ * session woken for task T1 could rerun a terminal job under its own repo's OTHER task T2 — same
+ * repo, so WriteAclError alone never caught it, but a real violation of decision 2 ("이 세션의
+ * 세계=이 한 태스크의 자기 슬라이스", wake-session.ts). Every guard (WriteAclError,
+ * JobTaskMismatchError, TerminalTaskError, NotRerunnableError, JobNotFoundError) already lives in
+ * that one function; this is only the MCP wrapper, same shape as job_add above.
  *
  * Decision 3 ("no state-transition tool") is NOT violated despite the name reading like a
  * transition: bumpJobGeneration does not flip jobs.status at all (단일 기록자 통합 Phase 2 — see its
@@ -145,14 +149,15 @@ export function buildJobAddTool(ctx: GraphToolContext) {
 function buildJobRerunTool(ctx: GraphToolContext): GraphToolDef {
   return tool(
     JOB_RERUN_TOOL,
-    '네 레포의 terminal 잡(done/failed/cancelled)을 제자리에서 재실행 요청한다(세대(generation) 증가). ' +
-      '실패한 잡을 다시 시도하거나 완료된 잡을 새 접근으로 다시 돌리고 싶을 때 호출하라 — 새 잡을 만들지 ' +
-      '말고 이걸 써라(재실행은 새 잡이 아니라 같은 잡의 다음 세대다). graph_read로 실제 잡 ID와 상태를 ' +
-      '먼저 확인하라. 네 레포 소유 잡만 재실행할 수 있다.',
+    '네 레포 그리고 이 세션의 태스크 잡만 제자리에서 재실행 요청한다(terminal 잡(done/failed/cancelled)의 ' +
+      '세대(generation) 증가). 실패한 잡을 다시 시도하거나 완료된 잡을 새 접근으로 다시 돌리고 싶을 때 ' +
+      '호출하라 — 새 잡을 만들지 말고 이걸 써라(재실행은 새 잡이 아니라 같은 잡의 다음 세대다). graph_read로 ' +
+      '실제 잡 ID와 상태를 먼저 확인하라. 네 레포 소유이면서 이 태스크에 속한 잡만 재실행할 수 있다(다른 ' +
+      '태스크의 네 잡은 대상이 아니다).',
     { jobId: z.string() },
     async (args) => {
       try {
-        await bumpJobGeneration(ctx.sql, ctx.actorRepoId, args.jobId);
+        await bumpJobGeneration(ctx.sql, ctx.actorRepoId, args.jobId, ctx.taskId);
         return okResult({ jobId: args.jobId, requested: true });
       } catch (err) {
         return errorResult(err);

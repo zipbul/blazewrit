@@ -513,7 +513,7 @@ describe('S9-S10: generation bump + latch + stale, mid-flight graph edit', () =>
       // Phase 2 (job-graph.md): bumpJobGeneration only records a rerun_requested fact now — consume
       // it explicitly so A is ACTUALLY at gen 2/pending before C is declared below (this test's own
       // point is C's dep evaluating against A's post-bump generation).
-      await bumpJobGeneration(sql, repoId, a); // A: records "bump from gen 1" — not yet applied
+      await bumpJobGeneration(sql, repoId, a, taskId); // A: records "bump from gen 1" — not yet applied
       await consumeJobEvents(sql, taskId); // A: gen 1 -> 2, status -> pending, now actually applied
 
       // C is declared AFTER the bump, still (mistakenly) expecting generation 1 -- its very first

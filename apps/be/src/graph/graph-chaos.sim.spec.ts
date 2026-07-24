@@ -808,7 +808,7 @@ async function runSeed(sql: SQL, seed: number): Promise<SeedStats> {
       return rows[0]?.status === 'failed' ? true : undefined;
     });
     try {
-      await bumpJobGeneration(sql, targetRepo, targetId);
+      await bumpJobGeneration(sql, targetRepo, targetId, taskId);
     } catch (err) {
       // Not reachable today (this runs strictly before the beat loop's own chaosGenBumpFailed
       // ever starts rolling), kept defensive/consistent with that function's own try/catch shape.
@@ -870,7 +870,7 @@ async function runSeed(sql: SQL, seed: number): Promise<SeedStats> {
     }
     const row = pick(rng, rows);
     try {
-      await bumpJobGeneration(sql, row.repo_id, row.id);
+      await bumpJobGeneration(sql, row.repo_id, row.id, taskId);
       tally(stats.chaos, 'genBump:ok');
     } catch (err) {
       tally(stats.chaos, `genBump:${errName(err)}`);
@@ -993,7 +993,7 @@ async function runSeed(sql: SQL, seed: number): Promise<SeedStats> {
   }>;
   for (const j of stillFailed) {
     try {
-      await bumpJobGeneration(sql, j.repo_id, j.id);
+      await bumpJobGeneration(sql, j.repo_id, j.id, taskId);
     } catch {
       // already retried or task raced terminal — harmless, wind-down is best-effort liveness only.
     }

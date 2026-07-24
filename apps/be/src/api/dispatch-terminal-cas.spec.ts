@@ -175,7 +175,7 @@ describe('single-writer round: a late job_events report is consumed as a no-op a
     // Phase 2 (job-graph.md): bumpJobGeneration only records a rerun_requested fact now — consume
     // it explicitly (dispatchTask's own ctx===workItemId convention, no contextId given above) so
     // the row is ACTUALLY at gen 2/pending before the stale gen-1 event arrives below.
-    await bumpJobGeneration(sql, projectId, workItemId); // records "bump from gen 1" — not yet applied
+    await bumpJobGeneration(sql, projectId, workItemId, workItemId); // records "bump from gen 1" — not yet applied
     await consumeJobEvents(sql, workItemId); // gen 1 -> 2, status -> pending: a fresh re-run slot, now applied
 
     release(); // the STALE run's 'succeeded' event (generation 1) finally gets recorded
@@ -239,7 +239,7 @@ describe('single-writer round: a late job_events report is consumed as a no-op a
     // now genuinely in flight (this test doesn't need to actually drive that second run — only
     // that the row is 'running' again at generation 2 by the time the STALE gen-1 event arrives).
     await sql`update jobs set status = 'failed', status_changed_at = now(), lease_expires_at = null where id = ${workItemId}`;
-    await bumpJobGeneration(sql, projectId, workItemId); // records "bump from gen 1" — not yet applied
+    await bumpJobGeneration(sql, projectId, workItemId, workItemId); // records "bump from gen 1" — not yet applied
     await consumeJobEvents(sql, workItemId); // gen 1 -> 2, status -> pending, now applied
     await sql`update jobs set status = 'running', lease_expires_at = now() + interval '10 minutes' where id = ${workItemId} and status = 'pending'`;
 

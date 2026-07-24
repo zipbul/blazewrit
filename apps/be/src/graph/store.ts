@@ -8,6 +8,16 @@ import type { DepOutcome, DepPredicate, DepTargetType, JobStatus, TaskStatus } f
 /** Rule 1: actorRepoId doesn't own the job/seal row being written. */
 export class WriteAclError extends Error {}
 
+/**
+ * bumpJobGeneration's task-scope guard (3자 리뷰 확정, job_rerun task-scope gap): the job's OWN
+ * task_id doesn't match the caller-supplied `expectTaskId` (a wake session's ctx.taskId). Repo ACL
+ * alone (WriteAclError) isn't enough — a repo owns MANY tasks' jobs, but decision 2 (wake-session.ts
+ * "이 세션의 세계=이 한 태스크의 자기 슬라이스") means a session bound to task T1 must never be able to
+ * touch a job under its own repo's OTHER task T2. Mirrors DepWaiterTaskMismatchError's shape one
+ * function over.
+ */
+export class JobTaskMismatchError extends Error {}
+
 /** Rule 2: the acting repo has already sealed this task — its own INSERT is frozen. */
 export class SliceSealedError extends Error {}
 
@@ -202,10 +212,13 @@ export async function insertDep(sql: SQL, dep: NewDepInput): Promise<void> {
 }
 
 /**
- * Rule 9 (terminal task immutable) + the F-group transition guard, checked up front exactly as
- * before — `actorRepoId` must equal the job's repo_id (rule 1, else WriteAclError; sealing the task
- * does NOT block this — rule 2: re-run is not an insert), rejected with TerminalTaskError once the
- * job's task is terminal, rejected with NotRerunnableError once the job itself isn't terminal.
+ * Rule 1 (write ACL) + task-scope (decision 2) + rule 9 (terminal task immutable) + the F-group
+ * transition guard, checked up front exactly as before — `actorRepoId` must equal the job's repo_id
+ * (rule 1, else WriteAclError; sealing the task does NOT block this — rule 2: re-run is not an
+ * insert), `expectTaskId` must equal the job's OWN task_id (else JobTaskMismatchError — a repo may
+ * own many tasks' jobs, but a caller bound to one task may only ever gen++ a job under THAT task),
+ * rejected with TerminalTaskError once the job's task is terminal, rejected with NotRerunnableError
+ * once the job itself isn't terminal.
  *
  * 단일 기록자 통합 Phase 2 (job-graph.md, 락 역전 쌍 소멸): the actual gen++ no longer happens HERE —
  * this only records a `rerun_requested` job_events fact (graph/reconcile.ts's consumeOneEvent is the
@@ -231,8 +244,18 @@ export async function insertDep(sql: SQL, dep: NewDepInput): Promise<void> {
  * own order) immediately before ever writing. This function's own check is a courtesy: it rejects
  * an obviously-already-terminal request immediately (a real UX win, no need to wait for consumption
  * just to learn what was already true), not the thing that actually keeps rule 9 intact.
+ *
+ * 3자 리뷰 확정 (job_rerun task-scope gap): `expectTaskId` is job_rerun's missing half of decision 2 —
+ * every sibling write tool (job_add inserts under ctx.taskId, dep_declare/graph_read scope to it) is
+ * task-bound, but this function used to check ONLY repo ACL + the job's task open/terminal-ness,
+ * never that the job's task_id actually matches the CALLING session's own task. A wake session woken
+ * for task T1 could otherwise rerun a terminal job that happens to belong to its own repo's OTHER
+ * task T2 — same repo, so WriteAclError never fires, but a genuine violation of "이 세션의 세계=이 한
+ * 태스크의 자기 슬라이스" (wake-session.ts). task_id is immutable once a job row exists, so this
+ * produce-time check is sufficient on its own — no TOCTOU window to worry about (unlike the
+ * terminal-task check just below, which the consumer re-validates for exactly that reason).
  */
-export async function bumpJobGeneration(sql: SQL, actorRepoId: string, jobId: string): Promise<void> {
+export async function bumpJobGeneration(sql: SQL, actorRepoId: string, jobId: string, expectTaskId: string): Promise<void> {
   const jobRows = (await sql`select status, generation, repo_id, task_id from jobs where id = ${jobId}`) as Array<{
     status: JobStatus;
     generation: number;
@@ -243,6 +266,9 @@ export async function bumpJobGeneration(sql: SQL, actorRepoId: string, jobId: st
   if (!job) throw new JobNotFoundError(`job ${jobId} not found`);
   if (actorRepoId !== job.repo_id) {
     throw new WriteAclError(`actor ${actorRepoId} cannot write job ${jobId} owned by repo ${job.repo_id}`);
+  }
+  if (job.task_id !== expectTaskId) {
+    throw new JobTaskMismatchError(`job ${jobId} belongs to task ${job.task_id}, not ${expectTaskId}`);
   }
 
   const taskRows = (await sql`select status from tasks where id = ${job.task_id}`) as Array<{ status: TaskStatus }>;

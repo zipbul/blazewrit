@@ -3,6 +3,7 @@ import { SQL } from 'bun';
 import { ensureSchema } from '../infra/schema';
 import {
   JobNotFoundError,
+  JobTaskMismatchError,
   NotRerunnableError,
   SliceSealedError,
   TerminalTaskError,
@@ -98,7 +99,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     const jobId = await seedJob(taskId, repoP, 'done', 1);
     await sealDirect(taskId, repoP);
 
-    await bumpJobGeneration(sql, repoP, jobId);
+    await bumpJobGeneration(sql, repoP, jobId, taskId);
     const beforeConsume = (await sql`select status, generation from jobs where id = ${jobId}`) as Array<{ status: string; generation: number }>;
     expect(beforeConsume[0]).toMatchObject({ status: 'done', generation: 1 }); // NOT yet bumped — the fact is durable, not yet applied
 
@@ -109,7 +110,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
 
   test('F5: gen++ on a missing job id throws JobNotFoundError', async () => {
     const attempt = async () => {
-      await bumpJobGeneration(sql, 'some-repo', id('missing-job'));
+      await bumpJobGeneration(sql, 'some-repo', id('missing-job'), id('some-task'));
     };
     await expect(attempt()).rejects.toThrow(JobNotFoundError);
   });
@@ -118,9 +119,22 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     const { taskId, repoP } = await makeTwoRepoTask();
     const jobId = await seedJob(taskId, repoP, 'running', 1);
     const attempt = async () => {
-      await bumpJobGeneration(sql, repoP, jobId);
+      await bumpJobGeneration(sql, repoP, jobId, taskId);
     };
     await expect(attempt()).rejects.toThrow(NotRerunnableError);
+  });
+
+  test('F7 (3자 리뷰 확정, job_rerun task-scope gap): gen++ on a job whose task_id does not match expectTaskId throws JobTaskMismatchError', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const { taskId: otherTaskId } = await makeTwoRepoTask();
+    const jobId = await seedJob(taskId, repoP, 'failed', 1);
+    const attempt = async () => {
+      await bumpJobGeneration(sql, repoP, jobId, otherTaskId);
+    };
+    await expect(attempt()).rejects.toThrow(JobTaskMismatchError);
+    // must not have recorded a rerun_requested fact — the mismatch rejects before any write.
+    const events = (await sql`select 1 from job_events where job_id = ${jobId}`) as unknown[];
+    expect(events.length).toBe(0);
   });
 
   test('C4: deleting its own seal reopens INSERT for that repo', async () => {
@@ -186,7 +200,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     const jobId = await seedJob(taskId, repoP, 'done', 1);
     await setTaskStatus(taskId, 'done');
     const attempt = async () => {
-      await bumpJobGeneration(sql, repoP, jobId);
+      await bumpJobGeneration(sql, repoP, jobId, taskId);
     };
     await expect(attempt()).rejects.toThrow(TerminalTaskError);
   });
@@ -203,7 +217,7 @@ describe('graph/store (rules 1, 2, 3, 9 — write ACL, slice seal freeze, termin
     const jobId = await seedJob(cancelledTaskId, repoOnCancelled, 'done', 1);
     await setTaskStatus(cancelledTaskId, 'cancelled');
     const bumpOnCancelled = async () => {
-      await bumpJobGeneration(sql, repoOnCancelled, jobId);
+      await bumpJobGeneration(sql, repoOnCancelled, jobId, cancelledTaskId);
     };
     await expect(bumpOnCancelled()).rejects.toThrow(TerminalTaskError);
   });

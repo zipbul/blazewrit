@@ -510,4 +510,27 @@ describe('job_rerun (재실행 트리거 배선, 티어1) — thin wrapper over 
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain('JobNotFoundError');
   });
+
+  /**
+   * 3자 리뷰 확정 (job_rerun task-scope gap): a wake session bound to task T1 (ctx.taskId) must not
+   * be able to rerun a terminal job under its OWN repo's OTHER task T2 — same repo, so
+   * WriteAclError never fires, but a real violation of decision 2 ("이 세션의 세계=이 한 태스크의 자기
+   * 슬라이스", wake-session.ts). Pre-fix (RED), bumpJobGeneration only checked repo ACL + the job's
+   * own task open/terminal-ness, never that the job's task_id matched the CALLING session's
+   * ctx.taskId — so this call would have succeeded and recorded a rerun_requested event for a job
+   * under a completely different task than the one this session was woken for.
+   */
+  test('rejects a terminal job that belongs to a DIFFERENT task under the same repo with JobTaskMismatchError, and records no rerun_requested event', async () => {
+    const { taskId, repoP } = await makeTwoRepoTask();
+    const { taskId: otherTaskId } = await makeTwoRepoTask();
+    const tools = buildGraphTools(ctxFor(taskId, repoP));
+    const otherTaskJobId = await seedJob(otherTaskId, repoP, 'failed', 1); // same repo, DIFFERENT task
+
+    const res = await call(tools, JOB_RERUN_TOOL, { jobId: otherTaskJobId });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain('JobTaskMismatchError');
+
+    const eventRows = (await sql`select 1 from job_events where job_id = ${otherTaskJobId}`) as unknown[];
+    expect(eventRows.length).toBe(0); // no rerun_requested fact — the mismatch rejects before any write
+  });
 });

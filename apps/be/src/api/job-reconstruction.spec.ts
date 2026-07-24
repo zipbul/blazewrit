@@ -157,7 +157,7 @@ describe('runRegisteredJob registry-miss -> DB reconstruction (P4-2b)', () => {
     await sql`insert into jobs (id, task_id, repo_id, title, status) values (${jobId}, ${taskId}, ${repoId}, 'x', 'failed')`;
     // Phase 2 (job-graph.md): bumpJobGeneration only records a rerun_requested fact now — consume
     // it explicitly so the row is ACTUALLY at gen 2/pending before the manual re-claim below.
-    await bumpJobGeneration(sql, repoId, jobId); // records "bump from gen 1" — not yet applied
+    await bumpJobGeneration(sql, repoId, jobId, taskId); // records "bump from gen 1" — not yet applied
     await consumeJobEvents(sql, taskId); // gen 1 -> 2, status -> pending, now applied
     await sql`update jobs set status = 'running' where id = ${jobId} and status = 'pending'`;
 
